@@ -1,124 +1,124 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>RSVP - Tailgate Time</title>
-  <style>
-    body {
-      font-family: sans-serif;
-      background-color: #f9f9f9;
-      margin: 0;
-      padding: 2rem;
-      display: flex;
-      justify-content: center;
-    }
-    .container {
-      max-width: 400px;
-      width: 100%;
-      background-color: white;
-      padding: 2rem;
-      border-radius: 8px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-    }
-    h1 {
-      text-align: center;
-      color: #1b263b;
-    }
-    button {
-      width: 100%;
-      padding: 1rem;
-      margin-top: 1rem;
-      font-size: 1rem;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-    .yes {
-      background-color: #28a745;
-      color: white;
-    }
-    .no {
-      background-color: #dc3545;
-      color: white;
-    }
-    .thanks {
-      display: none;
-      text-align: center;
-      font-size: 1.2rem;
-      color: #333;
-      margin-top: 1rem;
-    }
-    input[type="text"] {
-      width: 100%;
-      padding: 0.5rem;
-      margin-top: 1rem;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-    }
-  </style>
-  <!-- Firebase App (the core Firebase SDK) -->
-  <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
-  <!-- Add Firestore -->
-  <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
-</head>
-<body>
-  <div class="container">
-    <h1>You're Invited!</h1>
-    <p id="eventName">Tailgate Event</p>
-    <form id="rsvpForm">
-      <input type="text" id="guestName" name="guestName" placeholder="Your Name (optional)" />
-      <input type="hidden" id="eventId" name="eventId" />
-      <input type="hidden" id="guestId" name="guestId" />
-      <button type="button" class="yes" onclick="submitRSVP('yes')">I'll Be There 🎉</button>
-      <button type="button" class="no" onclick="submitRSVP('no')">Can't Make It 😞</button>
-    </form>
-    <div class="thanks" id="thanksMessage">
-      Thank you for your response!
-    </div>
-  </div>
-
-  <script>
-    const urlParams = new URLSearchParams(window.location.search);
-    const eventId = urlParams.get("eventId");
-    const guestId = urlParams.get("guestId");
-
-    document.getElementById("eventId").value = eventId || '';
-    document.getElementById("guestId").value = guestId || '';
-
-    const firebaseConfig = {
-      apiKey: "AIzaSyCa2REIrFZBsibn5UGrajmoU70gJ1fmmJQ",
-      authDomain: "lot-legends.firebaseapp.com",
-      projectId: "lot-legends",
-    };
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.firestore();
-
-    async function submitRSVP(response) {
-      const guestName = document.getElementById("guestName").value;
-
-      try {
-        await db
-          .collection("tailgateEvents")
-          .doc(eventId)
-          .collection("attendees")
-          .doc(guestId)
-          .set(
-            {
-              name: guestName || null,
-              status: response === "yes" ? "Attending" : "Not Attending",
-              respondedAt: new Date(),
-            },
-            { merge: true }
-          );
-
-        document.getElementById("rsvpForm").style.display = "none";
-        document.getElementById("thanksMessage").style.display = "block";
-      } catch (error) {
-        console.error("Error saving RSVP:", error);
-        alert("There was an error submitting your RSVP. Please try again.");
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RSVP - Tailgate Time</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        background-color: #f9f9f9;
+        margin: 0;
+        padding: 2rem;
+        display: flex;
+        justify-content: center;
       }
-    }
-  </script>
-</body>
+      .container {
+        max-width: 400px;
+        width: 100%;
+        background-color: white;
+        padding: 2rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      }
+      h1 {
+        text-align: center;
+        color: #1b263b;
+      }
+      button {
+        width: 100%;
+        padding: 1rem;
+        margin-top: 1rem;
+        font-size: 1rem;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .yes {
+        background-color: #28a745;
+        color: white;
+      }
+      .no {
+        background-color: #dc3545;
+        color: white;
+      }
+      .thanks {
+        display: none;
+        text-align: center;
+        font-size: 1.2rem;
+        color: #333;
+        margin-top: 1rem;
+      }
+      input[type="text"] {
+        width: 100%;
+        padding: 0.5rem;
+        margin-top: 1rem;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>You're Invited!</h1>
+      <p id="eventName">Tailgate Event</p>
+      <form id="rsvpForm">
+        <input
+          type="text"
+          id="guestName"
+          name="guestName"
+          placeholder="Your Name (optional)"
+        />
+        <input type="hidden" id="eventId" name="eventId" />
+        <input type="hidden" id="guestId" name="guestId" />
+        <button type="button" class="yes" onclick="submitRSVP('yes')">
+          I'll Be There 🎉
+        </button>
+        <button type="button" class="no" onclick="submitRSVP('no')">
+          Can't Make It 😞
+        </button>
+      </form>
+      <div class="thanks" id="thanksMessage">Thank you for your response!</div>
+    </div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const eventId = urlParams.get("eventId");
+        const guestId = urlParams.get("guestId");
+        const token = urlParams.get("token");
+      
+        document.getElementById("eventId").value = eventId || "";
+        document.getElementById("guestId").value = guestId || "";
+      
+        async function submitRSVP(response) {
+          const guestName = document.getElementById("guestName").value;
+          try {
+            const body = {
+              eventId: eventId,
+              guestId: guestId,
+              token: token,
+              rsvpStatus: response
+            };
+            const res = await fetch('https://us-central1-lot-legends.cloudfunctions.net/respondToRsvp', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(body)
+            });
+
+            if (res.ok) {
+              document.getElementById("rsvpForm").style.display = "none";
+              document.getElementById("thanksMessage").style.display = "block";
+            } else {
+              console.error("Error submitting RSVP:", res.statusText);
+              alert("There was an error submitting your RSVP. Please try again.");
+            }
+          } catch (error) {
+            console.error("Error submitting RSVP:", error);
+            alert("There was an error submitting your RSVP. Please try again.");
+          }
+        }
+      </script>
+  </body>
 </html>
