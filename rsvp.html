@@ -60,15 +60,12 @@
   </head>
   <body>
     <div class="container">
-      <h1>You're Invited!</h1>
-      <p id="eventName">Tailgate Event</p>
+      <h1 id="main-message">You're Invited!</h1>
+      <div
+        id="eventDetails"
+        style="margin-bottom: 1.5rem; text-align: center"
+      ></div>
       <form id="rsvpForm">
-        <input
-          type="text"
-          id="guestName"
-          name="guestName"
-          placeholder="Your Name (optional)"
-        />
         <input type="hidden" id="eventId" name="eventId" />
         <input type="hidden" id="guestId" name="guestId" />
         <button type="button" class="yes" onclick="submitRSVP('yes')">
@@ -82,43 +79,108 @@
     </div>
 
     <script>
+      const urlParams = new URLSearchParams(window.location.search);
+      const eventId = urlParams.get("eventId");
+      const guestId = urlParams.get("guestId");
+      const token = urlParams.get("token");
+
+      document.getElementById("eventId").value = eventId || "";
+      document.getElementById("guestId").value = guestId || "";
+
+      async function submitRSVP(response) {
+        try {
+          const body = {
+            eventId: eventId,
+            guestId: guestId,
+            token: token,
+            rsvpStatus: response,
+          };
+          console.log("Submitting RSVP:", body);
+          const res = await fetch(
+            "https://us-central1-lot-legends.cloudfunctions.net/respondToRsvp",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(body),
+            }
+          );
+          console.log("Response status:", res.status);
+          console.log("Response body:", await res.text());
+
+          if (res.ok) {
+            document.getElementById("rsvpForm").style.display = "none";
+            document.getElementById("eventDetails").style.display = "none";
+            const message =
+              response === "yes"
+                ? `Thanks, see you there!<br><br>${
+                    document.getElementById("eventDetails").innerHTML
+                  }`
+                : `Ahh shucks, maybe next time!<br><br><a href="https://tailgate-time.com">Visit our website for future events!</a>`;
+            document.getElementById("thanksMessage").innerHTML = message;
+            document.getElementById("thanksMessage").style.display = "block";
+          } else {
+            console.error("Error submitting RSVP:", res.statusText);
+            alert("There was an error submitting your RSVP. Please try again.");
+          }
+        } catch (error) {
+          console.error("Error submitting RSVP:", error);
+          alert("There was an error submitting your RSVP. Please try again.");
+        }
+      }
+
+      async function loadEventDetails() {
         const urlParams = new URLSearchParams(window.location.search);
         const eventId = urlParams.get("eventId");
         const guestId = urlParams.get("guestId");
-        const token = urlParams.get("token");
-      
-        document.getElementById("eventId").value = eventId || "";
-        document.getElementById("guestId").value = guestId || "";
-      
-        async function submitRSVP(response) {
-          const guestName = document.getElementById("guestName").value;
-          try {
-            const body = {
-              eventId: eventId,
-              guestId: guestId,
-              token: token,
-              rsvpStatus: response
-            };
-            const res = await fetch('https://us-central1-lot-legends.cloudfunctions.net/respondToRsvp', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify(body)
-            });
 
-            if (res.ok) {
-              document.getElementById("rsvpForm").style.display = "none";
-              document.getElementById("thanksMessage").style.display = "block";
-            } else {
-              console.error("Error submitting RSVP:", res.statusText);
-              alert("There was an error submitting your RSVP. Please try again.");
+        if (!eventId) return;
+
+        try {
+          const res = await fetch(
+            `https://us-central1-lot-legends.cloudfunctions.net/getEventDetails?eventId=${eventId}&guestId=${guestId}`,
+            {
+              method: "GET",
+              headers: {
+                "Content-Type": "application/json",
+              },
             }
-          } catch (error) {
-            console.error("Error submitting RSVP:", error);
-            alert("There was an error submitting your RSVP. Please try again.");
-          }
+          );
+          const data = await res.json();
+
+          const eventDate = new Date(data.dateTime);
+          const formattedDate = eventDate.toLocaleString("en-US", {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true,
+          });
+
+          let guestHeader = data.guestName
+            ? `<h2 id="guest-name">Hey ${data.guestName}!</h2>`
+            : "";
+          const eventInfoHTML = `
+  ${guestHeader}
+  <h2>${data.eventName}</h2>
+  <p><strong>Host:</strong> ${data.hostName}</p>
+  <p><strong>When:</strong> ${formattedDate}</p>
+  <p><strong>Where:</strong> ${data.location}</p>
+`;
+
+          document.getElementById("eventDetails").innerHTML = eventInfoHTML;
+          document.getElementById("main-message").style.display = "none";
+          document.getElementById("guest-name").style.display = "none";
+
+        } catch (err) {
+          console.error("Failed to load event details", err);
         }
-      </script>
+      }
+
+      document.addEventListener("DOMContentLoaded", loadEventDetails);
+    </script>
   </body>
 </html>
