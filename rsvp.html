@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>RSVP - Tailgate Time</title>
+    <link rel="icon" type="image/png" href="ttnobg.png" />
+    <link rel="icon" sizes="32x32" href="ttnobg.png" />
+    <link rel="icon" sizes="16x16" href="ttnobg.png" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <style>
       :root {
         --color-primary: #21354d;
@@ -13,13 +17,18 @@
         --color-placeholder: #a0a0a0;
       }
       body {
-        font-family: sans-serif;
+        font-family: 'Inter', sans-serif;
+        line-height: 1.5;
         background-color: var(--color-primary);
         color: var(--color-text);
         margin: 0;
         padding: 2rem;
         display: flex;
         justify-content: center;
+      }
+      h1, h2 {
+        font-weight: 600;
+        line-height: 1.2;
       }
       .container {
         max-width: 400px;
@@ -34,6 +43,9 @@
       h1 {
         text-align: center;
         color: var(--color-text);
+      }
+      button, input[type="text"] {
+        font-family: 'Inter', sans-serif;
       }
       button {
         width: 100%;
@@ -94,7 +106,7 @@
         left: 50%;
         width: 400px;
         height: 400px;
-        background: url('ttlogo.png') no-repeat center center;
+        background: url('ttnobg.png') no-repeat center center;
         background-size: contain;
         opacity: 0.1;
         transform: translate(-50%, -50%);
@@ -109,14 +121,16 @@
   </head>
   <body>
     <div class="container">
-      <h1 id="main-message">You're Invited!</h1>
-      <div id="loadingSpinner" class="spinner"></div>
+      <h1 id="main-message" style="display:none;">You're Invited!</h1>
+      <div id="loadingSpinner" class="spinner" style="display:block;"></div>
       <div
         id="eventDetails"
-        style="margin-bottom: 1.5rem; text-align: center"
+        style="margin-bottom: 1.5rem; text-align: center;"
       ></div>
-      <div id="map" style="display:none; margin-top:1rem; height:250px;"></div>
-      <form id="rsvpForm">
+      <div id="map" style="display:none; margin-top:1rem; height:250px; position:relative;">
+        <div id="mapSpinner" class="spinner" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); display:none;"></div>
+      </div>
+      <form id="rsvpForm" style="display:none;">
         <input type="hidden" id="eventId" name="eventId" />
         <input type="hidden" id="guestId" name="guestId" />
         <button type="button" class="yes" onclick="submitRSVP('yes')">
@@ -140,6 +154,12 @@
 
       async function submitRSVP(response) {
         document.getElementById("loadingSpinner").style.display = "block";
+        document.querySelectorAll("#rsvpForm button").forEach(btn => btn.style.display = "none");
+        if (response === "no") {
+          document.getElementById("eventDetails").style.display = "none";
+          document.getElementById("main-message").style.display = "none";
+          document.getElementById("map").style.display = "none";
+        }
         try {
           const body = {
             eventId: eventId,
@@ -164,10 +184,13 @@
           if (res.ok) {
             document.getElementById("loadingSpinner").style.display = "none";
             document.getElementById("rsvpForm").style.display = "none";
-            // Always keep event details visible
-            document.getElementById("eventDetails").style.display = "block";
+
             if (response === "yes") {
+              document.getElementById("eventDetails").style.display = "block";
+              document.getElementById("main-message").style.display = "block";
+
               const mapDiv = document.getElementById("map");
+              document.getElementById("mapSpinner").style.display = "block";
               mapDiv.innerHTML = `
                 <iframe
                   width="100%"
@@ -178,14 +201,18 @@
                   allowfullscreen
                 ></iframe>
               `;
+              // Hide spinner when iframe is loaded
+              const iframe = mapDiv.querySelector("iframe");
+              iframe.addEventListener("load", () => {
+                document.getElementById("mapSpinner").style.display = "none";
+              });
               mapDiv.style.display = "block";
             } else {
-              // Hide the map on decline
-              document.getElementById("map").style.display = "none";
-              // Hide invitation header and event details
-              document.getElementById("main-message").style.display = "none";
               document.getElementById("eventDetails").style.display = "none";
+              document.getElementById("main-message").style.display = "none";
+              document.getElementById("map").style.display = "none";
             }
+
             // Show the appropriate thank-you message
             if (response === "yes") {
               document.getElementById("thanksMessage").innerHTML = `
@@ -202,11 +229,13 @@
             document.getElementById("thanksMessage").style.display = "block";
           } else {
             document.getElementById("loadingSpinner").style.display = "none";
+            document.querySelectorAll("#rsvpForm button").forEach(btn => btn.style.display = "block");
             console.error("Error submitting RSVP:", res.statusText);
             alert("There was an error submitting your RSVP. Please try again.");
           }
         } catch (error) {
           document.getElementById("loadingSpinner").style.display = "none";
+          document.querySelectorAll("#rsvpForm button").forEach(btn => btn.style.display = "block");
           console.error("Error submitting RSVP:", error);
           alert("There was an error submitting your RSVP. Please try again.");
         }
@@ -214,6 +243,8 @@
 
       async function loadEventDetails() {
         document.getElementById("loadingSpinner").style.display = "block";
+        document.getElementById("rsvpForm").style.display = "none";
+        document.querySelectorAll("#rsvpForm button").forEach(btn => btn.style.display = "none");
         const urlParams = new URLSearchParams(window.location.search);
         const eventId = urlParams.get("eventId");
         const guestId = urlParams.get("guestId");
@@ -259,11 +290,15 @@
 
           document.getElementById("eventDetails").innerHTML = eventInfoHTML;
           document.getElementById("loadingSpinner").style.display = "none";
+          document.querySelectorAll("#rsvpForm button").forEach(btn => btn.style.display = "block");
+          document.getElementById("rsvpForm").style.display = "block";
           document.getElementById("guest-name").style.display = "none";
 
         } catch (err) {
           console.error("Failed to load event details", err);
           document.getElementById("loadingSpinner").style.display = "none";
+          document.querySelectorAll("#rsvpForm button").forEach(btn => btn.style.display = "block");
+          document.getElementById("rsvpForm").style.display = "block";
         }
       }
 
