@@ -144,6 +144,14 @@
     </div>
 
     <script>
+      // Determine Functions base URL based on ?env=qa or default to prod
+      const _params = new URLSearchParams(window.location.search);
+      const _ENV = _params.get("env") === "qa" ? "qa" : "prod";
+      const _PROJECT_ID = _ENV === "qa" ? "lot-legends" : "tailgatetime-prod";
+      const FUNCTIONS_BASE = `https://us-central1-${_PROJECT_ID}.cloudfunctions.net`;
+
+      console.log("Functions base URL:", FUNCTIONS_BASE);
+      
       const urlParams = new URLSearchParams(window.location.search);
       const eventId = urlParams.get("eventId");
       const guestId = urlParams.get("guestId");
@@ -169,7 +177,7 @@
           };
           console.log("Submitting RSVP:", body);
           const res = await fetch(
-            "https://us-central1-lot-legends.cloudfunctions.net/respondToRsvp",
+            `${FUNCTIONS_BASE}/respondToRsvp`,
             {
               method: "POST",
               headers: {
@@ -253,7 +261,7 @@
 
         try {
           const res = await fetch(
-            `https://us-central1-lot-legends.cloudfunctions.net/getEventDetails?eventId=${eventId}&guestId=${guestId}`,
+            `${FUNCTIONS_BASE}/getEventDetails?eventId=${eventId}&guestId=${guestId}`,
             {
               method: "GET",
               headers: {
