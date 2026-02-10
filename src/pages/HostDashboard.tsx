@@ -5,7 +5,7 @@ import TopBar from "../components/TopBar";
 import TailgateCard from "../components/TailgateCard";
 import QuickActionsBar from "../components/QuickActionsBar";
 import { useAuth } from "../hooks/useAuth";
-import { useHostTailgates } from "../hooks/useHostTailgates";
+import { useDashboardTailgates } from "../hooks/useDashboardTailgates";
 import { useUserProfile } from "../hooks/useUserProfile";
 import { getFirstName } from "../utils/format";
 
@@ -15,8 +15,8 @@ export default function HostDashboard() {
   const displayName = profile?.displayName ?? user?.displayName;
   const email = profile?.email ?? user?.email;
   const firstName = getFirstName(displayName ?? email);
-  const { upcomingTailgates, pastTailgates, totalTicketsSold, counts, loading, error } =
-    useHostTailgates(user?.uid, email, displayName);
+  const { upcomingTailgates, pastTailgates, counts, loading, error } =
+    useDashboardTailgates(user?.uid);
 
   const [filter, setFilter] = useState<"upcoming" | "past">("upcoming");
 
@@ -26,12 +26,12 @@ export default function HostDashboard() {
 
   const emptyState = filter === "upcoming"
     ? {
-        title: "You don't have any upcoming tailgates yet.",
+        title: "You are not hosting or attending any upcoming tailgates yet.",
         action: "/tailgates/new",
         actionLabel: "Create your first tailgate"
       }
     : {
-        title: "No past tailgates yet.",
+        title: "You are not hosting or attending any past tailgates yet.",
         action: "/tailgates/new",
         actionLabel: "Plan a new tailgate"
       };
@@ -42,7 +42,9 @@ export default function HostDashboard() {
         <div className="section-header">
           <div>
             <h2>My Tailgates</h2>
-            <p className="section-subtitle">Manage upcoming and past tailgates.</p>
+            <p className="section-subtitle">
+              Manage upcoming and past tailgates. Host-owned events are marked.
+            </p>
           </div>
           <div className="section-controls">
             <select
@@ -56,7 +58,8 @@ export default function HostDashboard() {
             <div className="section-stats">
               <span>{counts.upcoming} Upcoming</span>
               <span>{counts.past} Past</span>
-              <span>{totalTicketsSold} Total Tickets Sold</span>
+              <span>{counts.hosting} Hosting</span>
+              <span>{counts.attending} Attending</span>
             </div>
           </div>
         </div>
@@ -74,7 +77,11 @@ export default function HostDashboard() {
         ) : activeTailgates.length > 0 ? (
           <div className="tailgate-grid">
             {activeTailgates.map((tailgate) => (
-              <TailgateCard key={tailgate.id} event={tailgate} />
+              <TailgateCard
+                key={tailgate.id}
+                event={tailgate}
+                isHost={tailgate.relationship === "hosting"}
+              />
             ))}
           </div>
         ) : (

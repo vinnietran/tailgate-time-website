@@ -1,16 +1,42 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { doc, onSnapshot, updateDoc } from "firebase/firestore";
-import { useNavigate, useParams } from "react-router-dom";
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  onSnapshot,
+  orderBy,
+  query,
+  updateDoc,
+  where
+} from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import { useAuth } from "../hooks/useAuth";
-import { db } from "../lib/firebase";
+import { db, functions as firebaseFunctions } from "../lib/firebase";
 import { mockTailgates } from "../data/mockTailgates";
 import { TailgateEvent, TailgateStatus, VisibilityType } from "../types";
 import { estimateHostPayout, getVisibilityLabel } from "../utils/tailgate";
 import { formatCurrencyFromCents, formatDateTime } from "../utils/format";
 
+const MAPS_API_KEY = (
+  import.meta.env.MAPS_API_KEY ??
+  import.meta.env.VITE_MAPS_API_KEY ??
+  ""
+).trim();
+const MAX_TICKET_QUANTITY = 8;
+
 type AttendeeFilterKey = "All" | "Going" | "Pending" | "Not Going";
 type AttendeeStatus = "Host" | "Attending" | "Pending" | "Not Attending";
+type TicketCheckState = "loading" | "confirmed" | "pending" | "missing";
+type TimelineStep = {
+  id: string;
+  title: string;
+  description?: string;
+  timestampStart: Date;
+  timestampEnd?: Date | null;
+};
 type ExpectationKey =
   | "foodProvided"
   | "alcoholProvided"
@@ -34,6 +60,15 @@ type LocationPin = {
   lng?: number;
 };
 
+type TimelineDraft = {
+  title: string;
+  description: string;
+  startTime: string;
+  durationHours: string;
+  durationMinutes: string;
+  durationSeconds: string;
+};
+
 type TailgateDetail = {
   id: string;
   eventName: string;
@@ -54,6 +89,8 @@ type TailgateDetail = {
   checkedInCount?: number;
   status?: string;
   cancelledAt?: Date | null;
+  eventTargetTime?: Date | null;
+  schedulePublished?: boolean;
   expectations?: Partial<Record<ExpectationKey, boolean>>;
 };
 
@@ -136,6 +173,64 @@ function normalizeDate(value: unknown): Date | null {
   }
 
   return null;
+}
+
+function parseDurationPart(value: string) {
+  if (!value.trim()) return 0;
+  const parsed = Number(value.replace(/\D/g, ""));
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function formatDurationCountdown(diffMs: number) {
+  if (diffMs <= 0) return "00:00:00";
+  const totalSeconds = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds]
+    .map((value) => String(value).padStart(2, "0"))
+    .join(":");
+}
+
+function toTimeInput(date: Date) {
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function buildTimelineWindow(
+  baseDate: Date,
+  startTime: string,
+  durationHours: number,
+  durationMinutes: number,
+  durationSeconds: number
+) {
+  const matches = startTime.match(/^(\d{2}):(\d{2})$/);
+  if (!matches) return null;
+  const hours = Number(matches[1]);
+  const minutes = Number(matches[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+
+  const start = new Date(
+    baseDate.getFullYear(),
+    baseDate.getMonth(),
+    baseDate.getDate(),
+    hours,
+    minutes,
+    0,
+    0
+  );
+  if (Number.isNaN(start.getTime())) return null;
+
+  const safeHours = Math.max(0, Math.floor(durationHours));
+  const safeMinutes = Math.max(0, Math.floor(durationMinutes));
+  const safeSeconds = Math.max(0, Math.floor(durationSeconds));
+  const durationMs =
+    safeHours * 60 * 60 * 1000 + safeMinutes * 60 * 1000 + safeSeconds * 1000;
+  const end = new Date(start.getTime() + durationMs);
+
+  return { start, end };
 }
 
 function resolveVisibilityType(raw: unknown): VisibilityType {
@@ -259,13 +354,21 @@ function resolveLocationCoords(
   return null;
 }
 
-function buildMapEmbedUrl(coords: { lat: number; lng: number }) {
-  const delta = 0.008;
-  const left = coords.lng - delta;
-  const right = coords.lng + delta;
-  const top = coords.lat + delta;
-  const bottom = coords.lat - delta;
-  return `https://www.openstreetmap.org/export/embed.html?bbox=${left}%2C${bottom}%2C${right}%2C${top}&layer=mapnik&marker=${coords.lat}%2C${coords.lng}`;
+function buildMapEmbedUrl(
+  coords: { lat: number; lng: number },
+  mapsApiKey: string,
+  locationLabel?: string
+): string | null {
+  if (!mapsApiKey) return null;
+  const query = `${coords.lat},${coords.lng}`;
+  const url = new URL("https://www.google.com/maps/embed/v1/place");
+  url.searchParams.set("key", mapsApiKey);
+  url.searchParams.set("q", query);
+  if (locationLabel?.trim()) {
+    url.searchParams.set("q", `${query} (${locationLabel.trim()})`);
+  }
+  url.searchParams.set("zoom", "14");
+  return url.toString();
 }
 
 function toDetailFromFirestore(id: string, data: Record<string, unknown>): TailgateDetail {
@@ -308,6 +411,11 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     checkedInCount: coerceNumber(data.checkedInCount),
     status: firstString(data.status, data.eventStatus),
     cancelledAt: normalizeDate(data.cancelledAt),
+    eventTargetTime:
+      normalizeDate(data.eventTargetTime) ??
+      normalizeDate(data.gameTime) ??
+      startDateTime,
+    schedulePublished: data.schedulePublished === true,
     expectations: asRecord(data.expectations) as TailgateDetail["expectations"]
   };
 }
@@ -354,6 +462,8 @@ function toDetailFromMock(event: TailgateEvent): TailgateDetail {
     checkedInCount: undefined,
     status: event.status,
     cancelledAt: null,
+    eventTargetTime: event.startDateTime,
+    schedulePublished: false,
     expectations: {}
   };
 }
@@ -368,15 +478,40 @@ function resolveStatus(detail: TailgateDetail, now = new Date()): TailgateStatus
 
 export default function TailgateDetails() {
   const { id } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();
   const attendeeSectionRef = useRef<HTMLElement | null>(null);
+  const timelineSectionRef = useRef<HTMLElement | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<TailgateDetail | null>(null);
   const [attendeeFilter, setAttendeeFilter] = useState<AttendeeFilterKey>("All");
   const [pinning, setPinning] = useState(false);
+  const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
+  const [ticketQuantity, setTicketQuantity] = useState(1);
+  const [ticketCheckState, setTicketCheckState] = useState<TicketCheckState>("loading");
+  const [hasConfirmedTicket, setHasConfirmedTicket] = useState(false);
+  const [confirmedTicketCount, setConfirmedTicketCount] = useState(0);
+  const [ticketPurchaseCount, setTicketPurchaseCount] = useState(0);
+  const [hasPendingTickets, setHasPendingTickets] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [timelineSteps, setTimelineSteps] = useState<TimelineStep[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(true);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
+  const [timelineDraft, setTimelineDraft] = useState<TimelineDraft>({
+    title: "",
+    description: "",
+    startTime: "09:00",
+    durationHours: "0",
+    durationMinutes: "0",
+    durationSeconds: "0"
+  });
+  const [editingTimelineId, setEditingTimelineId] = useState<string | null>(null);
+  const [timelineSaving, setTimelineSaving] = useState(false);
+  const [publishingTimeline, setPublishingTimeline] = useState(false);
+  const [eventStartInput, setEventStartInput] = useState("09:00");
 
   useEffect(() => {
     if (!id) {
@@ -421,15 +556,231 @@ export default function TailgateDetails() {
     return () => unsubscribe();
   }, [id]);
 
+  useEffect(() => {
+    if (!id) {
+      setTimelineSteps([]);
+      setTimelineLoading(false);
+      setTimelineError("Missing tailgate id.");
+      return;
+    }
+    if (!db) {
+      setTimelineSteps([]);
+      setTimelineLoading(false);
+      setTimelineError(null);
+      return;
+    }
+
+    setTimelineLoading(true);
+    setTimelineError(null);
+    const scheduleQuery = query(
+      collection(db, "tailgateEvents", id, "schedule"),
+      orderBy("timestampStart")
+    );
+    const unsubscribe = onSnapshot(
+      scheduleQuery,
+      (snapshot) => {
+        const nextSteps = snapshot.docs.map((snapshotDoc) => {
+          const data = snapshotDoc.data() as Record<string, unknown>;
+          return {
+            id: snapshotDoc.id,
+            title: firstString(data.title) ?? "Untitled step",
+            description: firstString(data.description),
+            timestampStart: normalizeDate(data.timestampStart) ?? new Date(0),
+            timestampEnd: normalizeDate(data.timestampEnd)
+          } as TimelineStep;
+        });
+        setTimelineSteps(nextSteps);
+        setTimelineLoading(false);
+        setTimelineError(null);
+      },
+      (snapshotError) => {
+        console.error("Failed to load timeline steps", snapshotError);
+        setTimelineLoading(false);
+        setTimelineError("Unable to load timeline.");
+      }
+    );
+
+    return () => unsubscribe();
+  }, [id]);
+
+  useEffect(() => {
+    const baseEventTime = detail?.eventTargetTime ?? detail?.startDateTime;
+    if (!baseEventTime) return;
+
+    const timeValue = toTimeInput(baseEventTime);
+    setEventStartInput(timeValue);
+    setTimelineDraft((previous) => {
+      if (editingTimelineId) return previous;
+      if (previous.title.trim() || previous.description.trim()) {
+        return previous;
+      }
+      return {
+        ...previous,
+        startTime: timeValue
+      };
+    });
+  }, [detail?.eventTargetTime, detail?.startDateTime, editingTimelineId]);
+
   const status = useMemo(() => (detail ? resolveStatus(detail) : null), [detail]);
   const isHostUser = useMemo(() => {
     if (!detail || !user?.uid) return false;
     return detail.hostId === user.uid || detail.coHostIds.includes(user.uid);
   }, [detail, user?.uid]);
 
+  useEffect(() => {
+    setTicketQuantity(1);
+    setCheckoutError(null);
+  }, [detail?.id]);
+
+  useEffect(() => {
+    if (!detail || detail.visibilityType !== "open_paid" || isHostUser) {
+      setHasConfirmedTicket(true);
+      setTicketCheckState("confirmed");
+      setConfirmedTicketCount(0);
+      setTicketPurchaseCount(0);
+      setHasPendingTickets(false);
+      return;
+    }
+    if (!user?.uid || !db) {
+      setHasConfirmedTicket(false);
+      setTicketCheckState("missing");
+      setConfirmedTicketCount(0);
+      setTicketPurchaseCount(0);
+      setHasPendingTickets(false);
+      return;
+    }
+
+    setTicketCheckState("loading");
+    let newTicketCount = 0;
+    let purchaseCount = 0;
+    let pendingPurchaseCount = 0;
+    let legacyConfirmedCount = 0;
+    let legacyPendingExists = false;
+    let legacyPurchaseCount = 0;
+    let hasNewSnapshot = false;
+    let hasPurchaseSnapshot = false;
+    let hasLegacySnapshot = false;
+
+    const applyTicketState = () => {
+      if (!hasNewSnapshot || !hasPurchaseSnapshot || !hasLegacySnapshot) {
+        return;
+      }
+
+      const useNewModel = newTicketCount > 0 || purchaseCount > 0;
+      if (useNewModel) {
+        setTicketPurchaseCount(purchaseCount);
+        setHasPendingTickets(pendingPurchaseCount > 0);
+        if (newTicketCount > 0) {
+          setHasConfirmedTicket(true);
+          setTicketCheckState("confirmed");
+          setConfirmedTicketCount(newTicketCount);
+          return;
+        }
+        setHasConfirmedTicket(false);
+        setTicketCheckState(pendingPurchaseCount > 0 ? "pending" : "missing");
+        setConfirmedTicketCount(0);
+        return;
+      }
+
+      setTicketPurchaseCount(legacyPurchaseCount);
+      setHasPendingTickets(legacyPendingExists);
+      if (legacyConfirmedCount > 0) {
+        setHasConfirmedTicket(true);
+        setTicketCheckState("confirmed");
+        setConfirmedTicketCount(legacyConfirmedCount);
+        return;
+      }
+      setHasConfirmedTicket(false);
+      setTicketCheckState(legacyPendingExists ? "pending" : "missing");
+      setConfirmedTicketCount(0);
+    };
+
+    const newTicketsQuery = query(
+      collection(db, "tickets"),
+      where("tailgateId", "==", detail.id),
+      where("attendeeUserId", "==", user.uid)
+    );
+    const purchasesQuery = query(
+      collection(db, "ticketPurchases"),
+      where("tailgateId", "==", detail.id),
+      where("buyerUserId", "==", user.uid)
+    );
+    const legacyTicketsQuery = query(
+      collection(db, "tailgateTickets"),
+      where("tailgateId", "==", detail.id),
+      where("userId", "==", user.uid)
+    );
+
+    const unsubscribeNew = onSnapshot(
+      newTicketsQuery,
+      (snapshot) => {
+        newTicketCount = snapshot.docs.filter((docSnap) => {
+          const statusValue = docSnap.get("status");
+          return statusValue === "valid" || statusValue === "checked_in";
+        }).length;
+        hasNewSnapshot = true;
+        applyTicketState();
+      },
+      (snapshotError) => {
+        console.error("Ticket lookup failed", snapshotError);
+        hasNewSnapshot = true;
+        applyTicketState();
+      }
+    );
+    const unsubscribePurchases = onSnapshot(
+      purchasesQuery,
+      (snapshot) => {
+        purchaseCount = snapshot.docs.filter((docSnap) => docSnap.get("status") !== "cancelled").length;
+        pendingPurchaseCount = snapshot.docs.filter((docSnap) => docSnap.get("status") === "pending").length;
+        hasPurchaseSnapshot = true;
+        applyTicketState();
+      },
+      (snapshotError) => {
+        console.error("Purchase lookup failed", snapshotError);
+        hasPurchaseSnapshot = true;
+        applyTicketState();
+      }
+    );
+    const unsubscribeLegacy = onSnapshot(
+      legacyTicketsQuery,
+      (snapshot) => {
+        legacyPurchaseCount = snapshot.docs.filter((docSnap) => docSnap.get("status") !== "cancelled").length;
+        legacyPendingExists = snapshot.docs.some((docSnap) => docSnap.get("status") === "pending");
+        legacyConfirmedCount = snapshot.docs.reduce((sum, docSnap) => {
+          const data = docSnap.data() || {};
+          if (data?.status !== "confirmed") {
+            return sum;
+          }
+          const quantity = Number(data?.quantity);
+          return sum + (Number.isFinite(quantity) && quantity > 0 ? quantity : 1);
+        }, 0);
+        hasLegacySnapshot = true;
+        applyTicketState();
+      },
+      (snapshotError) => {
+        console.error("Legacy ticket lookup failed", snapshotError);
+        hasLegacySnapshot = true;
+        applyTicketState();
+      }
+    );
+
+    return () => {
+      unsubscribeNew();
+      unsubscribePurchases();
+      unsubscribeLegacy();
+    };
+  }, [detail, isHostUser, user?.uid]);
+
   const locationLabel = detail?.locationSummary ?? "Location not set";
   const locationCoords = detail?.locationCoords ?? null;
-  const mapUrl = locationCoords ? buildMapEmbedUrl(locationCoords) : null;
+  const mapUrl = locationCoords
+    ? buildMapEmbedUrl(locationCoords, MAPS_API_KEY, locationLabel)
+    : null;
+  const checkoutResult = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    const value = params.get("checkout");
+    return value === "success" || value === "cancel" ? value : null;
+  }, [location.search]);
 
   const attendeeCounts = useMemo(() => {
     if (!detail) {
@@ -470,6 +821,65 @@ export default function TailgateDetails() {
     ticketsSold,
     ticketPriceCents
   });
+  const capacity =
+    typeof detail?.capacity === "number" && detail.capacity > 0
+      ? detail.capacity
+      : null;
+  const confirmedPaidCount =
+    typeof detail?.ticketsSold === "number" && detail.ticketsSold >= 0
+      ? detail.ticketsSold
+      : 0;
+  const capacityRemaining =
+    capacity !== null ? Math.max(0, capacity - confirmedPaidCount) : null;
+  const isSoldOut = capacityRemaining !== null && capacityRemaining <= 0;
+  const maxSelectableQuantity =
+    capacityRemaining !== null
+      ? Math.max(1, Math.min(MAX_TICKET_QUANTITY, capacityRemaining))
+      : MAX_TICKET_QUANTITY;
+  const showTicketPurchase =
+    detail?.visibilityType === "open_paid" &&
+    !isHostUser &&
+    status !== "cancelled";
+  const canPurchaseTickets =
+    showTicketPurchase &&
+    (ticketCheckState === "missing" || ticketCheckState === "confirmed") &&
+    !isSoldOut;
+  const totalTicketCents =
+    typeof detail?.ticketPriceCents === "number"
+      ? detail.ticketPriceCents * ticketQuantity
+      : null;
+  const ticketTotalLabel =
+    typeof totalTicketCents === "number"
+      ? formatCurrencyFromCents(totalTicketCents)
+      : null;
+  const purchaseCtaLabel = isSoldOut
+    ? "Sold out"
+    : hasConfirmedTicket
+    ? "Buy more tickets"
+    : "Purchase ticket";
+  const ticketStatusMessage =
+    ticketCheckState === "loading"
+      ? "Checking your ticket status..."
+      : ticketCheckState === "confirmed"
+      ? hasConfirmedTicket && confirmedTicketCount > 0
+        ? `You already have ${confirmedTicketCount} ticket${confirmedTicketCount === 1 ? "" : "s"}.`
+        : "Your tickets are confirmed."
+      : ticketCheckState === "pending"
+      ? "Payment received. Ticket confirmation is in progress."
+      : isSoldOut
+      ? "This tailgate is sold out."
+      : "Continue to checkout to purchase tickets.";
+  const timelineBaseEventTime = detail?.eventTargetTime ?? detail?.startDateTime ?? null;
+  const canViewTimeline = isHostUser || detail?.schedulePublished === true;
+  const timelinePublishLabel = detail?.schedulePublished
+    ? "Schedule is visible to attendees."
+    : "Schedule is hidden from attendees.";
+
+  useEffect(() => {
+    setTicketQuantity((current) =>
+      Math.max(1, Math.min(current, maxSelectableQuantity))
+    );
+  }, [maxSelectableQuantity]);
 
   const openMaps = () => {
     if (!detail) return;
@@ -478,6 +888,75 @@ export default function TailgateDetails() {
       : locationLabel;
     const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
     window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const handleCheckoutPress = async () => {
+    if (!detail || !canPurchaseTickets || isCheckoutLoading) {
+      return;
+    }
+    if (!user) {
+      setCheckoutError("Please sign in to purchase tickets.");
+      return;
+    }
+    if (!firebaseFunctions) {
+      setCheckoutError("Checkout is unavailable right now.");
+      return;
+    }
+
+    setCheckoutError(null);
+    setIsCheckoutLoading(true);
+
+    const sanitizedQuantity = Math.max(
+      1,
+      Math.min(ticketQuantity, MAX_TICKET_QUANTITY)
+    );
+    if (sanitizedQuantity !== ticketQuantity) {
+      setTicketQuantity(sanitizedQuantity);
+    }
+
+    try {
+      const successUrl = `${window.location.origin}${window.location.pathname}#/tailgates/${encodeURIComponent(
+        detail.id
+      )}?checkout=success`;
+      const cancelUrl = `${window.location.origin}${window.location.pathname}#/tailgates/${encodeURIComponent(
+        detail.id
+      )}?checkout=cancel`;
+      const createSession = httpsCallable(
+        firebaseFunctions,
+        "createTailgateCheckoutSession"
+      );
+      const result = await createSession({
+        tailgateId: detail.id,
+        quantity: sanitizedQuantity,
+        successUrl,
+        cancelUrl
+      });
+      const data = result.data as {
+        checkoutUrl?: string | null;
+      };
+
+      if (!data?.checkoutUrl) {
+        setCheckoutError("Checkout session unavailable. Please try again.");
+        return;
+      }
+
+      window.location.assign(data.checkoutUrl);
+    } catch (checkoutFailure) {
+      const message =
+        checkoutFailure instanceof Error
+          ? checkoutFailure.message
+          : "Unable to start checkout right now.";
+
+      if (message.includes("SOLD_OUT")) {
+        setCheckoutError("This tailgate is sold out.");
+      } else if (message.includes("unauthenticated")) {
+        setCheckoutError("Please sign in again.");
+      } else {
+        setCheckoutError("Unable to start checkout. Please try again.");
+      }
+    } finally {
+      setIsCheckoutLoading(false);
+    }
   };
 
   const dropLocationPin = () => {
@@ -545,6 +1024,162 @@ export default function TailgateDetails() {
     attendeeSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  const scrollToTimeline = () => {
+    timelineSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const resetTimelineDraft = () => {
+    setEditingTimelineId(null);
+    setTimelineDraft({
+      title: "",
+      description: "",
+      startTime: eventStartInput || "09:00",
+      durationHours: "0",
+      durationMinutes: "0",
+      durationSeconds: "0"
+    });
+  };
+
+  const saveEventStartTime = async () => {
+    if (!db || !id) return;
+    const matches = eventStartInput.match(/^(\d{2}):(\d{2})$/);
+    if (!matches) {
+      setTimelineError("Event start time is invalid.");
+      return;
+    }
+
+    const baseDate = timelineBaseEventTime ?? detail?.startDateTime ?? new Date();
+    const nextEventStart = new Date(
+      baseDate.getFullYear(),
+      baseDate.getMonth(),
+      baseDate.getDate(),
+      Number(matches[1]),
+      Number(matches[2]),
+      0,
+      0
+    );
+
+    try {
+      setTimelineError(null);
+      await updateDoc(doc(db, "tailgateEvents", id), {
+        eventTargetTime: nextEventStart
+      });
+    } catch (saveError) {
+      console.error("Failed to save event start time", saveError);
+      setTimelineError("Unable to save event start time.");
+    }
+  };
+
+  const saveTimelineStep = async () => {
+    if (!db || !id || !timelineBaseEventTime) {
+      setTimelineError("Timeline is unavailable right now.");
+      return;
+    }
+
+    const title = timelineDraft.title.trim();
+    if (!title) {
+      setTimelineError("Timeline step title is required.");
+      return;
+    }
+
+    const durationHours = parseDurationPart(timelineDraft.durationHours);
+    const durationMinutes = parseDurationPart(timelineDraft.durationMinutes);
+    const durationSeconds = parseDurationPart(timelineDraft.durationSeconds);
+    const window = buildTimelineWindow(
+      timelineBaseEventTime,
+      timelineDraft.startTime,
+      durationHours,
+      durationMinutes,
+      durationSeconds
+    );
+    if (!window) {
+      setTimelineError("Timeline start time is invalid.");
+      return;
+    }
+
+    setTimelineSaving(true);
+    setTimelineError(null);
+    try {
+      const scheduleData = {
+        title,
+        description: timelineDraft.description.trim(),
+        timestampStart: window.start,
+        timestampEnd: window.end,
+        updatedAt: new Date()
+      };
+
+      if (editingTimelineId) {
+        await updateDoc(
+          doc(db, "tailgateEvents", id, "schedule", editingTimelineId),
+          scheduleData
+        );
+      } else {
+        await addDoc(collection(db, "tailgateEvents", id, "schedule"), {
+          ...scheduleData,
+          createdAt: new Date()
+        });
+      }
+      resetTimelineDraft();
+    } catch (saveError) {
+      console.error("Failed to save timeline step", saveError);
+      setTimelineError("Unable to save timeline step.");
+    } finally {
+      setTimelineSaving(false);
+    }
+  };
+
+  const editTimelineStep = (step: TimelineStep) => {
+    const endTime = step.timestampEnd ?? step.timestampStart;
+    const diffMs = Math.max(endTime.getTime() - step.timestampStart.getTime(), 0);
+    const hours = Math.floor(diffMs / (60 * 60 * 1000));
+    const minutes = Math.floor((diffMs % (60 * 60 * 1000)) / (60 * 1000));
+    const seconds = Math.floor((diffMs % (60 * 1000)) / 1000);
+
+    setEditingTimelineId(step.id);
+    setTimelineDraft({
+      title: step.title,
+      description: step.description ?? "",
+      startTime: toTimeInput(step.timestampStart),
+      durationHours: String(hours),
+      durationMinutes: String(minutes),
+      durationSeconds: String(seconds)
+    });
+    setTimelineError(null);
+  };
+
+  const removeTimelineStep = async (stepId: string) => {
+    if (!db || !id) return;
+    const confirmed = window.confirm("Delete this timeline step?");
+    if (!confirmed) return;
+
+    try {
+      setTimelineError(null);
+      await deleteDoc(doc(db, "tailgateEvents", id, "schedule", stepId));
+      if (editingTimelineId === stepId) {
+        resetTimelineDraft();
+      }
+    } catch (deleteError) {
+      console.error("Failed to delete timeline step", deleteError);
+      setTimelineError("Unable to delete timeline step.");
+    }
+  };
+
+  const toggleTimelinePublish = async () => {
+    if (!db || !id || publishingTimeline) return;
+    setPublishingTimeline(true);
+    try {
+      setTimelineError(null);
+      await updateDoc(doc(db, "tailgateEvents", id), {
+        schedulePublished: !(detail?.schedulePublished === true)
+      });
+    } catch (publishError) {
+      console.error("Failed to update timeline publish status", publishError);
+      setTimelineError("Unable to update publish status.");
+    } finally {
+      setPublishingTimeline(false);
+    }
+  };
+
   return (
     <AppShell header={<div className="simple-header"><h1>Tailgate Details</h1></div>}>
       {loading ? (
@@ -560,11 +1195,20 @@ export default function TailgateDetails() {
         </section>
       ) : (
         <section className="tailgate-details-stack">
+          {checkoutResult === "success" ? (
+            <section className="tailgate-details-checkout-banner success">
+              Purchase successful. Open the TailgateTime app to view tickets.
+            </section>
+          ) : checkoutResult === "cancel" ? (
+            <section className="tailgate-details-checkout-banner">
+              Checkout was canceled. You can try again whenever you're ready.
+            </section>
+          ) : null}
           <article className="tailgate-details-hero">
             <div className="tailgate-details-hero-top">
               <div>
                 <p className="tailgate-details-eyebrow">
-                  {isHostUser ? "You're hosting" : "Tailgate details"}
+                  {isHostUser ? "Host dashboard" : "Tailgate details"}
                 </p>
                 <h2>{detail.eventName}</h2>
                 <p className="tailgate-details-subtitle">
@@ -600,64 +1244,66 @@ export default function TailgateDetails() {
             ) : null}
           </article>
 
-          <article className="tailgate-details-card">
-            <div className="section-header">
-              <div>
-                <h2>Host Snapshot</h2>
-                <p className="section-subtitle">Live tailgate metrics and attendance.</p>
-              </div>
-            </div>
-            <div className="tailgate-details-metric-grid">
-              <div className="tailgate-details-metric-card">
-                <p>Invited</p>
-                <strong>{attendeeCounts.nonHost}</strong>
-              </div>
-              <div className="tailgate-details-metric-card">
-                <p>Going</p>
-                <strong>{attendeeCounts.going}</strong>
-              </div>
-              <div className="tailgate-details-metric-card">
-                <p>Pending</p>
-                <strong>{attendeeCounts.pending}</strong>
-              </div>
-              <div className="tailgate-details-metric-card">
-                <p>Not Going</p>
-                <strong>{attendeeCounts.notGoing}</strong>
-              </div>
-              {detail.visibilityType === "open_paid" ? (
-                <>
-                  <div className="tailgate-details-metric-card">
-                    <p>Tickets Sold</p>
-                    <strong>{ticketsSold}</strong>
-                  </div>
-                  <div className="tailgate-details-metric-card">
-                    <p>Checked In</p>
-                    <strong>{detail.checkedInCount ?? "--"}</strong>
-                  </div>
-                  <div className="tailgate-details-metric-card">
-                    <p>Gross Revenue</p>
-                    <strong>{formatCurrencyFromCents(payout.gross)}</strong>
-                  </div>
-                  <div className="tailgate-details-metric-card">
-                    <p>Est. Payout</p>
-                    <strong>{formatCurrencyFromCents(payout.payout)}</strong>
-                  </div>
-                </>
-              ) : detail.capacity ? (
-                <div className="tailgate-details-metric-card">
-                  <p>Capacity</p>
-                  <strong>{detail.capacity}</strong>
+          {isHostUser ? (
+            <article className="tailgate-details-card">
+              <div className="section-header">
+                <div>
+                  <h2>Host Snapshot</h2>
+                  <p className="section-subtitle">Live tailgate metrics and attendance.</p>
                 </div>
-              ) : null}
-            </div>
-          </article>
+              </div>
+              <div className="tailgate-details-metric-grid">
+                <div className="tailgate-details-metric-card">
+                  <p>Invited</p>
+                  <strong>{attendeeCounts.nonHost}</strong>
+                </div>
+                <div className="tailgate-details-metric-card">
+                  <p>Going</p>
+                  <strong>{attendeeCounts.going}</strong>
+                </div>
+                <div className="tailgate-details-metric-card">
+                  <p>Pending</p>
+                  <strong>{attendeeCounts.pending}</strong>
+                </div>
+                <div className="tailgate-details-metric-card">
+                  <p>Not Going</p>
+                  <strong>{attendeeCounts.notGoing}</strong>
+                </div>
+                {detail.visibilityType === "open_paid" ? (
+                  <>
+                    <div className="tailgate-details-metric-card">
+                      <p>Tickets Sold</p>
+                      <strong>{ticketsSold}</strong>
+                    </div>
+                    <div className="tailgate-details-metric-card">
+                      <p>Checked In</p>
+                      <strong>{detail.checkedInCount ?? "--"}</strong>
+                    </div>
+                    <div className="tailgate-details-metric-card">
+                      <p>Gross Revenue</p>
+                      <strong>{formatCurrencyFromCents(payout.gross)}</strong>
+                    </div>
+                    <div className="tailgate-details-metric-card">
+                      <p>Est. Payout</p>
+                      <strong>{formatCurrencyFromCents(payout.payout)}</strong>
+                    </div>
+                  </>
+                ) : detail.capacity ? (
+                  <div className="tailgate-details-metric-card">
+                    <p>Capacity</p>
+                    <strong>{detail.capacity}</strong>
+                  </div>
+                ) : null}
+              </div>
+            </article>
+          ) : null}
 
           {isHostUser ? (
             <article className="tailgate-details-card">
               <div className="section-header">
                 <div>
-                  <h2>Host Controls</h2>
-                  <p className="section-subtitle">Manage your tailgate operations.</p>
+                  <h2>Quick actions</h2>
+                  <p className="section-subtitle">Keep everything on track.</p>
                 </div>
               </div>
               <div className="tailgate-details-control-list">
@@ -666,22 +1312,30 @@ export default function TailgateDetails() {
                   onClick={() => navigate(`/tailgates/${detail.id}/edit`)}
                 >
                   <span>Edit event details</span>
-                  <small>Update name, schedule, and location</small>
+                  <small>Update event name, kickoff, and meetup details</small>
                 </button>
                 <button className="tailgate-details-control-row" onClick={scrollToAttendees}>
-                  <span>{detail.visibilityType === "open_paid" ? "View tickets" : "View guest list"}</span>
+                  <span>{detail.visibilityType === "open_paid" ? "View ticket holders" : "View guest list"}</span>
                   <small>
                     {detail.visibilityType === "open_paid"
-                      ? "See ticket holders and status"
+                      ? "Review ticket and RSVP status"
                       : "Review invites and RSVPs"}
+                  </small>
+                </button>
+                <button className="tailgate-details-control-row" onClick={scrollToTimeline}>
+                  <span>{detail.schedulePublished ? "Edit schedule" : "Build schedule"}</span>
+                  <small>
+                    {detail.schedulePublished
+                      ? "Fine tune your published run of show"
+                      : "Map out the timeline so guests know the plan"}
                   </small>
                 </button>
                 <button
                   className="tailgate-details-control-row"
                   onClick={() => navigate(`/tailgates/${detail.id}/checkin`)}
                 >
-                  <span>Open check-in</span>
-                  <small>Run arrivals and verify guests</small>
+                  <span>Check-in by code</span>
+                  <small>Enter ticket codes from the host list</small>
                 </button>
                 <button className="tailgate-details-control-row" onClick={() => navigate("/messages")}>
                   <span>Message guests</span>
@@ -740,6 +1394,63 @@ export default function TailgateDetails() {
                 )}
               </div>
             </div>
+            {showTicketPurchase ? (
+              <div className="tailgate-details-ticket-block">
+                <div className="tailgate-details-ticket-row">
+                  <p className="tailgate-details-ticket-title">Tickets</p>
+                  <span className="chip chip-upcoming">
+                    {formatCurrencyFromCents(detail.ticketPriceCents)} per person
+                  </span>
+                </div>
+                <p className="tailgate-details-ticket-copy">{ticketStatusMessage}</p>
+                {ticketPurchaseCount > 0 || hasPendingTickets ? (
+                  <p className="tailgate-details-ticket-copy app-note">
+                    Purchase detected. Open the TailgateTime app to view your tickets.
+                  </p>
+                ) : null}
+                {canPurchaseTickets ? (
+                  <div className="tailgate-details-ticket-controls">
+                    <div className="tailgate-details-ticket-qty">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() =>
+                          setTicketQuantity((current) => Math.max(1, current - 1))
+                        }
+                        disabled={ticketQuantity <= 1}
+                      >
+                        -
+                      </button>
+                      <strong>{ticketQuantity}</strong>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() =>
+                          setTicketQuantity((current) =>
+                            Math.min(maxSelectableQuantity, current + 1)
+                          )
+                        }
+                        disabled={ticketQuantity >= maxSelectableQuantity}
+                      >
+                        +
+                      </button>
+                    </div>
+                    {ticketTotalLabel ? (
+                      <p className="tailgate-details-ticket-total">Total {ticketTotalLabel}</p>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => void handleCheckoutPress()}
+                      disabled={isCheckoutLoading || isSoldOut}
+                    >
+                      {isCheckoutLoading ? "Preparing checkout..." : purchaseCtaLabel}
+                    </button>
+                  </div>
+                ) : null}
+                {checkoutError ? <p className="tailgate-details-ticket-error">{checkoutError}</p> : null}
+              </div>
+            ) : null}
           </article>
 
           <article className="tailgate-details-card">
@@ -763,6 +1474,243 @@ export default function TailgateDetails() {
             ) : null}
           </article>
 
+          {canViewTimeline ? (
+            <article className="tailgate-details-card" ref={timelineSectionRef}>
+              <div className="section-header">
+                <div>
+                  <h2>Timeline</h2>
+                  <p className="section-subtitle">
+                    {isHostUser
+                      ? "Build and publish your event run-of-show."
+                      : "Host-published run-of-show for this tailgate."}
+                  </p>
+                </div>
+              </div>
+              {isHostUser ? (
+                <div className="tailgate-timeline-host-tools">
+                  <div className="tailgate-timeline-time-row">
+                    <label className="input-label" htmlFor="tailgate-event-start-time">
+                      Event Start Time
+                    </label>
+                    <div className="tailgate-timeline-time-actions">
+                      <input
+                        id="tailgate-event-start-time"
+                        className="text-input"
+                        type="time"
+                        value={eventStartInput}
+                        onChange={(event) => setEventStartInput(event.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void saveEventStartTime()}
+                      >
+                        Save start time
+                      </button>
+                    </div>
+                  </div>
+                  <div className="tailgate-timeline-publish-row">
+                    <p className="meta-muted">{timelinePublishLabel}</p>
+                    <button
+                      type="button"
+                      className={detail.schedulePublished ? "secondary-button" : "primary-button"}
+                      onClick={() => void toggleTimelinePublish()}
+                      disabled={publishingTimeline}
+                    >
+                      {publishingTimeline
+                        ? "Saving..."
+                        : detail.schedulePublished
+                        ? "Unpublish schedule"
+                        : "Publish schedule"}
+                    </button>
+                  </div>
+                  <div className="tailgate-timeline-editor">
+                    <div className="tailgate-timeline-grid">
+                      <label className="input-group">
+                        <span className="input-label">Step title</span>
+                        <input
+                          className="text-input"
+                          value={timelineDraft.title}
+                          onChange={(event) =>
+                            setTimelineDraft((previous) => ({
+                              ...previous,
+                              title: event.target.value
+                            }))
+                          }
+                          placeholder="Grill setup"
+                        />
+                      </label>
+                      <label className="input-group">
+                        <span className="input-label">Start time</span>
+                        <input
+                          className="text-input"
+                          type="time"
+                          value={timelineDraft.startTime}
+                          onChange={(event) =>
+                            setTimelineDraft((previous) => ({
+                              ...previous,
+                              startTime: event.target.value
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                    <label className="input-group">
+                      <span className="input-label">Description (optional)</span>
+                      <textarea
+                        className="text-input tailgate-timeline-description-input"
+                        value={timelineDraft.description}
+                        onChange={(event) =>
+                          setTimelineDraft((previous) => ({
+                            ...previous,
+                            description: event.target.value
+                          }))
+                        }
+                        placeholder="Prep stations and coolers for early arrivals."
+                      />
+                    </label>
+                    <p className="input-label">Duration</p>
+                    <div className="tailgate-timeline-duration-grid">
+                      <label className="input-group">
+                        <input
+                          className="text-input"
+                          value={timelineDraft.durationHours}
+                          onChange={(event) =>
+                            setTimelineDraft((previous) => ({
+                              ...previous,
+                              durationHours: event.target.value.replace(/\D/g, "")
+                            }))
+                          }
+                          placeholder="0"
+                        />
+                        <span className="meta-muted">Hours</span>
+                      </label>
+                      <label className="input-group">
+                        <input
+                          className="text-input"
+                          value={timelineDraft.durationMinutes}
+                          onChange={(event) =>
+                            setTimelineDraft((previous) => ({
+                              ...previous,
+                              durationMinutes: event.target.value.replace(/\D/g, "")
+                            }))
+                          }
+                          placeholder="30"
+                        />
+                        <span className="meta-muted">Minutes</span>
+                      </label>
+                      <label className="input-group">
+                        <input
+                          className="text-input"
+                          value={timelineDraft.durationSeconds}
+                          onChange={(event) =>
+                            setTimelineDraft((previous) => ({
+                              ...previous,
+                              durationSeconds: event.target.value.replace(/\D/g, "")
+                            }))
+                          }
+                          placeholder="0"
+                        />
+                        <span className="meta-muted">Seconds</span>
+                      </label>
+                    </div>
+                    <div className="tailgate-timeline-editor-actions">
+                      <button
+                        type="button"
+                        className="primary-button"
+                        onClick={() => void saveTimelineStep()}
+                        disabled={timelineSaving}
+                      >
+                        {timelineSaving
+                          ? "Saving..."
+                          : editingTimelineId
+                          ? "Save step"
+                          : "Add step"}
+                      </button>
+                      {editingTimelineId ? (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={resetTimelineDraft}
+                          disabled={timelineSaving}
+                        >
+                          Cancel edit
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              {timelineError ? (
+                <p className="tailgate-details-ticket-error">{timelineError}</p>
+              ) : null}
+              <div className="tailgate-timeline-list">
+                {timelineLoading ? (
+                  <p className="meta-muted">Loading timeline...</p>
+                ) : timelineSteps.length > 0 ? (
+                  timelineSteps.map((step) => {
+                    const endTime = step.timestampEnd ?? step.timestampStart;
+                    const timeUntilEvent = timelineBaseEventTime
+                      ? formatDurationCountdown(
+                          timelineBaseEventTime.getTime() - endTime.getTime()
+                        )
+                      : "--:--:--";
+                    return (
+                      <div className="tailgate-timeline-row" key={step.id}>
+                        <div>
+                          <p className="tailgate-details-attendee-name">{step.title}</p>
+                          {step.description ? (
+                            <p className="tailgate-timeline-row-description">
+                              {step.description}
+                            </p>
+                          ) : null}
+                          <p className="tailgate-details-attendee-meta">
+                            {step.timestampStart.toLocaleTimeString([], {
+                              hour: "numeric",
+                              minute: "2-digit"
+                            })}{" "}
+                            -{" "}
+                            {endTime.toLocaleTimeString([], {
+                              hour: "numeric",
+                              minute: "2-digit"
+                            })}
+                          </p>
+                          <p className="tailgate-timeline-row-countdown">
+                            Time until event: {timeUntilEvent}
+                          </p>
+                        </div>
+                        {isHostUser ? (
+                          <div className="tailgate-timeline-row-actions">
+                            <button
+                              type="button"
+                              className="link-button"
+                              onClick={() => editTimelineStep(step)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              className="link-button"
+                              onClick={() => void removeTimelineStep(step.id)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="meta-muted">
+                    {isHostUser
+                      ? "No timeline steps yet."
+                      : "No schedule has been published yet."}
+                  </p>
+                )}
+              </div>
+            </article>
+          ) : null}
+
           <article className="tailgate-details-card">
             <div className="section-header">
               <div>
@@ -774,7 +1722,9 @@ export default function TailgateDetails() {
               <iframe className="tailgate-details-map" src={mapUrl} title="Tailgate map preview" />
             ) : (
               <div className="tailgate-details-map-placeholder">
-                No coordinates yet. Host can drop an exact location pin from Host Controls.
+                {MAPS_API_KEY
+                  ? "No coordinates yet. Host can drop an exact location pin from Host Controls."
+                  : "Set MAPS_API_KEY to preview Google Maps for this tailgate."}
               </div>
             )}
           </article>
@@ -795,7 +1745,9 @@ export default function TailgateDetails() {
               ] as Array<{ key: AttendeeFilterKey; label: string }>).map((filter) => (
                 <button
                   key={filter.key}
-                  className={`chip ${attendeeFilter === filter.key ? "chip-upcoming" : "chip-outline"}`}
+                  className={`tailgate-details-filter-chip${
+                    attendeeFilter === filter.key ? " is-active" : ""
+                  }`}
                   onClick={() => setAttendeeFilter(filter.key)}
                 >
                   {filter.label}
@@ -810,9 +1762,9 @@ export default function TailgateDetails() {
                     <div className="tailgate-details-attendee-row" key={attendee.id}>
                       <div>
                         <p className="tailgate-details-attendee-name">{attendee.name}</p>
-                        <p className="tailgate-details-attendee-meta">
-                          {attendee.phone ?? attendee.email ?? "No contact"}
-                        </p>
+                        {attendee.email ? (
+                          <p className="tailgate-details-attendee-meta">{attendee.email}</p>
+                        ) : null}
                       </div>
                       <span className={`chip ${meta.className}`}>{meta.label}</span>
                     </div>

@@ -5,7 +5,13 @@ import { formatCurrencyFromCents, formatDateTime } from "../utils/format";
 import { estimateHostPayout, getEventStatus, getVisibilityLabel } from "../utils/tailgate";
 import { IconCalendar, IconExternal, IconLocation } from "./Icons";
 
-export default function TailgateCard({ event }: { event: TailgateEvent }) {
+export default function TailgateCard({
+  event,
+  isHost
+}: {
+  event: TailgateEvent;
+  isHost?: boolean;
+}) {
   const navigate = useNavigate();
   const status = getEventStatus(event);
   const visibilityLabel = getVisibilityLabel(event.visibilityType);
@@ -15,7 +21,9 @@ export default function TailgateCard({ event }: { event: TailgateEvent }) {
   });
   const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
 
-  const showEdit = status === "upcoming" || status === "live";
+  const showEdit = isHost === true && (status === "upcoming" || status === "live");
+  const showCheckIn = isHost === true;
+  const showHostMetrics = isHost === true;
   const isPaid = event.visibilityType === "open_paid";
 
   return (
@@ -34,6 +42,7 @@ export default function TailgateCard({ event }: { event: TailgateEvent }) {
         <div>
           <h3>{event.name}</h3>
           <div className="chip-row">
+            {isHost === true ? <span className="chip chip-live">Hosting</span> : null}
             <span className="chip chip-outline">{visibilityLabel}</span>
             <span className={`chip chip-status chip-${status}`}>{statusLabel}</span>
           </div>
@@ -63,7 +72,7 @@ export default function TailgateCard({ event }: { event: TailgateEvent }) {
         </div>
       </div>
 
-      <div className="tailgate-card-body">
+      <div className={`tailgate-card-body${showHostMetrics ? "" : " tailgate-card-body-single"}`}>
         <div className="card-left">
           <div className="meta-row">
             <IconCalendar />
@@ -78,33 +87,35 @@ export default function TailgateCard({ event }: { event: TailgateEvent }) {
           </p>
         </div>
 
-        <div className="card-right">
-          {isPaid ? (
-            <div className="info-block">
-              <p className="info-label">Tickets</p>
-              <p className="info-value">
-                {event.ticketsSold ?? 0} / {event.capacity ?? "--"} sold
-              </p>
-              <p className="info-meta">{formatCurrencyFromCents(event.ticketPriceCents)} per person</p>
-              <p className="info-highlight">
-                {event.payoutStatus === "sent"
-                  ? "Payout sent"
-                  : `${formatCurrencyFromCents(payout.payout)} host payout (est.)`}
-              </p>
-            </div>
-          ) : (
-            <div className="info-block">
-              <p className="info-label">RSVPs</p>
-              <p className="info-value">
-                {event.rsvpsConfirmed ?? 0} confirmed / {event.rsvpsPending ?? 0} pending
-              </p>
-              <p className="info-meta">
-                {event.capacity ? `${event.capacity} max guests` : "No capacity limit"}
-              </p>
-              <p className="info-highlight">Guests feel the hype.</p>
-            </div>
-          )}
-        </div>
+        {showHostMetrics ? (
+          <div className="card-right">
+            {isPaid ? (
+              <div className="info-block">
+                <p className="info-label">Tickets</p>
+                <p className="info-value">
+                  {event.ticketsSold ?? 0} / {event.capacity ?? "--"} sold
+                </p>
+                <p className="info-meta">{formatCurrencyFromCents(event.ticketPriceCents)} per person</p>
+                <p className="info-highlight">
+                  {event.payoutStatus === "sent"
+                    ? "Payout sent"
+                    : `${formatCurrencyFromCents(payout.payout)} host payout (est.)`}
+                </p>
+              </div>
+            ) : (
+              <div className="info-block">
+                <p className="info-label">RSVPs</p>
+                <p className="info-value">
+                  {event.rsvpsConfirmed ?? 0} confirmed / {event.rsvpsPending ?? 0} pending
+                </p>
+                <p className="info-meta">
+                  {event.capacity ? `${event.capacity} max guests` : "No capacity limit"}
+                </p>
+                <p className="info-highlight">Guests feel the hype.</p>
+              </div>
+            )}
+          </div>
+        ) : null}
       </div>
 
       <div className="tailgate-card-footer">
@@ -117,15 +128,17 @@ export default function TailgateCard({ event }: { event: TailgateEvent }) {
         >
           View details
         </button>
-        <button
-          className="link-button"
-          onClick={(e) => {
-            e.stopPropagation();
-            navigate(`/tailgates/${event.id}/checkin`);
-          }}
-        >
-          Open check-in
-        </button>
+        {showCheckIn ? (
+          <button
+            className="link-button"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/tailgates/${event.id}/checkin`);
+            }}
+          >
+            Open check-in
+          </button>
+        ) : null}
         <button
           className="link-button"
           onClick={(e) => {

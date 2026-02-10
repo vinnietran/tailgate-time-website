@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { doc, onSnapshot } from "firebase/firestore";
-import { db } from "../lib/firebase";
+import { getDownloadURL, ref } from "firebase/storage";
+import { db, storage } from "../lib/firebase";
 import { debugAuthLog } from "../utils/debug";
 
 export type UserProfile = {
@@ -16,6 +17,33 @@ function firstString(...values: unknown[]) {
     }
   }
   return undefined;
+}
+
+async function resolveProfilePhotoURL(uid: string, candidate?: string) {
+  const trimmed = candidate?.trim();
+  if (!storage) {
+    return trimmed;
+  }
+
+  if (trimmed) {
+    if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
+      return trimmed;
+    }
+
+    if (trimmed.startsWith("gs://")) {
+      try {
+        return await getDownloadURL(ref(storage, trimmed));
+      } catch {
+        // Fall through to default storage path.
+      }
+    }
+  }
+
+  try {
+    return await getDownloadURL(ref(storage, `profilePictures/${uid}.jpg`));
+  } catch {
+    return trimmed;
+  }
 }
 
 export function useUserProfile(uid?: string) {
@@ -36,6 +64,7 @@ export function useUserProfile(uid?: string) {
 
     setLoading(true);
     const ref = doc(db, "users", uid);
+    let cancelled = false;
 
     const unsubscribe = onSnapshot(
       ref,
@@ -47,27 +76,45 @@ export function useUserProfile(uid?: string) {
           return;
         }
 
-        const data = snapshot.data() as Record<string, unknown>;
-        const nextProfile: UserProfile = {
-          displayName: firstString(data.displayName, data.name, data.fullName),
-          email: firstString(data.email),
-          photoURL: firstString(data.photoURL, data.profilePhotoURL, data.avatarUrl)
+        const hydrateProfile = async () => {
+          const data = snapshot.data() as Record<string, unknown>;
+          const rawPhotoURL = firstString(
+            data.photoURL,
+            data.profilePhotoURL,
+            data.avatarUrl
+          );
+          const resolvedPhotoURL = await resolveProfilePhotoURL(uid, rawPhotoURL);
+          if (cancelled) {
+            return;
+          }
+
+          const nextProfile: UserProfile = {
+            displayName: firstString(data.displayName, data.name, data.fullName),
+            email: firstString(data.email),
+            photoURL: resolvedPhotoURL
+          };
+
+          setProfile(nextProfile);
+          setLoading(false);
+          debugAuthLog("profile:loaded", {
+            uid,
+            hasDisplayName: Boolean(nextProfile.displayName),
+            hasEmail: Boolean(nextProfile.email),
+            hasPhoto: Boolean(nextProfile.photoURL)
+          });
         };
 
-        setProfile(nextProfile);
-        setLoading(false);
-        debugAuthLog("profile:loaded", {
-          uid,
-          hasDisplayName: Boolean(nextProfile.displayName),
-          hasEmail: Boolean(nextProfile.email)
-        });
+        void hydrateProfile();
       },
       () => {
         setLoading(false);
       }
     );
 
-    return () => unsubscribe();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [uid]);
 
   return { profile, loading };

@@ -4,6 +4,7 @@ import { signOut } from "firebase/auth";
 import { useAuth } from "../hooks/useAuth";
 import { useUserProfile } from "../hooks/useUserProfile";
 import { auth } from "../lib/firebase";
+import tailgateTimeLogo from "../../ttnobg.png";
 
 export default function Sidebar() {
   const { user } = useAuth();
@@ -25,16 +26,18 @@ export default function Sidebar() {
     <aside className="sidebar">
       <div className="sidebar-top">
         <div className="logo">
-          <div className="logo-mark">TT</div>
+          <img className="logo-image" src={tailgateTimeLogo} alt="TailgateTime logo" />
           <div>
             <p className="logo-title">TailgateTime</p>
-            <p className="logo-subtitle">Host Console</p>
           </div>
         </div>
 
         <nav className="sidebar-nav">
           <NavLink to="/dashboard" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
             My Tailgates
+          </NavLink>
+          <NavLink to="/discover" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
+            Discover
           </NavLink>
           <NavLink to="/tailgates/new" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
             Create Tailgate

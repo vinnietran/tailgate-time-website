@@ -9,6 +9,7 @@ import {
 import { auth } from "../lib/firebase";
 import { useAuth } from "../hooks/useAuth";
 import { debugAuthLog } from "../utils/debug";
+import tailgateTimeLogo from "../../ttnobg.png";
 
 export default function Login() {
   const { user } = useAuth();
@@ -85,7 +86,7 @@ export default function Login() {
     <div className="login-page">
       <div className="login-card">
         <div className="logo">
-          <div className="logo-mark">TT</div>
+          <img className="logo-image" src={tailgateTimeLogo} alt="TailgateTime logo" />
           <div>
             <p className="logo-title">TailgateTime</p>
             <p className="logo-subtitle">Host Dashboard</p>

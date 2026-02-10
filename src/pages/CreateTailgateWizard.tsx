@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { httpsCallable } from "firebase/functions";
-import { addDoc, collection, doc, getDoc } from "firebase/firestore";
+import { addDoc, collection, doc, getDoc, updateDoc } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import AppShell from "../components/AppShell";
-import { IconCalendar, IconLocation } from "../components/Icons";
+import { IconLocation } from "../components/Icons";
 import { useAuth } from "../hooks/useAuth";
+import { usePlacesAutocomplete } from "../hooks/usePlacesAutocomplete";
 import { db, functions as firebaseFunctions } from "../lib/firebase";
 import { VisibilityType } from "../types";
 
@@ -33,6 +34,16 @@ type QuizQuestion = {
   text: string;
   choices: [string, string, string, string];
   correctChoice: number | null;
+};
+
+type TimelineDraftStep = {
+  id: string;
+  title: string;
+  description: string;
+  startTime: string;
+  durationHours: number;
+  durationMinutes: number;
+  durationSeconds: number;
 };
 
 type LatLng = {
@@ -95,6 +106,11 @@ const CONNECT_RETURN_URL =
   import.meta.env.VITE_CONNECT_RETURN_URL ?? "https://tailgate-time.com/connect-return";
 const CONNECT_REFRESH_URL =
   import.meta.env.VITE_CONNECT_REFRESH_URL ?? "https://tailgate-time.com/connect-refresh";
+const MAPS_API_KEY = (
+  import.meta.env.MAPS_API_KEY ??
+  import.meta.env.VITE_MAPS_API_KEY ??
+  ""
+).trim();
 
 function formatPhone(text: string) {
   const digits = text.replace(/\D/g, "").slice(0, 10);
@@ -129,6 +145,59 @@ function createLocalId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function parseDurationPart(value: string) {
+  if (!value.trim()) return 0;
+  const parsed = Number(value.replace(/\D/g, ""));
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function formatDurationCountdown(diffMs: number) {
+  if (diffMs <= 0) return "00:00:00";
+  const totalSeconds = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds]
+    .map((value) => String(value).padStart(2, "0"))
+    .join(":");
+}
+
+function buildTimelineWindow(
+  baseDate: Date,
+  startTime: string,
+  durationHours: number,
+  durationMinutes: number,
+  durationSeconds: number
+) {
+  const matches = startTime.match(/^(\d{2}):(\d{2})$/);
+  if (!matches) return null;
+
+  const hours = Number(matches[1]);
+  const minutes = Number(matches[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+
+  const start = new Date(
+    baseDate.getFullYear(),
+    baseDate.getMonth(),
+    baseDate.getDate(),
+    hours,
+    minutes,
+    0,
+    0
+  );
+  if (Number.isNaN(start.getTime())) return null;
+
+  const safeHours = Math.max(0, Math.floor(durationHours));
+  const safeMinutes = Math.max(0, Math.floor(durationMinutes));
+  const safeSeconds = Math.max(0, Math.floor(durationSeconds));
+  const durationMs =
+    safeHours * 60 * 60 * 1000 + safeMinutes * 60 * 1000 + safeSeconds * 1000;
+  const end = new Date(start.getTime() + durationMs);
+
+  return { start, end };
+}
+
 function toStartDateTime(eventDate: string, eventTime: string) {
   const [yearRaw, monthRaw, dayRaw] = eventDate.split("-");
   const [hoursRaw, minutesRaw] = eventTime.split(":");
@@ -145,13 +214,22 @@ function toStartDateTime(eventDate: string, eventTime: string) {
   return combined;
 }
 
-function buildMapEmbedUrl(coords: LatLng) {
-  const delta = 0.008;
-  const left = coords.lng - delta;
-  const right = coords.lng + delta;
-  const top = coords.lat + delta;
-  const bottom = coords.lat - delta;
-  return `https://www.openstreetmap.org/export/embed.html?bbox=${left}%2C${bottom}%2C${right}%2C${top}&layer=mapnik&marker=${coords.lat}%2C${coords.lng}`;
+function buildMapEmbedUrl(
+  coords: LatLng,
+  mapsApiKey: string,
+  locationLabel?: string
+): string | null {
+  if (!mapsApiKey) return null;
+  const query = `${coords.lat},${coords.lng}`;
+  const url = new URL("https://www.google.com/maps/embed/v1/place");
+  url.searchParams.set("key", mapsApiKey);
+  if (locationLabel?.trim()) {
+    url.searchParams.set("q", `${query} (${locationLabel.trim()})`);
+  } else {
+    url.searchParams.set("q", query);
+  }
+  url.searchParams.set("zoom", "14");
+  return url.toString();
 }
 
 function resolveStripeConnectStatus(data: Record<string, unknown> | null): StripeConnectStatus {
@@ -193,6 +271,7 @@ export default function CreateTailgateWizard() {
   const [locationSummary, setLocationSummary] = useState("");
   const [locationCoords, setLocationCoords] = useState<LatLng | null>(null);
   const [resolvingLocation, setResolvingLocation] = useState(false);
+  const [locationInputFocused, setLocationInputFocused] = useState(false);
 
   const [visibilityType, setVisibilityType] = useState<VisibilityType>("private");
   const [allowGuestDetails, setAllowGuestDetails] = useState(false);
@@ -213,8 +292,17 @@ export default function CreateTailgateWizard() {
     choices: ["", "", "", ""],
     correctChoice: null
   });
+  const [timelineSteps, setTimelineSteps] = useState<TimelineDraftStep[]>([]);
+  const [timelineTitle, setTimelineTitle] = useState("");
+  const [timelineDescription, setTimelineDescription] = useState("");
+  const [timelineStartTime, setTimelineStartTime] = useState("09:00");
+  const [timelineDurationHours, setTimelineDurationHours] = useState("0");
+  const [timelineDurationMinutes, setTimelineDurationMinutes] = useState("0");
+  const [timelineDurationSeconds, setTimelineDurationSeconds] = useState("0");
+  const [editingTimelineId, setEditingTimelineId] = useState<string | null>(null);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const guestInvitesEnabled = visibilityType === "private";
 
   const filteredContacts = useMemo(() => {
     const query = contactSearch.trim().toLowerCase();
@@ -237,8 +325,24 @@ export default function CreateTailgateWizard() {
   }, [capacityInput, visibilityType]);
 
   const progressLabel = `${stepIndex + 1} / ${wizardSteps.length}`;
-  const mapUrl = locationCoords ? buildMapEmbedUrl(locationCoords) : null;
+  const stepSubtitle =
+    stepIndex === 3 && !guestInvitesEnabled
+      ? "Quiz"
+      : wizardSteps[stepIndex].subtitle;
+  const mapUrl = locationCoords
+    ? buildMapEmbedUrl(locationCoords, MAPS_API_KEY, locationSummary)
+    : null;
   const selectedVisibility = visibilityOptions.find((option) => option.key === visibilityType);
+  const {
+    suggestions: locationSuggestions,
+    loading: locationSuggestionsLoading,
+    resolveSuggestion: resolveLocationSuggestion,
+    clearSuggestions: clearLocationSuggestions
+  } = usePlacesAutocomplete({
+    mapsApiKey: MAPS_API_KEY,
+    value: locationSummary,
+    enabled: stepIndex === 2
+  });
 
   const refreshPayoutStatus = useCallback(async (): Promise<boolean> => {
     if (!user?.uid || !db) {
@@ -274,28 +378,66 @@ export default function CreateTailgateWizard() {
     return () => window.removeEventListener("focus", onFocus);
   }, [refreshPayoutStatus]);
 
+  useEffect(() => {
+    if (!editingTimelineId && timelineSteps.length === 0 && eventTime) {
+      setTimelineStartTime(eventTime);
+    }
+  }, [editingTimelineId, eventTime, timelineSteps.length]);
+
   const resolveAddressToCoords = async () => {
     const query = locationSummary.trim();
     if (!query) return null;
+    if (!MAPS_API_KEY) return null;
     setResolvingLocation(true);
     try {
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(
-          query
-        )}`
-      );
-      const payload = (await response.json()) as Array<{ lat: string; lon: string }>;
-      const first = payload[0];
-      if (!first) return null;
-      const lat = Number(first.lat);
-      const lng = Number(first.lon);
+      const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
+      url.searchParams.set("address", query);
+      url.searchParams.set("key", MAPS_API_KEY);
+
+      const response = await fetch(url.toString(), {
+        headers: {
+          Accept: "application/json"
+        }
+      });
+      if (!response.ok) return null;
+      const payload = (await response.json()) as {
+        status?: string;
+        results?: Array<{ geometry?: { location?: { lat?: number; lng?: number } } }>;
+      };
+      if (payload.status !== "OK") return null;
+      const first = payload.results?.[0];
+      const lat = first?.geometry?.location?.lat;
+      const lng = first?.geometry?.location?.lng;
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
       const next = { lat, lng };
       setLocationCoords(next);
+      clearLocationSuggestions();
       return next;
     } catch (error) {
       console.error("Failed to resolve address", error);
       return null;
+    } finally {
+      setResolvingLocation(false);
+    }
+  };
+
+  const handleSelectLocationSuggestion = async (
+    place: { placeId: string; description: string }
+  ) => {
+    setResolvingLocation(true);
+    try {
+      const resolved = await resolveLocationSuggestion(place);
+      if (!resolved) {
+        setLocationSummary(place.description);
+        setLocationCoords(null);
+        return;
+      }
+
+      setLocationSummary(resolved.label);
+      setLocationCoords({ lat: resolved.lat, lng: resolved.lng });
+      clearFieldError("locationSummary");
+      clearLocationSuggestions();
+      setLocationInputFocused(false);
     } finally {
       setResolvingLocation(false);
     }
@@ -316,6 +458,15 @@ export default function CreateTailgateWizard() {
       setPayoutSetupError(null);
       setPayoutModalOpen(true);
       return;
+    }
+    if (next !== "private") {
+      setGuests([]);
+      setSelectedContactIds([]);
+      setContactModalOpen(false);
+      setManualGuestName("");
+      setManualGuestPhone("");
+      clearFieldError("manualGuestName");
+      clearFieldError("manualGuestPhone");
     }
     setVisibilityType(next);
   };
@@ -423,6 +574,91 @@ export default function CreateTailgateWizard() {
   const handleBack = () => {
     setSuccessMessage(null);
     setStepIndex((current) => Math.max(current - 1, 0));
+  };
+
+  const resetTimelineForm = useCallback(() => {
+    setEditingTimelineId(null);
+    setTimelineTitle("");
+    setTimelineDescription("");
+    setTimelineStartTime(eventTime || "09:00");
+    setTimelineDurationHours("0");
+    setTimelineDurationMinutes("0");
+    setTimelineDurationSeconds("0");
+    clearFieldError("timelineTitle");
+    clearFieldError("timelineStartTime");
+  }, [eventTime, errors]);
+
+  const handleSaveTimelineStep = () => {
+    const nextTitle = timelineTitle.trim();
+    const nextStartTime = timelineStartTime.trim();
+    const durationHours = parseDurationPart(timelineDurationHours);
+    const durationMinutes = parseDurationPart(timelineDurationMinutes);
+    const durationSeconds = parseDurationPart(timelineDurationSeconds);
+    const nextErrors: Record<string, string> = {};
+
+    if (!nextTitle) {
+      nextErrors.timelineTitle = "Timeline step title is required.";
+    }
+    if (!/^\d{2}:\d{2}$/.test(nextStartTime)) {
+      nextErrors.timelineStartTime = "Start time is required.";
+    }
+
+    const startDateTime = toStartDateTime(eventDate, eventTime);
+    if (!startDateTime) {
+      nextErrors.timelineStartTime = "Set event date/time before adding timeline steps.";
+    } else if (
+      !buildTimelineWindow(
+        startDateTime,
+        nextStartTime,
+        durationHours,
+        durationMinutes,
+        durationSeconds
+      )
+    ) {
+      nextErrors.timelineStartTime = "Timeline start time is invalid.";
+    }
+
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors((prev) => ({ ...prev, ...nextErrors }));
+      return;
+    }
+
+    const nextStep: TimelineDraftStep = {
+      id: editingTimelineId ?? createLocalId(),
+      title: nextTitle,
+      description: timelineDescription.trim(),
+      startTime: nextStartTime,
+      durationHours,
+      durationMinutes,
+      durationSeconds
+    };
+
+    setTimelineSteps((prev) => {
+      const next = editingTimelineId
+        ? prev.map((step) => (step.id === editingTimelineId ? nextStep : step))
+        : [...prev, nextStep];
+      return next.sort((left, right) => left.startTime.localeCompare(right.startTime));
+    });
+    resetTimelineForm();
+  };
+
+  const editTimelineStep = (step: TimelineDraftStep) => {
+    setEditingTimelineId(step.id);
+    setTimelineTitle(step.title);
+    setTimelineDescription(step.description);
+    setTimelineStartTime(step.startTime);
+    setTimelineDurationHours(String(step.durationHours));
+    setTimelineDurationMinutes(String(step.durationMinutes));
+    setTimelineDurationSeconds(String(step.durationSeconds));
+    clearFieldError("timelineTitle");
+    clearFieldError("timelineStartTime");
+  };
+
+  const removeTimelineStep = (timelineId: string) => {
+    setTimelineSteps((prev) => prev.filter((step) => step.id !== timelineId));
+    if (editingTimelineId === timelineId) {
+      resetTimelineForm();
+    }
   };
 
   const addManualGuest = () => {
@@ -536,16 +772,20 @@ export default function CreateTailgateWizard() {
         : locationSummary.trim(),
       locationCoords: resolvedCoords,
       expectations,
-      attendees: guests.map((guest) => ({
-        id: guest.id,
-        name: guest.name,
-        phone: guest.phone,
-        status: "Pending"
-      })),
+      attendees: guestInvitesEnabled
+        ? guests.map((guest) => ({
+            id: guest.id,
+            name: guest.name,
+            phone: guest.phone,
+            status: "Pending"
+          }))
+        : [],
       hostUserId: user.uid,
       hostId: user.uid,
       hostName: user.displayName ?? "",
       hostEmail: user.email ?? "",
+      eventTargetTime: startDateTime,
+      schedulePublished: false,
       status: "upcoming",
       createdAt: new Date()
     };
@@ -571,6 +811,33 @@ export default function CreateTailgateWizard() {
       if (db) {
         const created = await addDoc(collection(db, "tailgateEvents"), payload);
         newId = created.id;
+
+        if (timelineSteps.length > 0) {
+          const scheduleCollection = collection(db, "tailgateEvents", newId, "schedule");
+          await Promise.all(
+            timelineSteps.map((step) => {
+              const window = buildTimelineWindow(
+                startDateTime,
+                step.startTime,
+                step.durationHours,
+                step.durationMinutes,
+                step.durationSeconds
+              );
+              if (!window) return Promise.resolve();
+
+              return addDoc(scheduleCollection, {
+                title: step.title,
+                description: step.description,
+                timestampStart: window.start,
+                timestampEnd: window.end,
+                createdAt: new Date()
+              });
+            })
+          );
+          await updateDoc(doc(db, "tailgateEvents", newId), {
+            schedulePublished: false
+          });
+        }
       } else {
         console.warn("Firestore is not configured; tailgate saved locally only.");
       }
@@ -606,19 +873,16 @@ export default function CreateTailgateWizard() {
       <div className="create-wizard-date-time">
         <div>
           <label className="input-label" htmlFor="event-date">Date</label>
-          <div className="create-wizard-input-with-icon">
-            <input
-              id="event-date"
-              className="text-input create-wizard-input"
-              type="date"
-              value={eventDate}
-              onChange={(event) => {
-                setEventDate(event.target.value);
-                clearFieldError("eventDate");
-              }}
-            />
-            <IconCalendar />
-          </div>
+          <input
+            id="event-date"
+            className="text-input create-wizard-input"
+            type="date"
+            value={eventDate}
+            onChange={(event) => {
+              setEventDate(event.target.value);
+              clearFieldError("eventDate");
+            }}
+          />
           {errors.eventDate ? <p className="create-wizard-error">{errors.eventDate}</p> : null}
         </div>
         <div>
@@ -669,10 +933,42 @@ export default function CreateTailgateWizard() {
           placeholder="Cameron Stadium, Garland Street, Bangor, Maine, USA"
           onChange={(event) => {
             setLocationSummary(event.target.value);
+            setLocationCoords(null);
             clearFieldError("locationSummary");
+            setLocationInputFocused(true);
+          }}
+          onFocus={() => setLocationInputFocused(true)}
+          onBlur={() => {
+            window.setTimeout(() => setLocationInputFocused(false), 120);
           }}
         />
         <IconLocation />
+        {locationInputFocused && locationSummary.trim() && MAPS_API_KEY ? (
+          <div className="places-suggestions create-wizard-places-suggestions">
+            {locationSuggestionsLoading ? (
+              <p className="places-suggestion-state">Searching places...</p>
+            ) : locationSuggestions.length > 0 ? (
+              locationSuggestions.map((place) => (
+                <button
+                  type="button"
+                  key={place.placeId}
+                  className="places-suggestion-button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    void handleSelectLocationSuggestion(place);
+                  }}
+                >
+                  <span className="places-suggestion-primary">{place.primaryText}</span>
+                  {place.secondaryText ? (
+                    <span className="places-suggestion-secondary">{place.secondaryText}</span>
+                  ) : null}
+                </button>
+              ))
+            ) : (
+              <p className="places-suggestion-state">No place matches found.</p>
+            )}
+          </div>
+        ) : null}
       </div>
       {errors.locationSummary ? (
         <p className="create-wizard-error">{errors.locationSummary}</p>
@@ -685,7 +981,7 @@ export default function CreateTailgateWizard() {
           onClick={() => {
             void resolveAddressToCoords();
           }}
-          disabled={resolvingLocation || !locationSummary.trim()}
+          disabled={resolvingLocation || !locationSummary.trim() || !MAPS_API_KEY}
         >
           {resolvingLocation ? "Finding map..." : "Find on map"}
         </button>
@@ -700,7 +996,9 @@ export default function CreateTailgateWizard() {
           />
         ) : (
           <div className="create-wizard-map-placeholder">
-            Enter a location and click "Find on map" to preview the pin.
+            {MAPS_API_KEY
+              ? 'Enter a location and click "Find on map" to preview the pin.'
+              : "Set MAPS_API_KEY to preview Google Maps."}
           </div>
         )}
       </div>
@@ -821,78 +1119,256 @@ export default function CreateTailgateWizard() {
 
   const renderStepInvite = () => (
     <section className="create-wizard-stack">
+      {guestInvitesEnabled ? (
+        <div className="create-wizard-card">
+          <div className="create-wizard-card-header">
+            <h2>Step 4: Invite Friends</h2>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setContactModalOpen(true)}
+            >
+              Add Guests
+            </button>
+          </div>
+
+          <div className="create-wizard-inline-grid">
+            <div>
+              <label className="input-label" htmlFor="manual-guest-name">Guest Name</label>
+              <input
+                id="manual-guest-name"
+                className="text-input create-wizard-input"
+                value={manualGuestName}
+                onChange={(event) => {
+                  setManualGuestName(event.target.value);
+                  clearFieldError("manualGuestName");
+                }}
+                placeholder="Guest name"
+              />
+              {errors.manualGuestName ? (
+                <p className="create-wizard-error">{errors.manualGuestName}</p>
+              ) : null}
+            </div>
+            <div>
+              <label className="input-label" htmlFor="manual-guest-phone">Guest Phone</label>
+              <input
+                id="manual-guest-phone"
+                className="text-input create-wizard-input"
+                value={manualGuestPhone}
+                onChange={(event) => {
+                  setManualGuestPhone(formatPhone(event.target.value));
+                  clearFieldError("manualGuestPhone");
+                }}
+                placeholder="(555) 555-5555"
+              />
+              {errors.manualGuestPhone ? (
+                <p className="create-wizard-error">{errors.manualGuestPhone}</p>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="create-wizard-inline-actions">
+            <button type="button" className="primary-button" onClick={addManualGuest}>
+              Add guest
+            </button>
+          </div>
+
+          <div className="create-wizard-guest-list">
+            {guests.length === 0 ? (
+              <p className="meta-muted">No guests invited yet.</p>
+            ) : (
+              guests.map((guest) => (
+                <div className="create-wizard-guest-row" key={guest.id}>
+                  <div>
+                    <p className="create-wizard-guest-name">{guest.name}</p>
+                    <p className="create-wizard-guest-phone">{guest.phone}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => removeGuest(guest.id)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="create-wizard-card">
+          <div className="create-wizard-card-header">
+            <h2>Step 4: Quiz</h2>
+          </div>
+          <p className="meta-muted">
+            Open tailgates do not support manual guest invites.
+          </p>
+        </div>
+      )}
+
       <div className="create-wizard-card">
         <div className="create-wizard-card-header">
-          <h2>Step 4: Invite Friends</h2>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => setContactModalOpen(true)}
-          >
-            Add Guests
-          </button>
+          <h2>Timeline</h2>
         </div>
-
+        <p className="section-subtitle">
+          Build a run-of-show for attendees. You can publish it later from event details.
+        </p>
         <div className="create-wizard-inline-grid">
           <div>
-            <label className="input-label" htmlFor="manual-guest-name">Guest Name</label>
+            <label className="input-label" htmlFor="timeline-title">Step Title</label>
             <input
-              id="manual-guest-name"
+              id="timeline-title"
               className="text-input create-wizard-input"
-              value={manualGuestName}
+              value={timelineTitle}
               onChange={(event) => {
-                setManualGuestName(event.target.value);
-                clearFieldError("manualGuestName");
+                setTimelineTitle(event.target.value);
+                clearFieldError("timelineTitle");
               }}
-              placeholder="Guest name"
+              placeholder="Grill setup"
             />
-            {errors.manualGuestName ? (
-              <p className="create-wizard-error">{errors.manualGuestName}</p>
+            {errors.timelineTitle ? (
+              <p className="create-wizard-error">{errors.timelineTitle}</p>
             ) : null}
           </div>
           <div>
-            <label className="input-label" htmlFor="manual-guest-phone">Guest Phone</label>
+            <label className="input-label" htmlFor="timeline-start-time">Start Time</label>
             <input
-              id="manual-guest-phone"
+              id="timeline-start-time"
               className="text-input create-wizard-input"
-              value={manualGuestPhone}
+              type="time"
+              value={timelineStartTime}
               onChange={(event) => {
-                setManualGuestPhone(formatPhone(event.target.value));
-                clearFieldError("manualGuestPhone");
+                setTimelineStartTime(event.target.value);
+                clearFieldError("timelineStartTime");
               }}
-              placeholder="(555) 555-5555"
             />
-            {errors.manualGuestPhone ? (
-              <p className="create-wizard-error">{errors.manualGuestPhone}</p>
+            {errors.timelineStartTime ? (
+              <p className="create-wizard-error">{errors.timelineStartTime}</p>
             ) : null}
           </div>
         </div>
-
-        <div className="create-wizard-inline-actions">
-          <button type="button" className="primary-button" onClick={addManualGuest}>
-            Add guest
-          </button>
+        <label className="input-label" htmlFor="timeline-description">Description (optional)</label>
+        <textarea
+          id="timeline-description"
+          className="text-input create-wizard-input create-wizard-textarea"
+          value={timelineDescription}
+          onChange={(event) => setTimelineDescription(event.target.value)}
+          placeholder="Get coolers, chairs, and food stations ready."
+        />
+        <p className="input-label create-wizard-choice-label">Duration</p>
+        <div className="create-wizard-timeline-duration-row">
+          <div>
+            <input
+              className="text-input create-wizard-input"
+              value={timelineDurationHours}
+              onChange={(event) =>
+                setTimelineDurationHours(event.target.value.replace(/\D/g, ""))
+              }
+              placeholder="0"
+            />
+            <small>Hours</small>
+          </div>
+          <div>
+            <input
+              className="text-input create-wizard-input"
+              value={timelineDurationMinutes}
+              onChange={(event) =>
+                setTimelineDurationMinutes(event.target.value.replace(/\D/g, ""))
+              }
+              placeholder="30"
+            />
+            <small>Minutes</small>
+          </div>
+          <div>
+            <input
+              className="text-input create-wizard-input"
+              value={timelineDurationSeconds}
+              onChange={(event) =>
+                setTimelineDurationSeconds(event.target.value.replace(/\D/g, ""))
+              }
+              placeholder="0"
+            />
+            <small>Seconds</small>
+          </div>
         </div>
-
-        <div className="create-wizard-guest-list">
-          {guests.length === 0 ? (
-            <p className="meta-muted">No guests invited yet.</p>
+        <div className="create-wizard-inline-actions create-wizard-timeline-actions">
+          <button
+            type="button"
+            className="primary-button"
+            onClick={handleSaveTimelineStep}
+          >
+            {editingTimelineId ? "Update step" : "Add step"}
+          </button>
+          {editingTimelineId ? (
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={resetTimelineForm}
+            >
+              Cancel edit
+            </button>
+          ) : null}
+        </div>
+        <div className="create-wizard-timeline-list">
+          {timelineSteps.length === 0 ? (
+            <p className="meta-muted">No timeline steps yet.</p>
           ) : (
-            guests.map((guest) => (
-              <div className="create-wizard-guest-row" key={guest.id}>
-                <div>
-                  <p className="create-wizard-guest-name">{guest.name}</p>
-                  <p className="create-wizard-guest-phone">{guest.phone}</p>
+            timelineSteps.map((step) => {
+              const baseDate = toStartDateTime(eventDate, eventTime);
+              const window = baseDate
+                ? buildTimelineWindow(
+                    baseDate,
+                    step.startTime,
+                    step.durationHours,
+                    step.durationMinutes,
+                    step.durationSeconds
+                  )
+                : null;
+              const timeUntilKickoff =
+                baseDate && window
+                  ? formatDurationCountdown(baseDate.getTime() - window.end.getTime())
+                  : "--:--:--";
+              return (
+                <div className="create-wizard-timeline-row" key={step.id}>
+                  <div>
+                    <p className="create-wizard-guest-name">{step.title}</p>
+                    {step.description ? (
+                      <p className="create-wizard-timeline-description">{step.description}</p>
+                    ) : null}
+                    <p className="create-wizard-guest-phone">
+                      {window
+                        ? `${window.start.toLocaleTimeString([], {
+                            hour: "numeric",
+                            minute: "2-digit"
+                          })} - ${window.end.toLocaleTimeString([], {
+                            hour: "numeric",
+                            minute: "2-digit"
+                          })}`
+                        : step.startTime}
+                    </p>
+                    <p className="create-wizard-timeline-countdown">
+                      Time until kickoff: {timeUntilKickoff}
+                    </p>
+                  </div>
+                  <div className="create-wizard-timeline-row-actions">
+                    <button
+                      type="button"
+                      className="link-button"
+                      onClick={() => editTimelineStep(step)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="link-button"
+                      onClick={() => removeTimelineStep(step.id)}
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  className="link-button"
-                  onClick={() => removeGuest(guest.id)}
-                >
-                  Remove
-                </button>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>
@@ -1012,10 +1488,12 @@ export default function CreateTailgateWizard() {
               <dt>Tickets</dt>
               <dd>{ticketSummary}</dd>
             </div>
-            <div>
-              <dt>Invited Guests</dt>
-              <dd>{guests.length}</dd>
-            </div>
+            {guestInvitesEnabled ? (
+              <div>
+                <dt>Invited Guests</dt>
+                <dd>{guests.length}</dd>
+              </div>
+            ) : null}
             <div>
               <dt>Expectations</dt>
               <dd>
@@ -1025,6 +1503,10 @@ export default function CreateTailgateWizard() {
             <div>
               <dt>Quiz</dt>
               <dd>{quizQuestion.text.trim() ? "Enabled" : "Not added"}</dd>
+            </div>
+            <div>
+              <dt>Timeline Steps</dt>
+              <dd>{timelineSteps.length}</dd>
             </div>
           </dl>
         </div>
@@ -1058,7 +1540,7 @@ export default function CreateTailgateWizard() {
     >
       <section className="create-wizard-page">
         <div className="create-wizard-progress-header">
-          <p>{wizardSteps[stepIndex].subtitle}</p>
+          <p>{stepSubtitle}</p>
           <span>{progressLabel}</span>
         </div>
         <div className="create-wizard-progress-bars" role="progressbar" aria-valuemin={1} aria-valuemax={wizardSteps.length} aria-valuenow={stepIndex + 1}>
@@ -1097,7 +1579,9 @@ export default function CreateTailgateWizard() {
                 : stepIndex === 1
                 ? "Next: Event Location"
                 : stepIndex === 2
-                ? "Next: Invite Friends"
+                ? guestInvitesEnabled
+                  ? "Next: Invite Friends"
+                  : "Next: Quiz"
                 : "Next: Review and Create"}
             </button>
           ) : (
@@ -1113,7 +1597,7 @@ export default function CreateTailgateWizard() {
         </div>
       </section>
 
-      {contactModalOpen ? (
+      {contactModalOpen && guestInvitesEnabled ? (
         <div className="create-wizard-modal-overlay" role="dialog" aria-modal="true">
           <div className="create-wizard-modal">
             <div className="create-wizard-modal-header">

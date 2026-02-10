@@ -11,6 +11,7 @@ import TailgateEdit from "./pages/TailgateEdit";
 import TailgateCheckin from "./pages/TailgateCheckin";
 import CheckinHub from "./pages/CheckinHub";
 import Messages from "./pages/Messages";
+import DiscoverTailgates from "./pages/DiscoverTailgates";
 import { useAuth } from "./hooks/useAuth";
 import { debugAuthLog } from "./utils/debug";
 
@@ -92,6 +93,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Messages />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/discover"
+          element={
+            <ProtectedRoute>
+              <DiscoverTailgates />
             </ProtectedRoute>
           }
         />

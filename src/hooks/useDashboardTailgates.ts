@@ -1,9 +1,15 @@
 import { useEffect, useState } from "react";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { TailgateEvent } from "../types";
 import { mockTailgates } from "../data/mockTailgates";
 import { debugAuthLog } from "../utils/debug";
+
+export type DashboardRelationship = "hosting" | "attending";
+
+export type DashboardTailgate = TailgateEvent & {
+  relationship: DashboardRelationship;
+};
 
 function coerceNumber(value: unknown) {
   if (typeof value === "number" && !Number.isNaN(value)) return value;
@@ -21,6 +27,13 @@ function firstString(...values: unknown[]) {
     }
   }
   return undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
 }
 
 function normalizeDate(value: unknown) {
@@ -162,24 +175,70 @@ function normalizeTailgate(id: string, data: Record<string, unknown>): TailgateE
   };
 }
 
-function mergeAndSortTailgates(groups: TailgateEvent[][]) {
-  const map = new Map<string, TailgateEvent>();
-  groups.flat().forEach((tailgate) => {
-    map.set(tailgate.id, tailgate);
-  });
+function resolveRelationship(
+  data: Record<string, unknown>,
+  userId: string
+): DashboardRelationship | null {
+  const hostMatches = [
+    firstString(data.hostUserId),
+    firstString(data.hostId),
+    firstString(data.ownerId),
+    firstString(data.createdByUid)
+  ].some((value) => value === userId);
+  if (hostMatches) return "hosting";
 
-  return Array.from(map.values()).sort(
-    (a, b) => b.startDateTime.getTime() - a.startDateTime.getTime()
+  if (Array.isArray(data.coHostIds) && data.coHostIds.some((value) => value === userId)) {
+    return "hosting";
+  }
+
+  const attendees = Array.isArray(data.attendees) ? data.attendees : [];
+  const attendingMatch = attendees.some((attendee) => {
+    const record = asRecord(attendee);
+    if (!record) return false;
+    const attendeeUid = firstString(record.userId, record.uid, record.id);
+    if (attendeeUid !== userId) return false;
+    const status = firstString(record.status)?.toLowerCase() ?? "";
+    return (
+      status === "attending" ||
+      status === "going" ||
+      status === "host" ||
+      status === "hosted" ||
+      status === "confirmed" ||
+      status === "checked_in"
+    );
+  });
+  if (attendingMatch) return "attending";
+
+  const fallbackAttendingFields = [
+    data.attendeeIds,
+    data.attendeeUserIds,
+    data.attendeesUserIds,
+    data.goingUserIds,
+    data.rsvpUserIds
+  ];
+  const fallbackMatch = fallbackAttendingFields.some(
+    (value) => Array.isArray(value) && value.some((entry) => entry === userId)
   );
+  if (fallbackMatch) return "attending";
+
+  return null;
 }
 
-export function useHostTailgates(hostUserId?: string) {
-  const [tailgates, setTailgates] = useState<TailgateEvent[]>([]);
+function sortTailgates(items: DashboardTailgate[]) {
+  return [...items].sort((a, b) => b.startDateTime.getTime() - a.startDateTime.getTime());
+}
+
+function sortByDateAsc(items: DashboardTailgate[]) {
+  return [...items].sort((a, b) => a.startDateTime.getTime() - b.startDateTime.getTime());
+}
+
+export function useDashboardTailgates(userId?: string) {
+  const [tailgates, setTailgates] = useState<DashboardTailgate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!hostUserId) {
+    if (!userId) {
       setTailgates([]);
       setLoading(false);
       setError(null);
@@ -188,7 +247,11 @@ export function useHostTailgates(hostUserId?: string) {
 
     if (!db) {
       if (import.meta.env.DEV) {
-        setTailgates(mockTailgates.filter((tailgate) => tailgate.hostUserId === hostUserId));
+        setTailgates(
+          mockTailgates
+            .filter((tailgate) => tailgate.hostUserId === userId)
+            .map((tailgate) => ({ ...tailgate, relationship: "hosting" as const }))
+        );
       }
       setLoading(false);
       setError(null);
@@ -198,92 +261,71 @@ export function useHostTailgates(hostUserId?: string) {
     setLoading(true);
     setError(null);
 
-    const rawConfigs: Array<{ key: string; field: string; value?: string | null }> = [
-      { key: "hostUserId", field: "hostUserId", value: hostUserId },
-      { key: "hostId", field: "hostId", value: hostUserId },
-      { key: "ownerId", field: "ownerId", value: hostUserId },
-      { key: "createdByUid", field: "createdByUid", value: hostUserId }
-    ];
+    const unsubscribe = onSnapshot(
+      collection(db, "tailgateEvents"),
+      (snapshot) => {
+        const nextTailgates: DashboardTailgate[] = snapshot.docs
+          .map((snapshotDoc) => {
+            const data = snapshotDoc.data() as Record<string, unknown>;
+            const relationship = resolveRelationship(data, userId);
+            if (!relationship) return null;
 
-    const seen = new Set<string>();
-    const queryConfigs = rawConfigs.filter((config) => {
-      if (!config.value) return false;
-      const dedupeKey = `${config.field}:${config.value}`;
-      if (seen.has(dedupeKey)) return false;
-      seen.add(dedupeKey);
-      return true;
-    }) as Array<{ key: string; field: string; value: string }>;
+            return {
+              ...normalizeTailgate(snapshotDoc.id, data),
+              relationship
+            } as DashboardTailgate;
+          })
+          .filter((event): event is DashboardTailgate => Boolean(event));
 
-    const groups = new Map<string, TailgateEvent[]>();
-    const unsubscribers = queryConfigs.map((config) => {
-      const tailgateQuery = query(collection(db, "tailgateEvents"), where(config.field, "==", config.value));
+        const sorted = sortTailgates(nextTailgates);
+        setTailgates(sorted);
+        setLoading(false);
+        setError(null);
+        debugAuthLog("dashboard:tailgates-loaded", {
+          uid: userId,
+          total: sorted.length,
+          hosting: sorted.filter((event) => event.relationship === "hosting").length,
+          attending: sorted.filter((event) => event.relationship === "attending").length
+        });
+      },
+      (snapshotError) => {
+        console.error("Failed to load dashboard tailgates", snapshotError);
+        setError(
+          snapshotError instanceof Error
+            ? snapshotError.message
+            : "Failed to load tailgates."
+        );
+        setLoading(false);
+      }
+    );
 
-      return onSnapshot(
-        tailgateQuery,
-        (snapshot) => {
-          const next = snapshot.docs.map((doc) => normalizeTailgate(doc.id, doc.data()));
-          const sample = snapshot.docs[0];
-          if (sample) {
-            const raw = sample.data() as Record<string, unknown>;
-            debugAuthLog("tailgates:sample", {
-              field: config.field,
-              docId: sample.id,
-              keys: Object.keys(raw).slice(0, 20),
-              eventName: raw.eventName ?? raw.name ?? null,
-              startHints: {
-                startDateTime: raw.startDateTime ?? null,
-                startAt: raw.startAt ?? null,
-                eventDateTime: raw.eventDateTime ?? null,
-                eventDate: raw.eventDate ?? null,
-                createdAt: raw.createdAt ?? null
-              }
-            });
-          }
-          groups.set(config.key, next);
-          const merged = mergeAndSortTailgates(Array.from(groups.values())).filter(
-            (tailgate) => tailgate.hostUserId === hostUserId
-          );
-          setTailgates(merged);
-          setLoading(false);
-          setError(null);
-          debugAuthLog("tailgates:loaded", {
-            field: config.field,
-            count: snapshot.size,
-            total: merged.length
-          });
-        },
-        (err) => {
-          console.error("Failed to load tailgates", err);
-          setError(err instanceof Error ? err.message : "Failed to load tailgates.");
-          setLoading(false);
-          debugAuthLog("tailgates:error", { field: config.field, message: String(err) });
-        }
-      );
-    });
-
-    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, [hostUserId]);
+    return () => unsubscribe();
+  }, [userId]);
 
   const now = new Date();
-  const upcomingTailgates = tailgates.filter((tailgate) => tailgate.startDateTime >= now);
-  const pastTailgates = tailgates.filter((tailgate) => tailgate.startDateTime < now);
-
-  const totalTicketsSold = tailgates.reduce(
-    (sum, tailgate) => sum + (tailgate.ticketsSold ?? 0),
-    0
+  const upcomingTailgates = sortByDateAsc(
+    tailgates.filter((tailgate) => tailgate.startDateTime >= now)
   );
+  const pastTailgates = sortTailgates(
+    tailgates.filter((tailgate) => tailgate.startDateTime < now)
+  );
+  const hostingCount = tailgates.filter((tailgate) => tailgate.relationship === "hosting").length;
+  const attendingCount = tailgates.filter(
+    (tailgate) => tailgate.relationship === "attending"
+  ).length;
 
   return {
     tailgates,
     upcomingTailgates,
     pastTailgates,
-    totalTicketsSold,
     loading,
     error,
     counts: {
       upcoming: upcomingTailgates.length,
       past: pastTailgates.length,
-      total: tailgates.length
+      total: tailgates.length,
+      hosting: hostingCount,
+      attending: attendingCount
     }
   };
 }
