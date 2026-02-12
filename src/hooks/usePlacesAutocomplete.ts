@@ -6,12 +6,18 @@ export type PlaceSuggestion = {
   description: string;
   primaryText: string;
   secondaryText?: string;
+  reference?: string;
+  types?: string[];
+  terms?: Array<{ value: string; offset?: number }>;
 };
 
 export type ResolvedPlace = {
   lat: number;
   lng: number;
   label: string;
+  formattedAddress?: string;
+  name?: string;
+  addressComponents?: Array<Record<string, unknown>>;
 };
 
 type UsePlacesAutocompleteOptions = {
@@ -132,12 +138,36 @@ export function usePlacesAutocomplete({
                   typeof prediction?.structured_formatting?.secondary_text === "string"
                     ? prediction.structured_formatting.secondary_text
                     : undefined;
+                const reference =
+                  typeof prediction?.reference === "string" ? prediction.reference : undefined;
+                const types = Array.isArray(prediction?.types)
+                  ? prediction.types.filter(
+                      (type: unknown): type is string => typeof type === "string"
+                    )
+                  : undefined;
+                const terms = Array.isArray(prediction?.terms)
+                  ? prediction.terms
+                      .map((term: unknown) => {
+                        if (typeof term !== "object" || term === null) return null;
+                        const candidate = term as { value?: unknown; offset?: unknown };
+                        if (typeof candidate.value !== "string") return null;
+                        const offset =
+                          typeof candidate.offset === "number" ? candidate.offset : undefined;
+                        return { value: candidate.value, offset };
+                      })
+                      .filter(
+                        (term): term is { value: string; offset?: number } => Boolean(term)
+                      )
+                  : undefined;
 
                 return {
                   placeId,
                   description,
                   primaryText,
-                  secondaryText
+                  secondaryText,
+                  reference,
+                  types,
+                  terms
                 } as PlaceSuggestion;
               })
               .filter((prediction): prediction is PlaceSuggestion => Boolean(prediction))
@@ -160,7 +190,7 @@ export function usePlacesAutocomplete({
       placesServiceRef.current.getDetails(
         {
           placeId: suggestion.placeId,
-          fields: ["geometry", "formatted_address", "name"]
+          fields: ["geometry", "formatted_address", "name", "address_components"]
         },
         (result: any, status: string) => {
           const okStatus = mapsRef.current?.places?.PlacesServiceStatus?.OK;
@@ -176,18 +206,27 @@ export function usePlacesAutocomplete({
             return;
           }
 
-          const label =
-            (typeof result?.formatted_address === "string" &&
+          const formattedAddress =
+            typeof result?.formatted_address === "string" &&
             result.formatted_address.trim().length > 0
-              ? result.formatted_address
-              : typeof result?.name === "string"
-              ? result.name
-              : suggestion.description) ?? suggestion.description;
+              ? result.formatted_address.trim()
+              : undefined;
+          const name =
+            typeof result?.name === "string" && result.name.trim().length > 0
+              ? result.name.trim()
+              : undefined;
+          const addressComponents = Array.isArray(result?.address_components)
+            ? (result.address_components as Array<Record<string, unknown>>)
+            : undefined;
+          const label = formattedAddress ?? name ?? suggestion.description;
 
           resolve({
             lat: latValue,
             lng: lngValue,
-            label
+            label,
+            formattedAddress,
+            name,
+            addressComponents
           });
         }
       );

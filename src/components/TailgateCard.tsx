@@ -60,7 +60,7 @@ export default function TailgateCard({
             </button>
           )}
           <button
-            className="icon-button"
+            className="icon-button icon-button-soft"
             aria-label="Open in app"
             onClick={(e) => {
               e.stopPropagation();
@@ -120,7 +120,7 @@ export default function TailgateCard({
 
       <div className="tailgate-card-footer">
         <button
-          className="link-button"
+          className="link-button card-link-button"
           onClick={(e) => {
             e.stopPropagation();
             navigate(`/tailgates/${event.id}`);
@@ -130,7 +130,7 @@ export default function TailgateCard({
         </button>
         {showCheckIn ? (
           <button
-            className="link-button"
+            className="link-button card-link-button"
             onClick={(e) => {
               e.stopPropagation();
               navigate(`/tailgates/${event.id}/checkin`);
@@ -140,7 +140,7 @@ export default function TailgateCard({
           </button>
         ) : null}
         <button
-          className="link-button"
+          className="link-button card-link-button"
           onClick={(e) => {
             e.stopPropagation();
             const shareUrl = `${window.location.origin}/#/tailgates/${event.id}`;

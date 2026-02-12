@@ -8,6 +8,7 @@ export type TailgateEvent = {
   name: string;
   visibilityType: VisibilityType;
   startDateTime: Date;
+  coverImageUrl?: string;
   locationSummary?: string;
   capacity?: number;
   ticketPriceCents?: number;

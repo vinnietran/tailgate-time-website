@@ -38,6 +38,8 @@ export default function HostDashboard() {
 
   return (
     <AppShell header={<TopBar firstName={firstName} />}>
+      <QuickActionsBar />
+
       <section className="tailgates-section">
         <div className="section-header">
           <div>
@@ -47,19 +49,31 @@ export default function HostDashboard() {
             </p>
           </div>
           <div className="section-controls">
-            <select
-              className="filter-select"
-              value={filter}
-              onChange={(event) => setFilter(event.target.value as "upcoming" | "past")}
-            >
-              <option value="upcoming">Upcoming</option>
-              <option value="past">Past</option>
-            </select>
+            <div className="filter-tabs" role="tablist" aria-label="Tailgate timeframe">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={filter === "upcoming"}
+                className={`filter-tab ${filter === "upcoming" ? "active" : ""}`}
+                onClick={() => setFilter("upcoming")}
+              >
+                Upcoming
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={filter === "past"}
+                className={`filter-tab ${filter === "past" ? "active" : ""}`}
+                onClick={() => setFilter("past")}
+              >
+                Past
+              </button>
+            </div>
             <div className="section-stats">
-              <span>{counts.upcoming} Upcoming</span>
-              <span>{counts.past} Past</span>
-              <span>{counts.hosting} Hosting</span>
-              <span>{counts.attending} Attending</span>
+              <span className="stat-pill">{counts.upcoming} Upcoming</span>
+              <span className="stat-pill">{counts.past} Past</span>
+              <span className="stat-pill">{counts.hosting} Hosting</span>
+              <span className="stat-pill">{counts.attending} Attending</span>
             </div>
           </div>
         </div>
@@ -93,8 +107,6 @@ export default function HostDashboard() {
           </div>
         )}
       </section>
-
-      <QuickActionsBar />
     </AppShell>
   );
 }

@@ -1,6 +1,6 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
-import { IconBell } from "./Icons";
+import { IconBell, IconSpark, IconUser } from "./Icons";
 
 export default function TopBar({ firstName }: { firstName: string }) {
   const navigate = useNavigate();
@@ -13,14 +13,24 @@ export default function TopBar({ firstName }: { firstName: string }) {
         <p className="subtext">Here's your TailgateTime dashboard.</p>
       </div>
       <div className="top-bar-actions">
-        <button className="icon-button" aria-label="Notifications">
-          <IconBell />
-        </button>
+        <div className="action-cluster">
+          <button className="icon-button" aria-label="Notifications">
+            <IconBell />
+          </button>
+          <button
+            className="icon-button"
+            aria-label="Account"
+            onClick={() => navigate("/account")}
+          >
+            <IconUser />
+          </button>
+        </div>
         <button
           className="primary-button"
           onClick={() => navigate("/tailgates/new")}
         >
-          + Create Tailgate
+          <IconSpark size={16} />
+          <span>Create Tailgate</span>
         </button>
       </div>
     </div>

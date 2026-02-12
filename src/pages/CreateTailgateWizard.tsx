@@ -21,14 +21,27 @@ type Guest = {
   phone: string;
 };
 
-type Expectations = {
-  foodProvided: boolean;
-  alcoholProvided: boolean;
-  byobWelcome: boolean;
-  familyFriendly: boolean;
-  musicLoud: boolean;
-  grillAvailable: boolean;
-};
+type ExpectationKey =
+  | "musicLiveDj"
+  | "musicGameDayPlaylist"
+  | "musicBandSet"
+  | "musicCountryHits"
+  | "musicHipHopHits"
+  | "musicNoPreference"
+  | "drinkByob"
+  | "drinkWaterSoda"
+  | "drinkBeerSelection"
+  | "drinkCraftCocktails"
+  | "drinkPremiumSpirits"
+  | "drinkDryFriendly"
+  | "amenityLawnGames"
+  | "amenityTvWall"
+  | "amenityShadedSetup"
+  | "amenityPowerAccess"
+  | "amenityFamilyZone"
+  | "amenityClimateControl";
+
+type Expectations = Record<ExpectationKey, boolean>;
 
 type QuizQuestion = {
   text: string;
@@ -51,6 +64,30 @@ type LatLng = {
   lng: number;
 };
 
+type LocationTerm = {
+  value: string;
+  offset?: number;
+};
+
+type LocationRecord = {
+  description?: string;
+  formatted?: string;
+  formattedAddress?: string;
+  address?: string;
+  text?: string;
+  shortAddress?: string;
+  name?: string;
+  mainText?: string;
+  secondaryText?: string;
+  placeId?: string;
+  reference?: string;
+  types?: string[];
+  terms?: LocationTerm[];
+  lat?: number;
+  lng?: number;
+  addressComponents?: Array<Record<string, unknown>>;
+};
+
 type StripeConnectStatus = "not_started" | "pending" | "complete" | "restricted";
 
 const wizardSteps: WizardStep[] = [
@@ -71,25 +108,74 @@ const visibilityOptions: Array<{
   { key: "open_paid", label: "Open (Paid)", description: "Discoverable with paid tickets." }
 ];
 
-const expectationOptions: Array<{
-  key: keyof Expectations;
-  label: string;
+const expectationGroups: Array<{
+  key: string;
+  title: string;
+  description: string;
+  options: Array<{ key: ExpectationKey; label: string }>;
 }> = [
-  { key: "foodProvided", label: "Food provided" },
-  { key: "alcoholProvided", label: "Alcohol provided" },
-  { key: "byobWelcome", label: "BYOB welcome" },
-  { key: "familyFriendly", label: "Family-friendly" },
-  { key: "musicLoud", label: "Loud music / party vibe" },
-  { key: "grillAvailable", label: "Grill available" }
+  {
+    key: "music",
+    title: "Sound",
+    description: "Set the game-day soundtrack guests can expect.",
+    options: [
+      { key: "musicLiveDj", label: "Live DJ booth" },
+      { key: "musicGameDayPlaylist", label: "Curated game-day playlist" },
+      { key: "musicBandSet", label: "Live band set" },
+      { key: "musicCountryHits", label: "Country hits" },
+      { key: "musicHipHopHits", label: "Hip-hop / throwbacks" },
+      { key: "musicNoPreference", label: "Low-key audio vibe" }
+    ]
+  },
+  {
+    key: "drinks",
+    title: "Drinks",
+    description: "Tell guests what the bar setup looks like.",
+    options: [
+      { key: "drinkByob", label: "Bring-your-own welcome" },
+      { key: "drinkWaterSoda", label: "Water + soft drinks stocked" },
+      { key: "drinkBeerSelection", label: "Beer lineup ready" },
+      { key: "drinkCraftCocktails", label: "Mixed cocktails available" },
+      { key: "drinkPremiumSpirits", label: "Premium spirits" },
+      { key: "drinkDryFriendly", label: "Dry / non-alcohol focus" }
+    ]
+  },
+  {
+    key: "amenities",
+    title: "Setup",
+    description: "Highlight comfort extras and host equipment.",
+    options: [
+      { key: "amenityLawnGames", label: "Lawn games" },
+      { key: "amenityTvWall", label: "TV / game screen" },
+      { key: "amenityShadedSetup", label: "Shade tents / canopy" },
+      { key: "amenityPowerAccess", label: "Power + charging access" },
+      { key: "amenityFamilyZone", label: "Family-friendly zone" },
+      { key: "amenityClimateControl", label: "Fans / heaters on-site" }
+    ]
+  }
 ];
 
+const expectationOptions = expectationGroups.flatMap((group) => group.options);
+
 const expectationsDefaults: Expectations = {
-  foodProvided: false,
-  alcoholProvided: false,
-  byobWelcome: false,
-  familyFriendly: false,
-  musicLoud: false,
-  grillAvailable: false
+  musicLiveDj: false,
+  musicGameDayPlaylist: false,
+  musicBandSet: false,
+  musicCountryHits: false,
+  musicHipHopHits: false,
+  musicNoPreference: false,
+  drinkByob: false,
+  drinkWaterSoda: false,
+  drinkBeerSelection: false,
+  drinkCraftCocktails: false,
+  drinkPremiumSpirits: false,
+  drinkDryFriendly: false,
+  amenityLawnGames: false,
+  amenityTvWall: false,
+  amenityShadedSetup: false,
+  amenityPowerAccess: false,
+  amenityFamilyZone: false,
+  amenityClimateControl: false
 };
 
 const seededContacts: Guest[] = [
@@ -101,7 +187,7 @@ const seededContacts: Guest[] = [
   { id: "c-kate", name: "Kate Bell", phone: "(555) 564-8583" }
 ];
 
-const minTicketPriceCents = 500;
+const minTicketPriceCents = 2000;
 const CONNECT_RETURN_URL =
   import.meta.env.VITE_CONNECT_RETURN_URL ?? "https://tailgate-time.com/connect-return";
 const CONNECT_REFRESH_URL =
@@ -214,6 +300,121 @@ function toStartDateTime(eventDate: string, eventTime: string) {
   return combined;
 }
 
+function toEndDateTime(eventDate: string, eventTime: string, eventEndTime: string) {
+  const start = toStartDateTime(eventDate, eventTime);
+  if (!start) return null;
+
+  const [hoursRaw, minutesRaw] = eventEndTime.split(":");
+  const hours = Number(hoursRaw);
+  const minutes = Number(minutesRaw);
+  if (![hours, minutes].every((value) => Number.isFinite(value))) {
+    return null;
+  }
+
+  const end = new Date(
+    start.getFullYear(),
+    start.getMonth(),
+    start.getDate(),
+    hours,
+    minutes,
+    0,
+    0
+  );
+  if (Number.isNaN(end.getTime())) return null;
+
+  if (end <= start) {
+    end.setDate(end.getDate() + 1);
+  }
+
+  return end;
+}
+
+function resolveLocationLabel(raw: unknown): string {
+  if (!raw) return "";
+  if (typeof raw === "string") {
+    return raw.trim();
+  }
+  if (typeof raw === "object") {
+    const record = raw as LocationRecord;
+    const candidates = [
+      record.formatted,
+      record.formattedAddress,
+      record.description,
+      record.address,
+      record.text,
+      record.name,
+      record.shortAddress
+    ];
+    const match = candidates.find(
+      (value) => typeof value === "string" && value.trim().length > 0
+    );
+    if (match) return match.trim();
+    if (typeof record.lat === "number" && typeof record.lng === "number") {
+      return `${record.lat}, ${record.lng}`;
+    }
+  }
+  return "";
+}
+
+function buildLocationPayload(
+  record: LocationRecord | null,
+  fallbackLabel: string,
+  coords: LatLng | null
+): LocationRecord | string {
+  const trimmedFallback = fallbackLabel.trim();
+  if (!record) {
+    return trimmedFallback;
+  }
+
+  const baseLabel =
+    record.description ??
+    record.formatted ??
+    record.formattedAddress ??
+    record.name ??
+    record.text ??
+    trimmedFallback;
+
+  const payload: LocationRecord = {
+    description: record.description ?? baseLabel,
+    formatted: record.formatted ?? record.formattedAddress ?? baseLabel,
+    formattedAddress: record.formattedAddress ?? record.formatted ?? baseLabel,
+    address: record.address ?? record.formattedAddress ?? baseLabel,
+    text: record.text ?? baseLabel,
+    shortAddress: record.shortAddress ?? record.secondaryText,
+    name: record.name ?? record.mainText ?? baseLabel,
+    mainText: record.mainText,
+    secondaryText: record.secondaryText,
+    placeId: record.placeId,
+    reference: record.reference,
+    types: record.types,
+    terms: record.terms,
+    addressComponents: record.addressComponents
+  };
+
+  const resolvedLat = coords?.lat ?? record.lat;
+  const resolvedLng = coords?.lng ?? record.lng;
+  if (typeof resolvedLat === "number") {
+    payload.lat = resolvedLat;
+  }
+  if (typeof resolvedLng === "number") {
+    payload.lng = resolvedLng;
+  }
+
+  (Object.keys(payload) as Array<keyof LocationRecord>).forEach((key) => {
+    const value = payload[key];
+    if (
+      value === undefined ||
+      value === null ||
+      (typeof value === "string" && value.trim().length === 0) ||
+      (Array.isArray(value) && value.length === 0)
+    ) {
+      delete payload[key];
+    }
+  });
+
+  return payload;
+}
+
 function buildMapEmbedUrl(
   coords: LatLng,
   mapsApiKey: string,
@@ -267,8 +468,10 @@ export default function CreateTailgateWizard() {
   const [eventDescription, setEventDescription] = useState("");
   const [eventDate, setEventDate] = useState("");
   const [eventTime, setEventTime] = useState("");
+  const [eventEndTime, setEventEndTime] = useState("");
 
   const [locationSummary, setLocationSummary] = useState("");
+  const [locationRecord, setLocationRecord] = useState<LocationRecord | null>(null);
   const [locationCoords, setLocationCoords] = useState<LatLng | null>(null);
   const [resolvingLocation, setResolvingLocation] = useState(false);
   const [locationInputFocused, setLocationInputFocused] = useState(false);
@@ -411,6 +614,15 @@ export default function CreateTailgateWizard() {
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
       const next = { lat, lng };
       setLocationCoords(next);
+      setLocationRecord((prev) =>
+        prev
+          ? {
+              ...prev,
+              lat: next.lat,
+              lng: next.lng
+            }
+          : prev
+      );
       clearLocationSuggestions();
       return next;
     } catch (error) {
@@ -422,11 +634,39 @@ export default function CreateTailgateWizard() {
   };
 
   const handleSelectLocationSuggestion = async (
-    place: { placeId: string; description: string }
+    place: {
+      placeId: string;
+      description: string;
+      primaryText: string;
+      secondaryText?: string;
+      reference?: string;
+      types?: string[];
+      terms?: Array<{ value: string; offset?: number }>;
+    }
   ) => {
     setResolvingLocation(true);
     try {
       const resolved = await resolveLocationSuggestion(place);
+      const locationPayload: LocationRecord = {
+        description: place.description,
+        formatted: resolved?.formattedAddress ?? place.description,
+        formattedAddress: resolved?.formattedAddress,
+        address: resolved?.formattedAddress ?? place.description,
+        text: place.description,
+        shortAddress: place.secondaryText,
+        name: resolved?.name ?? place.primaryText,
+        mainText: place.primaryText,
+        secondaryText: place.secondaryText,
+        placeId: place.placeId,
+        reference: place.reference,
+        types: place.types,
+        terms: place.terms,
+        addressComponents: resolved?.addressComponents,
+        lat: resolved?.lat,
+        lng: resolved?.lng
+      };
+      setLocationRecord(locationPayload);
+
       if (!resolved) {
         setLocationSummary(place.description);
         setLocationCoords(null);
@@ -514,7 +754,7 @@ export default function CreateTailgateWizard() {
       if (visibilityType === "open_paid") {
         const cents = parsePriceToCents(priceInput);
         if (!cents || cents < minTicketPriceCents) {
-          nextErrors.priceInput = "Minimum price is $5.00";
+          nextErrors.priceInput = "Minimum price is $20.00";
         }
         if (capacityInput.trim() && parseCapacity(capacityInput) === null) {
           nextErrors.capacityInput = "Capacity must be at least 1.";
@@ -526,7 +766,14 @@ export default function CreateTailgateWizard() {
       if (!eventName.trim()) nextErrors.eventName = "Event name is required.";
       if (!eventDate) nextErrors.eventDate = "Date is required.";
       if (!eventTime) nextErrors.eventTime = "Time is required.";
+      if (!eventEndTime) nextErrors.eventEndTime = "End time is required.";
       if (!eventDescription.trim()) nextErrors.eventDescription = "Description is required.";
+      if (eventDate && eventTime && eventEndTime) {
+        const endDateTime = toEndDateTime(eventDate, eventTime, eventEndTime);
+        if (!endDateTime) {
+          nextErrors.eventEndTime = "End time is invalid.";
+        }
+      }
     }
 
     if (index === 2) {
@@ -727,6 +974,11 @@ export default function CreateTailgateWizard() {
       setErrors((prev) => ({ ...prev, submit: "Date/time is invalid." }));
       return;
     }
+    const endDateTime = toEndDateTime(eventDate, eventTime, eventEndTime);
+    if (!endDateTime) {
+      setErrors((prev) => ({ ...prev, submit: "End time is invalid." }));
+      return;
+    }
 
     setSaving(true);
     clearFieldError("submit");
@@ -748,6 +1000,9 @@ export default function CreateTailgateWizard() {
 
     const priceCents = parsePriceToCents(priceInput);
     const capacity = parseCapacity(capacityInput);
+    const trimmedLocation = locationSummary.trim();
+    const locationPayload = buildLocationPayload(locationRecord, trimmedLocation, resolvedCoords);
+    const normalizedLocationSummary = resolveLocationLabel(locationPayload) || trimmedLocation;
     const quizUsed =
       quizQuestion.text.trim() &&
       quizQuestion.choices.every((choice) => choice.trim()) &&
@@ -761,15 +1016,11 @@ export default function CreateTailgateWizard() {
       hasEventFeed: true,
       allowGuestDetails,
       startDateTime,
+      endDateTime,
       dateTime: startDateTime,
-      locationSummary: locationSummary.trim(),
-      location: resolvedCoords
-        ? {
-            formattedAddress: locationSummary.trim(),
-            lat: resolvedCoords.lat,
-            lng: resolvedCoords.lng
-          }
-        : locationSummary.trim(),
+      eventEndTime,
+      locationSummary: normalizedLocationSummary,
+      location: locationPayload,
       locationCoords: resolvedCoords,
       expectations,
       attendees: guestInvitesEnabled
@@ -852,69 +1103,124 @@ export default function CreateTailgateWizard() {
   };
 
   const renderStepDetails = () => (
-    <section className="create-wizard-card">
-      <div className="create-wizard-card-header">
-        <h2>Step 2: Event Details</h2>
+    <section className="create-wizard-stack">
+      <div className="create-wizard-card">
+        <div className="create-wizard-card-header">
+          <h2>Step 2: Event Details</h2>
+        </div>
+
+        <label className="input-label" htmlFor="event-name">Tailgate Event Name</label>
+        <input
+          id="event-name"
+          className="text-input create-wizard-input"
+          value={eventName}
+          onChange={(event) => {
+            setEventName(event.target.value);
+            clearFieldError("eventName");
+          }}
+          placeholder="Football Tailgate Home Opener"
+        />
+        {errors.eventName ? <p className="create-wizard-error">{errors.eventName}</p> : null}
+
+        <div className="create-wizard-date-time">
+          <div>
+            <label className="input-label" htmlFor="event-date">Date</label>
+            <input
+              id="event-date"
+              className="text-input create-wizard-input"
+              type="date"
+              value={eventDate}
+              onChange={(event) => {
+                setEventDate(event.target.value);
+                clearFieldError("eventDate");
+              }}
+            />
+            {errors.eventDate ? <p className="create-wizard-error">{errors.eventDate}</p> : null}
+          </div>
+          <div>
+            <label className="input-label" htmlFor="event-time">Start Time</label>
+            <input
+              id="event-time"
+              className="text-input create-wizard-input"
+              type="time"
+              value={eventTime}
+              onChange={(event) => {
+                setEventTime(event.target.value);
+                clearFieldError("eventTime");
+              }}
+            />
+            {errors.eventTime ? <p className="create-wizard-error">{errors.eventTime}</p> : null}
+          </div>
+          <div>
+            <label className="input-label" htmlFor="event-end-time">End Time</label>
+            <input
+              id="event-end-time"
+              className="text-input create-wizard-input"
+              type="time"
+              value={eventEndTime}
+              onChange={(event) => {
+                setEventEndTime(event.target.value);
+                clearFieldError("eventEndTime");
+              }}
+            />
+            {errors.eventEndTime ? <p className="create-wizard-error">{errors.eventEndTime}</p> : null}
+          </div>
+        </div>
+
+        <label className="input-label" htmlFor="event-description">Description</label>
+        <textarea
+          id="event-description"
+          className="text-input create-wizard-input create-wizard-textarea"
+          value={eventDescription}
+          onChange={(event) => {
+            setEventDescription(event.target.value);
+            clearFieldError("eventDescription");
+          }}
+          placeholder="Come out to tailgate and get ready for our team to win the home opener!"
+        />
+        {errors.eventDescription ? (
+          <p className="create-wizard-error">{errors.eventDescription}</p>
+        ) : null}
       </div>
 
-      <label className="input-label" htmlFor="event-name">Tailgate Event Name</label>
-      <input
-        id="event-name"
-        className="text-input create-wizard-input"
-        value={eventName}
-        onChange={(event) => {
-          setEventName(event.target.value);
-          clearFieldError("eventName");
-        }}
-        placeholder="Football Tailgate Home Opener"
-      />
-      {errors.eventName ? <p className="create-wizard-error">{errors.eventName}</p> : null}
-
-      <div className="create-wizard-date-time">
-        <div>
-          <label className="input-label" htmlFor="event-date">Date</label>
-          <input
-            id="event-date"
-            className="text-input create-wizard-input"
-            type="date"
-            value={eventDate}
-            onChange={(event) => {
-              setEventDate(event.target.value);
-              clearFieldError("eventDate");
-            }}
-          />
-          {errors.eventDate ? <p className="create-wizard-error">{errors.eventDate}</p> : null}
+      <div className="create-wizard-card">
+        <div className="create-wizard-card-header">
+          <h2>Tailgate Details</h2>
         </div>
-        <div>
-          <label className="input-label" htmlFor="event-time">Time</label>
-          <input
-            id="event-time"
-            className="text-input create-wizard-input"
-            type="time"
-            value={eventTime}
-            onChange={(event) => {
-              setEventTime(event.target.value);
-              clearFieldError("eventTime");
-            }}
-          />
-          {errors.eventTime ? <p className="create-wizard-error">{errors.eventTime}</p> : null}
+        <p className="create-wizard-detail-copy">
+          Paint the full tailgate vibe. Choose all options that match what guests will see.
+        </p>
+        <div className="create-wizard-detail-groups">
+          {expectationGroups.map((group) => (
+            <div key={group.key} className="create-wizard-detail-group">
+              <div className="create-wizard-detail-group-header">
+                <h3>{group.title}</h3>
+                <p>{group.description}</p>
+              </div>
+              <div className="create-wizard-chip-grid">
+                {group.options.map((option) => {
+                  const active = expectations[option.key];
+                  return (
+                    <button
+                      type="button"
+                      key={option.key}
+                      className={`create-wizard-chip ${active ? "active" : ""}`}
+                      onClick={() =>
+                        setExpectations((prev) => ({
+                          ...prev,
+                          [option.key]: !prev[option.key]
+                        }))
+                      }
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
-
-      <label className="input-label" htmlFor="event-description">Description</label>
-      <textarea
-        id="event-description"
-        className="text-input create-wizard-input create-wizard-textarea"
-        value={eventDescription}
-        onChange={(event) => {
-          setEventDescription(event.target.value);
-          clearFieldError("eventDescription");
-        }}
-        placeholder="Come out to tailgate and get ready for our team to win the home opener!"
-      />
-      {errors.eventDescription ? (
-        <p className="create-wizard-error">{errors.eventDescription}</p>
-      ) : null}
     </section>
   );
 
@@ -933,6 +1239,7 @@ export default function CreateTailgateWizard() {
           placeholder="Cameron Stadium, Garland Street, Bangor, Maine, USA"
           onChange={(event) => {
             setLocationSummary(event.target.value);
+            setLocationRecord(null);
             setLocationCoords(null);
             clearFieldError("locationSummary");
             setLocationInputFocused(true);
@@ -1042,19 +1349,23 @@ export default function CreateTailgateWizard() {
           <div className="create-wizard-inline-grid">
             <div>
               <label className="input-label" htmlFor="ticket-price">Ticket Price (USD)</label>
-              <input
-                id="ticket-price"
-                className="text-input create-wizard-input"
-                value={priceInput}
-                onChange={(event) => {
-                  setPriceInput(event.target.value.replace(/[^0-9.]/g, ""));
-                  clearFieldError("priceInput");
-                }}
-                placeholder="15.00"
-              />
+              <div className="create-wizard-input-with-prefix">
+                <span className="create-wizard-input-prefix" aria-hidden="true">$</span>
+                <input
+                  id="ticket-price"
+                  className="text-input create-wizard-input"
+                  value={priceInput}
+                  onChange={(event) => {
+                    setPriceInput(event.target.value.replace(/[^0-9.]/g, ""));
+                    clearFieldError("priceInput");
+                  }}
+                  placeholder="20.00"
+                  inputMode="decimal"
+                />
+              </div>
               {errors.priceInput || pricingInvalid ? (
                 <p className="create-wizard-error">
-                  {errors.priceInput ?? "Minimum price is $5.00"}
+                  {errors.priceInput ?? "Minimum price is $20.00"}
                 </p>
               ) : null}
             </div>
@@ -1089,31 +1400,6 @@ export default function CreateTailgateWizard() {
         </label>
       </div>
 
-      <div className="create-wizard-card">
-        <div className="create-wizard-card-header">
-          <h2>Tailgate Details</h2>
-        </div>
-        <div className="create-wizard-chip-grid">
-          {expectationOptions.map((option) => {
-            const active = expectations[option.key];
-            return (
-              <button
-                type="button"
-                key={option.key}
-                className={`create-wizard-chip ${active ? "active" : ""}`}
-                onClick={() =>
-                  setExpectations((prev) => ({
-                    ...prev,
-                    [option.key]: !prev[option.key]
-                  }))
-                }
-              >
-                {option.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
     </section>
   );
 
@@ -1441,8 +1727,12 @@ export default function CreateTailgateWizard() {
 
   const renderStepReview = () => {
     const start = toStartDateTime(eventDate, eventTime);
+    const end = toEndDateTime(eventDate, eventTime, eventEndTime);
     const formattedStart = start
       ? start.toLocaleString([], { dateStyle: "short", timeStyle: "short" })
+      : "Not set";
+    const formattedEnd = end
+      ? end.toLocaleString([], { dateStyle: "short", timeStyle: "short" })
       : "Not set";
     const enabledExpectations = expectationOptions
       .filter((option) => expectations[option.key])
@@ -1473,8 +1763,12 @@ export default function CreateTailgateWizard() {
               <dd>{eventDescription || "Not set"}</dd>
             </div>
             <div>
-              <dt>Date & Time</dt>
+              <dt>Start</dt>
               <dd>{formattedStart}</dd>
+            </div>
+            <div>
+              <dt>End</dt>
+              <dd>{formattedEnd}</dd>
             </div>
             <div>
               <dt>Location</dt>
@@ -1534,22 +1828,24 @@ export default function CreateTailgateWizard() {
       header={
         <div className="create-wizard-shell-header">
           <h1>Create Tailgate Event</h1>
-          <p>Build your event with the same step-by-step wizard flow from the app.</p>
+          <p>Set the vibe, lock in your lot, and build a game-day setup guests will remember.</p>
         </div>
       }
     >
       <section className="create-wizard-page">
-        <div className="create-wizard-progress-header">
-          <p>{stepSubtitle}</p>
-          <span>{progressLabel}</span>
-        </div>
-        <div className="create-wizard-progress-bars" role="progressbar" aria-valuemin={1} aria-valuemax={wizardSteps.length} aria-valuenow={stepIndex + 1}>
-          {wizardSteps.map((step, index) => (
-            <div
-              key={step.key}
-              className={`create-wizard-progress-segment ${index <= stepIndex ? "active" : ""}`}
-            />
-          ))}
+        <div className="create-wizard-progress-shell">
+          <div className="create-wizard-progress-header">
+            <p>{stepSubtitle}</p>
+            <span>{progressLabel}</span>
+          </div>
+          <div className="create-wizard-progress-bars" role="progressbar" aria-valuemin={1} aria-valuemax={wizardSteps.length} aria-valuenow={stepIndex + 1}>
+            {wizardSteps.map((step, index) => (
+              <div
+                key={step.key}
+                className={`create-wizard-progress-segment ${index <= stepIndex ? "active" : ""}`}
+              />
+            ))}
+          </div>
         </div>
 
         <div className="create-wizard-body">

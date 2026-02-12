@@ -24,6 +24,68 @@ export function IconBell({ size = 20, ...props }: IconProps) {
   );
 }
 
+export function IconDashboard({ size = 20, ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...props}
+    >
+      <rect x="3" y="3" width="8" height="8" rx="2" />
+      <rect x="13" y="3" width="8" height="5" rx="2" />
+      <rect x="13" y="10" width="8" height="11" rx="2" />
+      <rect x="3" y="13" width="8" height="8" rx="2" />
+    </svg>
+  );
+}
+
+export function IconCompass({ size = 20, ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...props}
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M15.8 8.2l-2.1 6.1-6.1 2.1 2.1-6.1 6.1-2.1z" />
+    </svg>
+  );
+}
+
+export function IconUser({ size = 20, ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...props}
+    >
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 20c1.8-3.6 5-5.5 8-5.5s6.2 1.9 8 5.5" />
+    </svg>
+  );
+}
+
 export function IconCalendar({ size = 18, ...props }: IconProps) {
   return (
     <svg
@@ -161,6 +223,26 @@ export function IconSpark({ size = 20, ...props }: IconProps) {
     >
       <path d="M12 2l1.7 4.9L19 8l-4.9 1.7L12 15l-2.1-5.3L5 8l5.3-1.1L12 2z" />
       <path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8L19 16z" />
+    </svg>
+  );
+}
+
+export function IconWallet({ size = 20, ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...props}
+    >
+      <path d="M3 8a3 3 0 013-3h13a2 2 0 010 4H8a2 2 0 100 4h11a2 2 0 012 2v1a3 3 0 01-3 3H6a3 3 0 01-3-3V8z" />
+      <circle cx="17" cy="12" r="1" />
     </svg>
   );
 }

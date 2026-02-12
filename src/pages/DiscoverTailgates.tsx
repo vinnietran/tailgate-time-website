@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { collection, onSnapshot } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
+import tailgateTimeLogo from "../../ttnobg.png";
 import AppShell from "../components/AppShell";
 import { mockTailgates } from "../data/mockTailgates";
 import { usePlacesAutocomplete } from "../hooks/usePlacesAutocomplete";
@@ -20,6 +21,7 @@ type DiscoverTailgateRecord = {
   eventName: string;
   startDateTime: Date | null;
   visibilityType: "open_free" | "open_paid";
+  coverImageUrl: string;
   locationSummary?: string;
   coords?: LatLng | null;
   priceCents?: number;
@@ -38,6 +40,7 @@ const MAPS_API_KEY = (
   import.meta.env.VITE_MAPS_API_KEY ??
   ""
 ).trim();
+const DEFAULT_TAILGATE_COVER_IMAGE = tailgateTimeLogo;
 
 const MOCK_COORDS: LatLng[] = [
   { lat: 40.4453, lng: -80.0155 },
@@ -126,6 +129,27 @@ function resolveLocationSummary(data: Record<string, unknown>) {
   );
 }
 
+function resolveCoverImageUrl(data: Record<string, unknown>) {
+  const cover = asRecord(data.cover);
+  const media = asRecord(data.media);
+
+  return firstString(
+    data.coverImageUrl,
+    data.coverPhotoUrl,
+    data.heroImageUrl,
+    data.bannerImageUrl,
+    data.imageUrl,
+    data.photoURL,
+    data.photoUrl,
+    cover?.url,
+    cover?.imageUrl,
+    cover?.downloadUrl,
+    cover?.src,
+    media?.coverImageUrl,
+    media?.imageUrl
+  );
+}
+
 function resolveLocationCoords(
   locationRaw: unknown,
   locationCoordsRaw: unknown
@@ -175,6 +199,7 @@ function toDiscoverTailgateRecord(
     eventName: firstString(data.eventName, data.name, data.title) ?? "Untitled Tailgate",
     startDateTime,
     visibilityType,
+    coverImageUrl: resolveCoverImageUrl(data) ?? DEFAULT_TAILGATE_COVER_IMAGE,
     locationSummary: resolveLocationSummary(data),
     coords: resolveLocationCoords(data.location, data.locationCoords),
     priceCents,
@@ -197,6 +222,7 @@ function fromMockTailgates(): DiscoverTailgateRecord[] {
       eventName: item.name,
       startDateTime: item.startDateTime,
       visibilityType: item.visibilityType,
+      coverImageUrl: item.coverImageUrl ?? DEFAULT_TAILGATE_COVER_IMAGE,
       locationSummary: item.locationSummary,
       coords: MOCK_COORDS[index % MOCK_COORDS.length],
       priceCents: item.ticketPriceCents,
@@ -320,20 +346,26 @@ function DiscoverGoogleMap({
     markersRef.current.forEach((marker) => marker.setMap(null));
     markersRef.current = [];
 
-    pins.forEach((item) => {
+    pins.forEach((item, index) => {
       const selected = item.id === selectedId;
       const marker = new maps.Marker({
         map: mapRef.current,
         position: item.coords,
         title: item.eventName,
         zIndex: selected ? 100 : 10,
+        label: {
+          text: String(index + 1),
+          color: "#13233a",
+          fontWeight: "700",
+          fontSize: "11px"
+        },
         icon: {
           path: maps.SymbolPath.CIRCLE,
-          scale: selected ? 8 : 7,
+          scale: selected ? 15 : 11,
           fillColor: markerColor(item, selected),
           fillOpacity: 1,
-          strokeColor: "#0b1324",
-          strokeWeight: 2
+          strokeColor: "#ffffff",
+          strokeWeight: selected ? 2.3 : 2
         }
       });
 
@@ -352,8 +384,8 @@ function DiscoverGoogleMap({
     const selected = pins.find((item) => item.id === selectedId);
     if (selected) {
       mapRef.current.panTo(selected.coords);
-      if ((mapRef.current.getZoom() ?? 0) < 12) {
-        mapRef.current.setZoom(12);
+      if ((mapRef.current.getZoom() ?? 0) < 14) {
+        mapRef.current.setZoom(17);
       }
       return;
     }
@@ -564,11 +596,6 @@ export default function DiscoverTailgates() {
     }
   }, [viewMode]);
 
-  const selectedTailgate = useMemo(
-    () => tailgates.find((item) => item.id === selectedId) ?? null,
-    [selectedId, tailgates]
-  );
-
   const hasGoogleMapsKey = MAPS_API_KEY.length > 0;
   const {
     suggestions: locationSuggestions,
@@ -583,6 +610,10 @@ export default function DiscoverTailgates() {
   const mapPins = useMemo(
     () => tailgates.filter((item): item is DiscoverTailgate & { coords: LatLng } => Boolean(item.coords)),
     [tailgates]
+  );
+  const selectedMapTailgate = useMemo(
+    () => mapPins.find((item) => item.id === selectedId) ?? null,
+    [mapPins, selectedId]
   );
 
   const handlePlaceSuggestionSelect = useCallback(
@@ -861,49 +892,94 @@ export default function DiscoverTailgates() {
               <div className="discover-map-empty-overlay">{renderEmptyState()}</div>
             ) : null}
 
-            {!hasGoogleMapsKey ? null : !selectedTailgate && mapPins.length > 0 ? (
-              <p className="discover-map-hint">Tap a map pin to preview</p>
-            ) : null}
+            {!hasGoogleMapsKey ? null : mapPins.length > 0 ? (
+              <>
+                <p className="discover-map-hint">Select from the list or tap a numbered pin</p>
+                <aside className="discover-map-results">
+                  <div className="discover-map-results-header">
+                    <h3>Tailgates in this area</h3>
+                    <span>{mapPins.length}</span>
+                  </div>
 
-            {selectedTailgate ? (
-              <aside className="discover-side-panel">
-                <div className="discover-side-panel-header">
-                  <h3>{selectedTailgate.eventName}</h3>
-                  <button type="button" onClick={() => setSelectedId(null)}>
-                    Close
-                  </button>
-                </div>
-                <p className="discover-side-panel-date">{formatDiscoverDate(selectedTailgate.startDateTime)}</p>
-                <div className="discover-side-panel-meta-row">
-                  <span
-                    className={`chip ${
-                      selectedTailgate.visibilityType === "open_paid" ? "chip-upcoming" : "chip-live"
-                    }`}
-                  >
-                    {selectedTailgate.visibilityType === "open_paid" ? "Open Paid" : "Open Free"}
-                  </span>
-                  {selectedTailgate.distanceLabel ? (
-                    <span className="discover-side-panel-distance">{selectedTailgate.distanceLabel} away</span>
-                  ) : null}
-                </div>
-                <p className="discover-side-panel-price">
-                  {selectedTailgate.visibilityType === "open_paid"
-                    ? selectedTailgate.priceCents
-                      ? `${formatCurrencyFromCents(selectedTailgate.priceCents)} per person`
-                      : "Paid"
-                    : "Free"}
-                </p>
-                <p className="discover-side-panel-location">
-                  {selectedTailgate.locationSummary ?? "Location coming soon"}
-                </p>
-                <button
-                  type="button"
-                  className="primary-button discover-view-tailgate"
-                  onClick={() => handleOpenDetails(selectedTailgate.id)}
-                >
-                  View tailgate
-                </button>
-              </aside>
+                  <div className="discover-map-results-list">
+                    {mapPins.map((item, index) => {
+                      const active = selectedMapTailgate?.id === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`discover-map-result-item${active ? " active" : ""}`}
+                          onClick={() => setSelectedId(item.id)}
+                        >
+                          <span className="discover-map-result-index">{index + 1}</span>
+                          <span className="discover-map-result-main">
+                            <strong>{item.eventName}</strong>
+                            <small>{formatDiscoverDate(item.startDateTime)}</small>
+                          </span>
+                          <span className="discover-map-result-price">
+                            {item.visibilityType === "open_paid"
+                              ? item.priceCents
+                                ? formatCurrencyFromCents(item.priceCents)
+                                : "Paid"
+                              : "Free"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {selectedMapTailgate ? (
+                    <div className="discover-map-preview">
+                      <div
+                        className="discover-side-panel-cover has-image"
+                        aria-hidden="true"
+                      >
+                        <img src={selectedMapTailgate.coverImageUrl} alt="" loading="lazy" />
+                      </div>
+                      <div className="discover-side-panel-header">
+                        <h3>{selectedMapTailgate.eventName}</h3>
+                        <button type="button" onClick={() => setSelectedId(null)}>
+                          Close
+                        </button>
+                      </div>
+                      <p className="discover-side-panel-date">{formatDiscoverDate(selectedMapTailgate.startDateTime)}</p>
+                      <div className="discover-side-panel-meta-row">
+                        <span
+                          className={`chip ${
+                            selectedMapTailgate.visibilityType === "open_paid" ? "chip-upcoming" : "chip-live"
+                          }`}
+                        >
+                          {selectedMapTailgate.visibilityType === "open_paid" ? "Open Paid" : "Open Free"}
+                        </span>
+                        {selectedMapTailgate.distanceLabel ? (
+                          <span className="discover-side-panel-distance">{selectedMapTailgate.distanceLabel} away</span>
+                        ) : null}
+                      </div>
+                      <p className="discover-side-panel-price">
+                        {selectedMapTailgate.visibilityType === "open_paid"
+                          ? selectedMapTailgate.priceCents
+                            ? `${formatCurrencyFromCents(selectedMapTailgate.priceCents)} per person`
+                            : "Paid"
+                          : "Free"}
+                      </p>
+                      <p className="discover-side-panel-location">
+                        {selectedMapTailgate.locationSummary ?? "Location coming soon"}
+                      </p>
+                      <button
+                        type="button"
+                        className="primary-button discover-view-tailgate"
+                        onClick={() => handleOpenDetails(selectedMapTailgate.id)}
+                      >
+                        View tailgate
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="discover-map-preview-empty">
+                      Select a tailgate to open its preview.
+                    </p>
+                  )}
+                </aside>
+              </>
             ) : null}
           </div>
         ) : tailgates.length > 0 ? (
@@ -922,15 +998,23 @@ export default function DiscoverTailgates() {
                 }}
               >
                 <div className="discover-card-header">
+                  <div
+                    className="discover-card-media has-image"
+                    aria-hidden="true"
+                  >
+                    <img src={item.coverImageUrl} alt="" loading="lazy" />
+                    <span
+                      className={`chip discover-card-chip ${
+                        item.visibilityType === "open_paid" ? "chip-upcoming" : "chip-live"
+                      }`}
+                    >
+                      {item.visibilityType === "open_paid" ? "Open Paid" : "Open Free"}
+                    </span>
+                  </div>
                   <div>
                     <h3>{item.eventName}</h3>
                     <p>{formatDiscoverDate(item.startDateTime)}</p>
                   </div>
-                  <span
-                    className={`chip ${item.visibilityType === "open_paid" ? "chip-upcoming" : "chip-live"}`}
-                  >
-                    {item.visibilityType === "open_paid" ? "Open Paid" : "Open Free"}
-                  </span>
                 </div>
                 <div className="discover-card-body">
                   <p>{item.locationSummary ?? "Location coming soon"}</p>

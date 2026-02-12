@@ -44,7 +44,25 @@ type ExpectationKey =
   | "familyFriendly"
   | "musicLoud"
   | "grillAvailable"
-  | "restroomNearby";
+  | "restroomNearby"
+  | "musicLiveDj"
+  | "musicGameDayPlaylist"
+  | "musicBandSet"
+  | "musicCountryHits"
+  | "musicHipHopHits"
+  | "musicNoPreference"
+  | "drinkByob"
+  | "drinkWaterSoda"
+  | "drinkBeerSelection"
+  | "drinkCraftCocktails"
+  | "drinkPremiumSpirits"
+  | "drinkDryFriendly"
+  | "amenityLawnGames"
+  | "amenityTvWall"
+  | "amenityShadedSetup"
+  | "amenityPowerAccess"
+  | "amenityFamilyZone"
+  | "amenityClimateControl";
 
 type AttendeeRecord = {
   id: string;
@@ -101,7 +119,25 @@ const expectationChipMap: Record<ExpectationKey, string> = {
   familyFriendly: "Family-friendly",
   musicLoud: "Loud music",
   grillAvailable: "Grill",
-  restroomNearby: "Restroom nearby"
+  restroomNearby: "Restroom nearby",
+  musicLiveDj: "Live DJ",
+  musicGameDayPlaylist: "Game-day playlist",
+  musicBandSet: "Live band",
+  musicCountryHits: "Country hits",
+  musicHipHopHits: "Hip-hop / throwbacks",
+  musicNoPreference: "Low-key audio",
+  drinkByob: "BYOB welcome",
+  drinkWaterSoda: "Water + soft drinks",
+  drinkBeerSelection: "Beer lineup",
+  drinkCraftCocktails: "Cocktails",
+  drinkPremiumSpirits: "Premium spirits",
+  drinkDryFriendly: "Dry-friendly",
+  amenityLawnGames: "Lawn games",
+  amenityTvWall: "TV / screen",
+  amenityShadedSetup: "Shade tents",
+  amenityPowerAccess: "Power access",
+  amenityFamilyZone: "Family zone",
+  amenityClimateControl: "Fans / heaters"
 };
 
 const attendeeStatusMeta: Record<AttendeeStatus, { label: string; className: string }> = {
@@ -496,6 +532,7 @@ export default function TailgateDetails() {
   const [confirmedTicketCount, setConfirmedTicketCount] = useState(0);
   const [ticketPurchaseCount, setTicketPurchaseCount] = useState(0);
   const [hasPendingTickets, setHasPendingTickets] = useState(false);
+  const [liveCheckedInCount, setLiveCheckedInCount] = useState<number | null>(null);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [timelineSteps, setTimelineSteps] = useState<TimelineStep[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(true);
@@ -771,6 +808,81 @@ export default function TailgateDetails() {
     };
   }, [detail, isHostUser, user?.uid]);
 
+  useEffect(() => {
+    if (!detail || !db || !isHostUser || detail.visibilityType !== "open_paid") {
+      setLiveCheckedInCount(null);
+      return;
+    }
+
+    let hasNewSnapshot = false;
+    let hasLegacySnapshot = false;
+    let newCheckedInTotal = 0;
+    let legacyCheckedInTotal = 0;
+
+    const applyCheckedInTotal = () => {
+      if (!hasNewSnapshot || !hasLegacySnapshot) return;
+      const useNewModel = newCheckedInTotal > 0;
+      setLiveCheckedInCount(useNewModel ? newCheckedInTotal : legacyCheckedInTotal);
+    };
+
+    const newTicketsQuery = query(
+      collection(db, "tickets"),
+      where("tailgateId", "==", detail.id),
+      where("status", "==", "checked_in")
+    );
+    const legacyTicketsQuery = query(
+      collection(db, "tailgateTickets"),
+      where("tailgateId", "==", detail.id),
+      where("status", "==", "confirmed")
+    );
+
+    const unsubscribeNew = onSnapshot(
+      newTicketsQuery,
+      (snapshot) => {
+        newCheckedInTotal = snapshot.docs.reduce((sum, docSnap) => {
+          const data = docSnap.data() as Record<string, unknown>;
+          const checkedInCount = coerceNumber(data.checkedInCount);
+          if (typeof checkedInCount === "number" && checkedInCount > 0) {
+            return sum + Math.floor(checkedInCount);
+          }
+          return sum + 1;
+        }, 0);
+        hasNewSnapshot = true;
+        applyCheckedInTotal();
+      },
+      (snapshotError) => {
+        console.error("Host checked-in count lookup failed (new model)", snapshotError);
+        hasNewSnapshot = true;
+        applyCheckedInTotal();
+      }
+    );
+    const unsubscribeLegacy = onSnapshot(
+      legacyTicketsQuery,
+      (snapshot) => {
+        legacyCheckedInTotal = snapshot.docs.reduce((sum, docSnap) => {
+          const data = docSnap.data() as Record<string, unknown>;
+          const checkedInCount = coerceNumber(data.checkedInCount);
+          if (typeof checkedInCount === "number" && checkedInCount > 0) {
+            return sum + Math.floor(checkedInCount);
+          }
+          return sum;
+        }, 0);
+        hasLegacySnapshot = true;
+        applyCheckedInTotal();
+      },
+      (snapshotError) => {
+        console.error("Host checked-in count lookup failed (legacy model)", snapshotError);
+        hasLegacySnapshot = true;
+        applyCheckedInTotal();
+      }
+    );
+
+    return () => {
+      unsubscribeNew();
+      unsubscribeLegacy();
+    };
+  }, [detail, isHostUser]);
+
   const locationLabel = detail?.locationSummary ?? "Location not set";
   const locationCoords = detail?.locationCoords ?? null;
   const mapUrl = locationCoords
@@ -817,6 +929,7 @@ export default function TailgateDetails() {
 
   const ticketPriceCents = detail?.ticketPriceCents ?? 0;
   const ticketsSold = detail?.ticketsSold ?? attendeeCounts.going;
+  const checkedInCountForHost = liveCheckedInCount ?? detail?.checkedInCount;
   const payout = estimateHostPayout({
     ticketsSold,
     ticketPriceCents
@@ -1277,7 +1390,7 @@ export default function TailgateDetails() {
                     </div>
                     <div className="tailgate-details-metric-card">
                       <p>Checked In</p>
-                      <strong>{detail.checkedInCount ?? "--"}</strong>
+                      <strong>{checkedInCountForHost ?? "--"}</strong>
                     </div>
                     <div className="tailgate-details-metric-card">
                       <p>Gross Revenue</p>

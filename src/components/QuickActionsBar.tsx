@@ -41,6 +41,7 @@ export default function QuickActionsBar() {
           <Link key={action.label} to={action.to} className="quick-action-card">
             <div className="quick-action-icon">{action.icon}</div>
             <div>
+              <p className="quick-action-kicker">Shortcut</p>
               <p className="quick-action-title">{action.label}</p>
               <p className="quick-action-desc">{action.description}</p>
             </div>

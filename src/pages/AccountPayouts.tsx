@@ -1,14 +1,21 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { signOut } from "firebase/auth";
 import { updateProfile as updateAuthProfile } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import { doc, onSnapshot, setDoc } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import AppShell from "../components/AppShell";
+import {
+  IconBell,
+  IconExternal,
+  IconMessage,
+  IconUser
+} from "../components/Icons";
 import { useAuth } from "../hooks/useAuth";
 import { useHostTailgates } from "../hooks/useHostTailgates";
 import { useUserProfile } from "../hooks/useUserProfile";
-import { db, functions as firebaseFunctions, storage } from "../lib/firebase";
+import { auth, db, functions as firebaseFunctions, storage } from "../lib/firebase";
 import { formatCurrencyFromCents, formatDateTime } from "../utils/format";
 import { estimateHostPayout } from "../utils/tailgate";
 
@@ -43,6 +50,7 @@ function statusLabel(status: StripeConnectStatus) {
 }
 
 export default function AccountPayouts() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const { profile } = useUserProfile(user?.uid);
   const displayName = profile?.displayName ?? user?.displayName ?? null;
@@ -69,6 +77,8 @@ export default function AccountPayouts() {
   const [photoUploading, setPhotoUploading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [showMoreOptions, setShowMoreOptions] = useState(false);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -191,6 +201,113 @@ export default function AccountPayouts() {
   }, [paidTailgates]);
 
   const recentPaidTailgates = paidTailgates.slice(0, 6);
+
+  const handleLogout = async () => {
+    setOptionsError(null);
+    if (!auth) {
+      navigate("/login", { replace: true });
+      return;
+    }
+
+    try {
+      await signOut(auth);
+      navigate("/login", { replace: true });
+    } catch (logoutFailure) {
+      console.error("Failed to log out", logoutFailure);
+      setOptionsError("Unable to log out right now. Please try again.");
+    }
+  };
+
+  const openExternal = (url: string) => {
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  type AccountOption = {
+    key: string;
+    label: string;
+    helper: string;
+    icon: React.ReactNode;
+    onClick?: () => void;
+    external?: boolean;
+    danger?: boolean;
+    disabled?: boolean;
+    quick?: boolean;
+  };
+
+  const profileOptions: AccountOption[] = [
+    {
+      key: "my-notifications",
+      label: "My Notifications",
+      helper: "Messages",
+      icon: <IconMessage size={18} />,
+      quick: true,
+      onClick: () => navigate("/messages")
+    },
+    {
+      key: "notification-settings",
+      label: "Notification Preferences",
+      helper: "Coming soon on web",
+      icon: <IconBell size={18} />,
+      disabled: true
+    },
+    {
+      key: "change-password",
+      label: "Change Password",
+      helper: "Coming soon on web",
+      icon: <IconUser size={18} />,
+      disabled: true
+    },
+    {
+      key: "my-tickets",
+      label: "My Tickets",
+      helper: "Coming soon on web",
+      icon: <IconUser size={18} />,
+      disabled: true
+    },
+    {
+      key: "contact-support",
+      label: "Contact Support",
+      helper: "tailgate-time.com",
+      icon: <IconExternal size={18} />,
+      external: true,
+      onClick: () => openExternal("https://tailgate-time.com/contact.html")
+    },
+    {
+      key: "terms",
+      label: "Terms of Service",
+      helper: "tailgate-time.com",
+      icon: <IconExternal size={18} />,
+      external: true,
+      onClick: () => openExternal("https://tailgate-time.com/terms.html")
+    },
+    {
+      key: "privacy",
+      label: "Privacy Policy",
+      helper: "tailgate-time.com",
+      icon: <IconExternal size={18} />,
+      external: true,
+      onClick: () => openExternal("https://tailgate-time.com/privacy-policy.html")
+    },
+    {
+      key: "logout",
+      label: "Logout",
+      helper: "Sign out of your account",
+      icon: <IconUser size={18} />,
+      danger: true,
+      quick: true,
+      onClick: () => void handleLogout()
+    },
+    {
+      key: "delete-account",
+      label: "Delete Account",
+      helper: "App-only for now",
+      icon: <IconUser size={18} />,
+      danger: true,
+      disabled: true
+    }
+  ];
+  const quickOptions = profileOptions.filter((option) => option.quick);
+  const moreOptions = profileOptions.filter((option) => !option.quick);
 
   const handleSetupPayouts = async () => {
     if (!user) {
@@ -559,6 +676,78 @@ export default function AccountPayouts() {
               })}
             </div>
           )}
+        </article>
+
+        <article className="payouts-card">
+          <div className="section-header">
+            <div>
+              <h2>Profile options</h2>
+              <p className="section-subtitle">
+                Quick actions up front, with advanced items tucked away.
+              </p>
+            </div>
+          </div>
+          <div className="account-options-quick-grid">
+            {quickOptions.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                className={`account-option-tile ${option.danger ? "danger" : ""}`}
+                disabled={option.disabled}
+                onClick={() => {
+                  setOptionsError(null);
+                  option.onClick?.();
+                }}
+              >
+                <span className="account-option-icon" aria-hidden>
+                  {option.icon}
+                </span>
+                <span className="account-option-copy">
+                  <strong>{option.label}</strong>
+                  <span>{option.helper}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            className="account-options-toggle"
+            onClick={() => setShowMoreOptions((current) => !current)}
+          >
+            {showMoreOptions ? "Hide additional options" : `More options (${moreOptions.length})`}
+          </button>
+
+          {showMoreOptions ? (
+            <div className="account-options-list">
+              {moreOptions.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  className={`account-option-row ${option.danger ? "danger" : ""} ${
+                    option.external ? "external" : ""
+                  }`}
+                  disabled={option.disabled}
+                  onClick={() => {
+                    setOptionsError(null);
+                    option.onClick?.();
+                  }}
+                >
+                  <span className="account-option-icon" aria-hidden>
+                    {option.icon}
+                  </span>
+                  <span className="account-option-copy">
+                    <strong>{option.label}</strong>
+                    <span>{option.helper}</span>
+                  </span>
+                  <span className="account-option-arrow" aria-hidden>
+                    {option.external ? <IconExternal size={16} /> : "›"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {optionsError ? <p className="error-banner">{optionsError}</p> : null}
         </article>
       </section>
     </AppShell>
