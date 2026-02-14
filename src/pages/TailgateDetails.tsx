@@ -91,6 +91,7 @@ type TailgateDetail = {
   id: string;
   eventName: string;
   description?: string;
+  coverImageUrls: string[];
   hostId: string;
   hostName: string;
   coHostIds: string[];
@@ -174,6 +175,25 @@ function firstString(...values: unknown[]): string | undefined {
     }
   }
   return undefined;
+}
+
+function stringArrayFromUnknown(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function uniqueStrings(values: string[]) {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  values.forEach((value) => {
+    if (seen.has(value)) return;
+    seen.add(value);
+    unique.push(value);
+  });
+  return unique;
 }
 
 function coerceNumber(value: unknown): number | undefined {
@@ -407,6 +427,40 @@ function buildMapEmbedUrl(
   return url.toString();
 }
 
+function resolveCoverImageUrls(data: Record<string, unknown>): string[] {
+  const cover = asRecord(data.cover);
+  const media = asRecord(data.media);
+
+  const singles = [
+    firstString(
+      data.coverImageUrl,
+      data.coverPhotoUrl,
+      data.heroImageUrl,
+      data.bannerImageUrl,
+      data.imageUrl,
+      data.photoURL,
+      data.photoUrl,
+      cover?.url,
+      cover?.imageUrl,
+      cover?.downloadUrl,
+      cover?.src,
+      media?.coverImageUrl,
+      media?.imageUrl
+    )
+  ].filter((value): value is string => Boolean(value));
+
+  const arrays = [
+    ...stringArrayFromUnknown(data.coverImageUrls),
+    ...stringArrayFromUnknown(data.imageUrls),
+    ...stringArrayFromUnknown(cover?.imageUrls),
+    ...stringArrayFromUnknown(cover?.coverImageUrls),
+    ...stringArrayFromUnknown(media?.coverImageUrls),
+    ...stringArrayFromUnknown(media?.imageUrls)
+  ];
+
+  return uniqueStrings([...singles, ...arrays]);
+}
+
 function toDetailFromFirestore(id: string, data: Record<string, unknown>): TailgateDetail {
   const hostId = firstString(data.hostId, data.hostUserId, data.ownerId) ?? "";
   const hostName = firstString(data.hostName, data.displayName) ?? "Host";
@@ -427,6 +481,7 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     id,
     eventName: firstString(data.eventName, data.name, data.title) ?? "Untitled Tailgate",
     description: firstString(data.description),
+    coverImageUrls: resolveCoverImageUrls(data),
     hostId,
     hostName,
     coHostIds: Array.isArray(data.coHostIds)
@@ -482,6 +537,7 @@ function toDetailFromMock(event: TailgateEvent): TailgateDetail {
   return {
     id: event.id,
     eventName: event.name,
+    coverImageUrls: event.coverImageUrl ? [event.coverImageUrl] : [],
     hostId: event.hostUserId,
     hostName: "Host",
     coHostIds: [],
@@ -549,6 +605,7 @@ export default function TailgateDetails() {
   const [timelineSaving, setTimelineSaving] = useState(false);
   const [publishingTimeline, setPublishingTimeline] = useState(false);
   const [eventStartInput, setEventStartInput] = useState("09:00");
+  const [activeCoverIndex, setActiveCoverIndex] = useState(0);
 
   useEffect(() => {
     if (!id) {
@@ -592,6 +649,10 @@ export default function TailgateDetails() {
 
     return () => unsubscribe();
   }, [id]);
+
+  useEffect(() => {
+    setActiveCoverIndex(0);
+  }, [detail?.id]);
 
   useEffect(() => {
     if (!id) {
@@ -884,6 +945,14 @@ export default function TailgateDetails() {
   }, [detail, isHostUser]);
 
   const locationLabel = detail?.locationSummary ?? "Location not set";
+  const coverImageUrls = detail?.coverImageUrls ?? [];
+  const safeCoverIndex =
+    coverImageUrls.length > 0
+      ? Math.min(activeCoverIndex, coverImageUrls.length - 1)
+      : 0;
+  const activeCoverImageUrl =
+    coverImageUrls[safeCoverIndex] ?? coverImageUrls[0] ?? null;
+  const hasMultipleCoverImages = coverImageUrls.length > 1;
   const locationCoords = detail?.locationCoords ?? null;
   const mapUrl = locationCoords
     ? buildMapEmbedUrl(locationCoords, MAPS_API_KEY, locationLabel)
@@ -1004,6 +1073,20 @@ export default function TailgateDetails() {
       : locationLabel;
     const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
     window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const goToPreviousCoverImage = () => {
+    if (!hasMultipleCoverImages) return;
+    setActiveCoverIndex((current) =>
+      current <= 0 ? coverImageUrls.length - 1 : current - 1
+    );
+  };
+
+  const goToNextCoverImage = () => {
+    if (!hasMultipleCoverImages) return;
+    setActiveCoverIndex((current) =>
+      current >= coverImageUrls.length - 1 ? 0 : current + 1
+    );
   };
 
   const handleCheckoutPress = async () => {
@@ -1318,6 +1401,55 @@ export default function TailgateDetails() {
               Checkout was canceled. You can try again whenever you're ready.
             </section>
           ) : null}
+
+          {activeCoverImageUrl ? (
+            <article className="tailgate-details-card tailgate-details-carousel-card">
+              <div className="tailgate-details-carousel-header">
+                <h2>Event Photos</h2>
+                <span>
+                  {safeCoverIndex + 1} / {coverImageUrls.length}
+                </span>
+              </div>
+              <div className="tailgate-details-carousel-viewport">
+                <img src={activeCoverImageUrl} alt={`${detail.eventName} cover`} loading="lazy" />
+                {hasMultipleCoverImages ? (
+                  <>
+                    <button
+                      type="button"
+                      className="tailgate-details-carousel-nav prev"
+                      onClick={goToPreviousCoverImage}
+                      aria-label="Previous photo"
+                    >
+                      ‹
+                    </button>
+                    <button
+                      type="button"
+                      className="tailgate-details-carousel-nav next"
+                      onClick={goToNextCoverImage}
+                      aria-label="Next photo"
+                    >
+                      ›
+                    </button>
+                    <div className="tailgate-details-carousel-dots" role="tablist" aria-label="Photo selector">
+                      {coverImageUrls.map((url, index) => (
+                        <button
+                          key={`${url}-${index}`}
+                          type="button"
+                          className={`tailgate-details-carousel-dot${
+                            safeCoverIndex === index ? " is-active" : ""
+                          }`}
+                          onClick={() => setActiveCoverIndex(index)}
+                          aria-label={`View photo ${index + 1}`}
+                          aria-selected={safeCoverIndex === index}
+                        />
+                      ))}
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            </article>
+          ) : null}
+
           <article className="tailgate-details-hero">
             <div className="tailgate-details-hero-top">
               <div>

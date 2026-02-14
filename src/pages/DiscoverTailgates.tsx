@@ -28,6 +28,7 @@ type DiscoverTailgateRecord = {
   locationSummary?: string;
   coords?: LatLng | null;
   priceCents?: number;
+  ticketSalesCloseAt?: Date | null;
   currency: string;
 };
 
@@ -38,6 +39,7 @@ type DiscoverTailgate = DiscoverTailgateRecord & {
 
 const DEFAULT_RADIUS_MILES = 50;
 const EARTH_RADIUS_MILES = 3958.8;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const MAPS_API_KEY = (
   import.meta.env.MAPS_API_KEY ??
   import.meta.env.VITE_MAPS_API_KEY ??
@@ -63,6 +65,16 @@ function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) {
       return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function firstStringFromArray(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  for (const item of value) {
+    if (typeof item === "string" && item.trim()) {
+      return item.trim();
     }
   }
   return undefined;
@@ -157,7 +169,11 @@ function resolveCoverImageUrl(data: Record<string, unknown>) {
     cover?.downloadUrl,
     cover?.src,
     media?.coverImageUrl,
-    media?.imageUrl
+    media?.imageUrl,
+    firstStringFromArray(data.coverImageUrls),
+    firstStringFromArray(cover?.imageUrls),
+    firstStringFromArray(media?.coverImageUrls),
+    firstStringFromArray(media?.imageUrls)
   );
 }
 
@@ -185,6 +201,25 @@ function resolveLocationCoords(
   return null;
 }
 
+function resolveTicketSalesCloseAt(
+  data: Record<string, unknown>,
+  startDateTime: Date | null
+): Date | null {
+  const direct =
+    normalizeDate(data.ticketSalesCloseAt) ??
+    normalizeDate(data.ticketSalesCutoffAt) ??
+    normalizeDate(data.salesCloseAt);
+  if (direct) return direct;
+
+  const daysBefore =
+    coerceNumber(data.ticketSalesCloseDaysBefore) ?? coerceNumber(data.ticketSalesCutoffDays);
+  if (typeof daysBefore !== "number" || !startDateTime) {
+    return null;
+  }
+
+  return new Date(startDateTime.getTime() - Math.max(0, daysBefore) * DAY_IN_MS);
+}
+
 function toDiscoverTailgateRecord(
   id: string,
   data: Record<string, unknown>
@@ -205,6 +240,7 @@ function toDiscoverTailgateRecord(
     coerceNumber(data.ticketPriceCents) ??
     coerceNumber(data.priceCents) ??
     coerceNumber(data.ticketPrice);
+  const ticketSalesCloseAt = resolveTicketSalesCloseAt(data, startDateTime);
 
   return {
     id,
@@ -215,6 +251,7 @@ function toDiscoverTailgateRecord(
     locationSummary: resolveLocationSummary(data),
     coords: resolveLocationCoords(data.location, data.locationCoords),
     priceCents,
+    ticketSalesCloseAt,
     currency: firstString(data.currency, data.ticketCurrency) ?? "USD"
   };
 }
@@ -282,6 +319,19 @@ function formatDistance(miles: number) {
   if (miles < 1) return "<1 mi";
   if (miles < 10) return `${miles.toFixed(1)} mi`;
   return `${Math.round(miles)} mi`;
+}
+
+function formatTicketSalesCountdown(item: DiscoverTailgate): string | null {
+  if (item.visibilityType !== "open_paid" || !item.ticketSalesCloseAt) return null;
+
+  const cutoffTime = item.ticketSalesCloseAt.getTime();
+  if (Number.isNaN(cutoffTime)) return null;
+
+  const msLeft = cutoffTime - Date.now();
+  if (msLeft <= 0) return "TICKET SALES CLOSED";
+
+  const daysLeft = Math.ceil(msLeft / DAY_IN_MS);
+  return `ONLY ${daysLeft} ${daysLeft === 1 ? "DAY" : "DAYS"} LEFT TO BUY TICKETS`;
 }
 
 function markerColor(item: DiscoverTailgate, selected: boolean) {
@@ -978,6 +1028,12 @@ export default function DiscoverTailgates() {
                             : "Paid"
                           : "Free"}
                       </p>
+                      {(() => {
+                        const cutoffLabel = formatTicketSalesCountdown(selectedMapTailgate);
+                        return cutoffLabel ? (
+                          <p className="discover-cutoff-pill">{cutoffLabel}</p>
+                        ) : null;
+                      })()}
                       <p className="discover-side-panel-location">
                         {selectedMapTailgate.locationSummary ?? "Location coming soon"}
                       </p>
@@ -1000,53 +1056,59 @@ export default function DiscoverTailgates() {
           </div>
         ) : tailgates.length > 0 ? (
           <div className="discover-list">
-            {tailgates.map((item) => (
-              <article
-                key={item.id}
-                className="discover-card"
-                role="button"
-                tabIndex={0}
-                onClick={() => handleOpenDetails(item.id)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    handleOpenDetails(item.id);
-                  }
-                }}
-              >
-                <div className="discover-card-header">
-                  <div
-                    className="discover-card-media has-image"
-                    aria-hidden="true"
-                  >
-                    <img src={item.coverImageUrl} alt="" loading="lazy" />
-                    <span
-                      className={`chip discover-card-chip ${
-                        item.visibilityType === "open_paid" ? "chip-upcoming" : "chip-live"
-                      }`}
+            {tailgates.map((item) => {
+              const cutoffLabel = formatTicketSalesCountdown(item);
+              return (
+                <article
+                  key={item.id}
+                  className="discover-card"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleOpenDetails(item.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      handleOpenDetails(item.id);
+                    }
+                  }}
+                >
+                  <div className="discover-card-header">
+                    <div
+                      className="discover-card-media has-image"
+                      aria-hidden="true"
                     >
-                      {item.visibilityType === "open_paid" ? "Open Paid" : "Open Free"}
-                    </span>
+                      <img src={item.coverImageUrl} alt="" loading="lazy" />
+                      <span
+                        className={`chip discover-card-chip ${
+                          item.visibilityType === "open_paid" ? "chip-upcoming" : "chip-live"
+                        }`}
+                      >
+                        {item.visibilityType === "open_paid" ? "Open Paid" : "Open Free"}
+                      </span>
+                    </div>
+                    <div>
+                      <h3>{item.eventName}</h3>
+                      <p>{formatDiscoverDate(item.startDateTime)}</p>
+                    </div>
                   </div>
-                  <div>
-                    <h3>{item.eventName}</h3>
-                    <p>{formatDiscoverDate(item.startDateTime)}</p>
+                  <div className="discover-card-body">
+                    <div className="discover-card-copy">
+                      <p>{item.locationSummary ?? "Location coming soon"}</p>
+                      {cutoffLabel ? <p className="discover-cutoff-pill">{cutoffLabel}</p> : null}
+                    </div>
+                    <div className="discover-card-meta">
+                      <strong>
+                        {item.visibilityType === "open_paid"
+                          ? item.priceCents
+                            ? `${formatCurrencyFromCents(item.priceCents)} / person`
+                            : "Paid"
+                          : "Free"}
+                      </strong>
+                      {item.distanceLabel ? <span>{item.distanceLabel} away</span> : null}
+                    </div>
                   </div>
-                </div>
-                <div className="discover-card-body">
-                  <p>{item.locationSummary ?? "Location coming soon"}</p>
-                  <div className="discover-card-meta">
-                    <strong>
-                      {item.visibilityType === "open_paid"
-                        ? item.priceCents
-                          ? `${formatCurrencyFromCents(item.priceCents)} / person`
-                          : "Paid"
-                        : "Free"}
-                    </strong>
-                    {item.distanceLabel ? <span>{item.distanceLabel} away</span> : null}
-                  </div>
-                </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
         ) : (
           renderEmptyState()

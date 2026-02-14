@@ -1794,6 +1794,107 @@ a {
   line-height: 1.5;
 }
 
+.tailgate-details-carousel-card {
+  padding: 14px;
+}
+
+.tailgate-details-carousel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.tailgate-details-carousel-header h2 {
+  margin: 0;
+  font-size: 1.08rem;
+}
+
+.tailgate-details-carousel-header span {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.tailgate-details-carousel-viewport {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 5;
+  min-height: 200px;
+  max-height: 280px;
+  border-radius: 13px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(12, 24, 43, 0.9);
+}
+
+.tailgate-details-carousel-viewport img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  object-position: center;
+}
+
+.tailgate-details-carousel-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(19, 36, 62, 0.62);
+  color: #f7f8fb;
+  font-size: 1.35rem;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.tailgate-details-carousel-nav.prev {
+  left: 10px;
+}
+
+.tailgate-details-carousel-nav.next {
+  right: 10px;
+}
+
+.tailgate-details-carousel-nav:hover {
+  border-color: rgba(242, 201, 76, 0.76);
+  background: rgba(19, 36, 62, 0.78);
+}
+
+.tailgate-details-carousel-dots {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(18, 33, 57, 0.58);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.tailgate-details-carousel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  border: 0;
+  background: rgba(255, 255, 255, 0.55);
+  padding: 0;
+  cursor: pointer;
+}
+
+.tailgate-details-carousel-dot.is-active {
+  background: var(--gold-400);
+}
+
 .tailgate-details-map {
   width: 100%;
   min-height: 320px;
@@ -2293,6 +2394,68 @@ a {
   min-height: 104px;
   resize: vertical;
   font-family: inherit;
+}
+
+.create-wizard-cover-upload {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: grid;
+  gap: 10px;
+}
+
+.create-wizard-cover-upload-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.create-wizard-cover-upload-header .input-label {
+  margin-bottom: 4px;
+}
+
+.create-wizard-cover-upload-header .meta-muted {
+  margin: 0;
+}
+
+.create-wizard-cover-upload-input {
+  display: none;
+}
+
+.create-wizard-cover-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.create-wizard-cover-item {
+  margin: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.create-wizard-cover-item img {
+  width: 100%;
+  height: 110px;
+  object-fit: cover;
+  display: block;
+}
+
+.create-wizard-cover-item figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.create-wizard-cover-item figcaption span {
+  font-size: 0.78rem;
+  color: var(--muted-strong);
+  font-weight: 600;
 }
 
 .create-wizard-date-time {
@@ -3177,8 +3340,8 @@ a {
 
 .discover-list {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
   align-items: stretch;
 }
 
@@ -3186,10 +3349,10 @@ a {
   border-radius: var(--radius-md);
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: linear-gradient(160deg, rgba(42, 64, 100, 0.95), rgba(33, 53, 85, 0.93));
-  padding: 14px;
+  padding: 12px;
   color: var(--white);
   display: grid;
-  gap: 12px;
+  gap: 10px;
   align-content: start;
   cursor: pointer;
   transition: 0.2s ease;
@@ -3211,7 +3374,7 @@ a {
   position: relative;
   overflow: hidden;
   border-radius: 12px;
-  min-height: 140px;
+  min-height: 120px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: linear-gradient(140deg, rgba(91, 124, 178, 0.55), rgba(44, 70, 112, 0.7));
 }
@@ -3250,7 +3413,7 @@ a {
 
 .discover-card-header h3 {
   margin: 2px 0 0;
-  font-size: 1.06rem;
+  font-size: 1rem;
   color: var(--white);
 }
 
@@ -3264,14 +3427,34 @@ a {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-end;
-  gap: 14px;
+  gap: 12px;
   margin-top: 0;
+}
+
+.discover-card-copy {
+  display: grid;
+  gap: 8px;
 }
 
 .discover-card-body p {
   margin: 0;
   color: var(--muted-strong);
-  font-size: 0.9rem;
+  font-size: 0.86rem;
+}
+
+.discover-cutoff-pill {
+  margin: 0;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 999px;
+  border: 1px solid rgba(242, 201, 76, 0.56);
+  background: rgba(242, 201, 76, 0.18);
+  color: #ffe7a8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  padding: 5px 10px;
 }
 
 .discover-card-meta {
@@ -3283,12 +3466,12 @@ a {
 
 .discover-card-meta strong {
   color: var(--gold-400);
-  font-size: 0.92rem;
+  font-size: 0.88rem;
 }
 
 .discover-card-meta span {
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
 }
 
 .discover-map-wrap {
@@ -3627,6 +3810,12 @@ a {
   color: var(--muted-strong);
 }
 
+@media (max-width: 1360px) {
+  .discover-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 1100px) {
   .tailgate-card-body {
     grid-template-columns: 1fr;
@@ -3826,6 +4015,11 @@ a {
     grid-template-columns: 1fr;
   }
 
+  .create-wizard-cover-upload-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .create-wizard-footer {
     position: static;
     padding: 0;
@@ -3844,6 +4038,12 @@ a {
 
   .tailgate-details-status-wrap {
     justify-content: flex-start;
+  }
+
+  .tailgate-details-carousel-viewport,
+  .tailgate-details-carousel-viewport img {
+    min-height: 170px;
+    max-height: 220px;
   }
 
   .discover-header-row {

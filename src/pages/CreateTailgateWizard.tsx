@@ -1,12 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { httpsCallable } from "firebase/functions";
 import { addDoc, collection, doc, getDoc, updateDoc } from "firebase/firestore";
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { useNavigate } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import { IconLocation } from "../components/Icons";
 import { useAuth } from "../hooks/useAuth";
 import { usePlacesAutocomplete } from "../hooks/usePlacesAutocomplete";
-import { db, functions as firebaseFunctions } from "../lib/firebase";
+import { db, functions as firebaseFunctions, storage } from "../lib/firebase";
 import { VisibilityType } from "../types";
 
 type WizardStep = {
@@ -89,6 +90,11 @@ type LocationRecord = {
 };
 
 type StripeConnectStatus = "not_started" | "pending" | "complete" | "restricted";
+type CoverImageDraft = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
 
 const wizardSteps: WizardStep[] = [
   { key: "type", title: "Step 1", subtitle: "Tailgate Type" },
@@ -197,6 +203,8 @@ const MAPS_API_KEY = (
   import.meta.env.VITE_MAPS_API_KEY ??
   ""
 ).trim();
+const MAX_COVER_IMAGES = 5;
+const MAX_COVER_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
 
 function formatPhone(text: string) {
   const digits = text.replace(/\D/g, "").slice(0, 10);
@@ -224,6 +232,14 @@ function parseCapacity(value: string) {
   return Math.floor(parsed);
 }
 
+function parseTicketSalesCutoffDays(value: string) {
+  if (!value.trim()) return 0;
+  const parsed = Number(value.trim());
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed < 0 || parsed > 365) return null;
+  return Math.floor(parsed);
+}
+
 function createLocalId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -236,6 +252,38 @@ function parseDurationPart(value: string) {
   const parsed = Number(value.replace(/\D/g, ""));
   if (!Number.isFinite(parsed)) return 0;
   return Math.max(0, Math.floor(parsed));
+}
+
+function sanitizeStorageFileName(fileName: string) {
+  const trimmed = fileName.trim().toLowerCase();
+  const split = trimmed.split(".");
+  const extension = split.length > 1 ? split.pop() : undefined;
+  const safeExtension = extension?.replace(/[^a-z0-9]/g, "") || "jpg";
+  return safeExtension;
+}
+
+async function uploadCoverImagesForTailgate(
+  hostUserId: string,
+  coverImageDrafts: CoverImageDraft[]
+) {
+  if (!storage || coverImageDrafts.length === 0) {
+    return [] as string[];
+  }
+
+  const createdAt = Date.now();
+  return Promise.all(
+    coverImageDrafts.map(async (draft, index) => {
+      const extension = sanitizeStorageFileName(draft.file.name);
+      const imageRef = ref(
+        storage,
+        `tailgateCovers/${hostUserId}/${createdAt}-${index}-${createLocalId()}.${extension}`
+      );
+      await uploadBytes(imageRef, draft.file, {
+        contentType: draft.file.type || "image/jpeg"
+      });
+      return getDownloadURL(imageRef);
+    })
+  );
 }
 
 function formatDurationCountdown(diffMs: number) {
@@ -480,6 +528,7 @@ export default function CreateTailgateWizard() {
   const [allowGuestDetails, setAllowGuestDetails] = useState(false);
   const [priceInput, setPriceInput] = useState("");
   const [capacityInput, setCapacityInput] = useState("");
+  const [ticketSalesCutoffDaysInput, setTicketSalesCutoffDaysInput] = useState("0");
   const [expectations, setExpectations] = useState<Expectations>(expectationsDefaults);
 
   const [guests, setGuests] = useState<Guest[]>([]);
@@ -503,6 +552,9 @@ export default function CreateTailgateWizard() {
   const [timelineDurationMinutes, setTimelineDurationMinutes] = useState("0");
   const [timelineDurationSeconds, setTimelineDurationSeconds] = useState("0");
   const [editingTimelineId, setEditingTimelineId] = useState<string | null>(null);
+  const [coverImageDrafts, setCoverImageDrafts] = useState<CoverImageDraft[]>([]);
+  const coverImageInputRef = useRef<HTMLInputElement | null>(null);
+  const coverImageDraftsRef = useRef<CoverImageDraft[]>([]);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const guestInvitesEnabled = visibilityType === "private";
@@ -526,6 +578,11 @@ export default function CreateTailgateWizard() {
     if (!capacityInput.trim()) return false;
     return parseCapacity(capacityInput) === null;
   }, [capacityInput, visibilityType]);
+
+  const ticketSalesCutoffInvalid = useMemo(() => {
+    if (visibilityType !== "open_paid") return false;
+    return parseTicketSalesCutoffDays(ticketSalesCutoffDaysInput) === null;
+  }, [ticketSalesCutoffDaysInput, visibilityType]);
 
   const progressLabel = `${stepIndex + 1} / ${wizardSteps.length}`;
   const stepSubtitle =
@@ -586,6 +643,18 @@ export default function CreateTailgateWizard() {
       setTimelineStartTime(eventTime);
     }
   }, [editingTimelineId, eventTime, timelineSteps.length]);
+
+  useEffect(() => {
+    coverImageDraftsRef.current = coverImageDrafts;
+  }, [coverImageDrafts]);
+
+  useEffect(() => {
+    return () => {
+      coverImageDraftsRef.current.forEach((draft) => {
+        URL.revokeObjectURL(draft.previewUrl);
+      });
+    };
+  }, []);
 
   const resolveAddressToCoords = async () => {
     const query = locationSummary.trim();
@@ -692,6 +761,74 @@ export default function CreateTailgateWizard() {
     });
   };
 
+  const removeCoverImageDraft = (draftId: string) => {
+    setCoverImageDrafts((prev) => {
+      const removed = prev.find((draft) => draft.id === draftId);
+      if (removed) {
+        URL.revokeObjectURL(removed.previewUrl);
+      }
+      return prev.filter((draft) => draft.id !== draftId);
+    });
+    clearFieldError("coverImageFiles");
+  };
+
+  const handleCoverImagesSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (selectedFiles.length === 0) return;
+
+    if (coverImageDrafts.length >= MAX_COVER_IMAGES) {
+      setErrors((prev) => ({
+        ...prev,
+        coverImageFiles: `You can upload up to ${MAX_COVER_IMAGES} cover photos.`
+      }));
+      return;
+    }
+
+    const availableSlots = MAX_COVER_IMAGES - coverImageDrafts.length;
+    const validImageFiles = selectedFiles.filter((file) => file.type.startsWith("image/"));
+    const oversizedFiles = validImageFiles.filter(
+      (file) => file.size > MAX_COVER_IMAGE_SIZE_BYTES
+    );
+    const acceptedFiles = validImageFiles
+      .filter((file) => file.size <= MAX_COVER_IMAGE_SIZE_BYTES)
+      .slice(0, availableSlots);
+
+    if (acceptedFiles.length > 0) {
+      const nextDrafts = acceptedFiles.map((file) => ({
+        id: createLocalId(),
+        file,
+        previewUrl: URL.createObjectURL(file)
+      }));
+      setCoverImageDrafts((prev) => [...prev, ...nextDrafts]);
+    }
+
+    const rejectedFileCount = selectedFiles.length - validImageFiles.length;
+    const skippedForLimitCount = Math.max(
+      0,
+      validImageFiles.length - oversizedFiles.length - acceptedFiles.length
+    );
+    if (rejectedFileCount > 0 || oversizedFiles.length > 0 || skippedForLimitCount > 0) {
+      const messageParts: string[] = [];
+      if (rejectedFileCount > 0) {
+        messageParts.push("Only image files are allowed.");
+      }
+      if (oversizedFiles.length > 0) {
+        messageParts.push("Each photo must be 10MB or less.");
+      }
+      if (skippedForLimitCount > 0) {
+        messageParts.push(`You can upload up to ${MAX_COVER_IMAGES} cover photos.`);
+      }
+      setErrors((prev) => ({
+        ...prev,
+        coverImageFiles: messageParts.join(" ")
+      }));
+      return;
+    }
+
+    clearFieldError("coverImageFiles");
+  };
+
   const handleVisibilitySelect = (next: VisibilityType) => {
     clearFieldError("visibilityType");
     if (next === "open_paid" && !payoutReady && visibilityType !== "open_paid") {
@@ -707,6 +844,10 @@ export default function CreateTailgateWizard() {
       setManualGuestPhone("");
       clearFieldError("manualGuestName");
       clearFieldError("manualGuestPhone");
+    }
+    if (next !== "open_paid") {
+      setTicketSalesCutoffDaysInput("0");
+      clearFieldError("ticketSalesCutoffDaysInput");
     }
     setVisibilityType(next);
   };
@@ -758,6 +899,9 @@ export default function CreateTailgateWizard() {
         }
         if (capacityInput.trim() && parseCapacity(capacityInput) === null) {
           nextErrors.capacityInput = "Capacity must be at least 1.";
+        }
+        if (parseTicketSalesCutoffDays(ticketSalesCutoffDaysInput) === null) {
+          nextErrors.ticketSalesCutoffDaysInput = "Use a whole number from 0 to 365.";
         }
       }
     }
@@ -1007,6 +1151,32 @@ export default function CreateTailgateWizard() {
       quizQuestion.text.trim() &&
       quizQuestion.choices.every((choice) => choice.trim()) &&
       quizQuestion.correctChoice !== null;
+    let uploadedCoverImageUrls: string[] = [];
+
+    if (coverImageDrafts.length > 0 && db) {
+      if (!storage) {
+        setErrors((prev) => ({
+          ...prev,
+          submit: "Image upload is unavailable right now."
+        }));
+        setSaving(false);
+        return;
+      }
+
+      try {
+        uploadedCoverImageUrls = await uploadCoverImagesForTailgate(user.uid, coverImageDrafts);
+      } catch (uploadError) {
+        console.error("Failed to upload cover images", uploadError);
+        setErrors((prev) => ({
+          ...prev,
+          submit: "Unable to upload cover photos. Please try again."
+        }));
+        setSaving(false);
+        return;
+      }
+    } else if (coverImageDrafts.length > 0 && !db) {
+      console.warn("Cover images were selected, but Firestore is not configured.");
+    }
 
     const payload: Record<string, unknown> = {
       eventName: eventName.trim(),
@@ -1041,12 +1211,37 @@ export default function CreateTailgateWizard() {
       createdAt: new Date()
     };
 
+    if (uploadedCoverImageUrls.length > 0) {
+      const primaryCover = uploadedCoverImageUrls[0];
+      payload.coverImageUrl = primaryCover;
+      payload.coverPhotoUrl = primaryCover;
+      payload.imageUrl = primaryCover;
+      payload.coverImageUrls = uploadedCoverImageUrls;
+      payload.cover = {
+        url: primaryCover,
+        imageUrl: primaryCover,
+        downloadUrl: primaryCover
+      };
+      payload.media = {
+        coverImageUrl: primaryCover,
+        coverImageUrls: uploadedCoverImageUrls,
+        imageUrl: primaryCover
+      };
+    }
+
     if (visibilityType === "open_paid") {
+      const ticketSalesCloseDaysBefore = parseTicketSalesCutoffDays(ticketSalesCutoffDaysInput) ?? 0;
+      const ticketSalesCloseAt = new Date(
+        startDateTime.getTime() - ticketSalesCloseDaysBefore * 24 * 60 * 60 * 1000
+      );
       payload.priceCents = priceCents;
       payload.ticketPriceCents = priceCents;
       payload.currency = "USD";
       payload.capacity = capacity;
       payload.visibilityRequiresPayment = true;
+      payload.ticketSalesCloseDaysBefore = ticketSalesCloseDaysBefore;
+      payload.ticketSalesCutoffDays = ticketSalesCloseDaysBefore;
+      payload.ticketSalesCloseAt = ticketSalesCloseAt;
     }
 
     if (quizUsed) {
@@ -1181,6 +1376,57 @@ export default function CreateTailgateWizard() {
         {errors.eventDescription ? (
           <p className="create-wizard-error">{errors.eventDescription}</p>
         ) : null}
+
+        <div className="create-wizard-cover-upload">
+          <div className="create-wizard-cover-upload-header">
+            <div>
+              <p className="input-label">Cover Photos</p>
+              <p className="meta-muted">
+                Upload up to {MAX_COVER_IMAGES}. The first photo becomes the default cover.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => coverImageInputRef.current?.click()}
+              disabled={coverImageDrafts.length >= MAX_COVER_IMAGES}
+            >
+              {coverImageDrafts.length >= MAX_COVER_IMAGES ? "Max reached" : "Add photos"}
+            </button>
+          </div>
+          <input
+            ref={coverImageInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="create-wizard-cover-upload-input"
+            onChange={handleCoverImagesSelected}
+          />
+          {errors.coverImageFiles ? (
+            <p className="create-wizard-error">{errors.coverImageFiles}</p>
+          ) : null}
+          {coverImageDrafts.length > 0 ? (
+            <div className="create-wizard-cover-grid">
+              {coverImageDrafts.map((draft, index) => (
+                <figure key={draft.id} className="create-wizard-cover-item">
+                  <img src={draft.previewUrl} alt={`Cover ${index + 1}`} />
+                  <figcaption>
+                    <span>{index === 0 ? "Primary" : `Photo ${index + 1}`}</span>
+                    <button
+                      type="button"
+                      className="link-button"
+                      onClick={() => removeCoverImageDraft(draft.id)}
+                    >
+                      Remove
+                    </button>
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+          ) : (
+            <p className="meta-muted">No cover photos selected yet.</p>
+          )}
+        </div>
       </div>
 
       <div className="create-wizard-card">
@@ -1369,9 +1615,9 @@ export default function CreateTailgateWizard() {
                 </p>
               ) : null}
             </div>
-            <div>
-              <label className="input-label" htmlFor="ticket-capacity">Capacity (optional)</label>
-              <input
+              <div>
+                <label className="input-label" htmlFor="ticket-capacity">Capacity (optional)</label>
+                <input
                 id="ticket-capacity"
                 className="text-input create-wizard-input"
                 value={capacityInput}
@@ -1385,10 +1631,32 @@ export default function CreateTailgateWizard() {
                 <p className="create-wizard-error">
                   {errors.capacityInput ?? "Capacity must be at least 1."}
                 </p>
-              ) : null}
+                ) : null}
+              </div>
+              <div>
+                <label className="input-label" htmlFor="ticket-sales-cutoff-days">
+                  Stop selling tickets (days before)
+                </label>
+                <input
+                  id="ticket-sales-cutoff-days"
+                  className="text-input create-wizard-input"
+                  value={ticketSalesCutoffDaysInput}
+                  onChange={(event) => {
+                    setTicketSalesCutoffDaysInput(event.target.value.replace(/\D/g, ""));
+                    clearFieldError("ticketSalesCutoffDaysInput");
+                  }}
+                  placeholder="0"
+                  inputMode="numeric"
+                />
+                <p className="meta-muted">Set to 0 to allow sales until event start.</p>
+                {errors.ticketSalesCutoffDaysInput || ticketSalesCutoffInvalid ? (
+                  <p className="create-wizard-error">
+                    {errors.ticketSalesCutoffDaysInput ?? "Use a whole number from 0 to 365."}
+                  </p>
+                ) : null}
+              </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
         <label className="create-wizard-switch-row">
           <input
@@ -1741,7 +2009,7 @@ export default function CreateTailgateWizard() {
       visibilityType === "open_paid"
         ? `Paid | $${(parsePriceToCents(priceInput) ?? 0) / 100}${
             capacityInput.trim() ? ` | Cap ${capacityInput}` : ""
-          }`
+          } | Sales stop ${parseTicketSalesCutoffDays(ticketSalesCutoffDaysInput) ?? 0}d before`
         : visibilityType === "open_free"
         ? "Open (Free)"
         : "Invite Only";
@@ -1801,6 +2069,14 @@ export default function CreateTailgateWizard() {
             <div>
               <dt>Timeline Steps</dt>
               <dd>{timelineSteps.length}</dd>
+            </div>
+            <div>
+              <dt>Cover Photos</dt>
+              <dd>
+                {coverImageDrafts.length > 0
+                  ? `${coverImageDrafts.length} selected`
+                  : "None selected"}
+              </dd>
             </div>
           </dl>
         </div>
