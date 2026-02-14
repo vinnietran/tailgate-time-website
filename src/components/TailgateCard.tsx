@@ -28,7 +28,7 @@ export default function TailgateCard({
 
   return (
     <article
-      className="tailgate-card"
+      className={`tailgate-card${status === "cancelled" ? " is-cancelled" : ""}`}
       role="button"
       tabIndex={0}
       onClick={() => navigate(`/tailgates/${event.id}`)}

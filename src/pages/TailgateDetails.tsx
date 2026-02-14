@@ -955,6 +955,7 @@ export default function TailgateDetails() {
     status !== "cancelled";
   const canPurchaseTickets =
     showTicketPurchase &&
+    Boolean(user) &&
     (ticketCheckState === "missing" || ticketCheckState === "confirmed") &&
     !isSoldOut;
   const totalTicketCents =
@@ -971,7 +972,11 @@ export default function TailgateDetails() {
     ? "Buy more tickets"
     : "Purchase ticket";
   const ticketStatusMessage =
-    ticketCheckState === "loading"
+    isSoldOut
+      ? "This tailgate is sold out."
+      : !user && showTicketPurchase
+      ? "Sign in to purchase tickets."
+      : ticketCheckState === "loading"
       ? "Checking your ticket status..."
       : ticketCheckState === "confirmed"
       ? hasConfirmedTicket && confirmedTicketCount > 0
@@ -979,8 +984,6 @@ export default function TailgateDetails() {
         : "Your tickets are confirmed."
       : ticketCheckState === "pending"
       ? "Payment received. Ticket confirmation is in progress."
-      : isSoldOut
-      ? "This tailgate is sold out."
       : "Continue to checkout to purchase tickets.";
   const timelineBaseEventTime = detail?.eventTargetTime ?? detail?.startDateTime ?? null;
   const canViewTimeline = isHostUser || detail?.schedulePublished === true;
@@ -1293,9 +1296,7 @@ export default function TailgateDetails() {
     }
   };
 
-  return (
-    <AppShell header={<div className="simple-header"><h1>Tailgate Details</h1></div>}>
-      {loading ? (
+  const pageContent = loading ? (
         <section className="tailgate-details-stack">
           <div className="tailgate-card skeleton" />
           <div className="tailgate-card skeleton" />
@@ -1520,6 +1521,15 @@ export default function TailgateDetails() {
                   <p className="tailgate-details-ticket-copy app-note">
                     Purchase detected. Open the TailgateTime app to view your tickets.
                   </p>
+                ) : null}
+                {!user && !isSoldOut ? (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => navigate("/login?mode=login")}
+                  >
+                    Sign in to purchase
+                  </button>
                 ) : null}
                 {canPurchaseTickets ? (
                   <div className="tailgate-details-ticket-controls">
@@ -1889,7 +1899,11 @@ export default function TailgateDetails() {
             </div>
           </article>
         </section>
-      )}
+      );
+
+  return (
+    <AppShell header={<div className="simple-header"><h1>Tailgate Details</h1></div>}>
+      {pageContent}
     </AppShell>
   );
 }

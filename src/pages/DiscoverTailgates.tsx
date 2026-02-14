@@ -3,7 +3,10 @@ import { collection, onSnapshot } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import tailgateTimeLogo from "../../ttnobg.png";
 import AppShell from "../components/AppShell";
+import { PublicTopNav } from "../components/PublicTopNav";
+import SiteFooter from "../components/SiteFooter";
 import { mockTailgates } from "../data/mockTailgates";
+import { useAuth } from "../hooks/useAuth";
 import { usePlacesAutocomplete } from "../hooks/usePlacesAutocomplete";
 import { db } from "../lib/firebase";
 import { loadGoogleMapsSdk } from "../lib/googleMapsSdk";
@@ -111,6 +114,14 @@ function resolveVisibilityType(data: Record<string, unknown>) {
   return "open_free";
 }
 
+function isCancelledEvent(data: Record<string, unknown>) {
+  const status = firstString(data.status, data.eventStatus)?.toLowerCase();
+  if (status === "cancelled" || status === "canceled") {
+    return true;
+  }
+  return Boolean(data.cancelledAt);
+}
+
 function resolveLocationSummary(data: Record<string, unknown>) {
   const direct = firstString(data.locationSummary, data.location, data.venueName);
   if (direct) return direct;
@@ -180,6 +191,7 @@ function toDiscoverTailgateRecord(
 ): DiscoverTailgateRecord | null {
   const visibilityType = resolveVisibilityType(data);
   if (visibilityType === "private") return null;
+  if (isCancelledEvent(data)) return null;
 
   const startDateTime =
     normalizeDate(data.startDateTime) ??
@@ -213,6 +225,10 @@ function fromMockTailgates(): DiscoverTailgateRecord[] {
   return mockTailgates
     .filter((item) => {
       if (item.visibilityType !== "open_free" && item.visibilityType !== "open_paid") {
+        return false;
+      }
+      const status = (item.status ?? "").toLowerCase();
+      if (status === "cancelled" || status === "canceled") {
         return false;
       }
       return item.startDateTime.getTime() >= nowTime;
@@ -492,6 +508,7 @@ function requestBrowserLocation(): Promise<LatLng | null> {
 }
 
 export default function DiscoverTailgates() {
+  const { user } = useAuth();
   const navigate = useNavigate();
 
   const [sourceTailgates, setSourceTailgates] = useState<DiscoverTailgateRecord[]>([]);
@@ -755,9 +772,8 @@ export default function DiscoverTailgates() {
     );
   };
 
-  return (
-    <AppShell>
-      <section className="discover-page">
+  const discoverContent = (
+    <section className="discover-page">
         <div className="discover-header-row">
           <div>
             <h1 className="discover-title">Discover</h1>
@@ -1035,7 +1051,18 @@ export default function DiscoverTailgates() {
         ) : (
           renderEmptyState()
         )}
-      </section>
-    </AppShell>
+    </section>
+  );
+
+  if (user) {
+    return <AppShell>{discoverContent}</AppShell>;
+  }
+
+  return (
+    <div className="public-page">
+      <PublicTopNav />
+      <main className="discover-public-shell">{discoverContent}</main>
+      <SiteFooter />
+    </div>
   );
 }

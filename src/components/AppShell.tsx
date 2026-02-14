@@ -1,5 +1,6 @@
 import React from "react";
 import Sidebar from "./Sidebar";
+import SiteFooter from "./SiteFooter";
 
 export default function AppShell({
   header,
@@ -14,6 +15,7 @@ export default function AppShell({
       <main className="main-area">
         {header ? <div className="top-bar">{header}</div> : null}
         <div className="page-content">{children}</div>
+        <SiteFooter />
       </main>
     </div>
   );

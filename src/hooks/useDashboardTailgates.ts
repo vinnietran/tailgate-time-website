@@ -115,6 +115,9 @@ function deriveLocationSummary(data: Record<string, unknown>) {
 function deriveStatus(data: Record<string, unknown>) {
   const raw = String(data.status ?? data.eventStatus ?? "").toLowerCase();
   if (!raw) return undefined;
+  if (raw === "cancelled" || raw === "canceled" || raw.startsWith("cancel")) {
+    return "cancelled";
+  }
   if (raw === "completed") return "past";
   if (raw === "paid") return "past";
   return raw;
@@ -228,8 +231,27 @@ function sortTailgates(items: DashboardTailgate[]) {
   return [...items].sort((a, b) => b.startDateTime.getTime() - a.startDateTime.getTime());
 }
 
-function sortByDateAsc(items: DashboardTailgate[]) {
-  return [...items].sort((a, b) => a.startDateTime.getTime() - b.startDateTime.getTime());
+function isCancelledStatus(status: unknown) {
+  const raw = firstString(status)?.toLowerCase() ?? "";
+  return raw === "cancelled" || raw === "canceled" || raw.startsWith("cancel");
+}
+
+function sortDashboardUpcoming(items: DashboardTailgate[]) {
+  return [...items].sort((a, b) => {
+    const aCancelled = isCancelledStatus(a.status);
+    const bCancelled = isCancelledStatus(b.status);
+    if (aCancelled !== bCancelled) return aCancelled ? 1 : -1;
+    return a.startDateTime.getTime() - b.startDateTime.getTime();
+  });
+}
+
+function sortDashboardPast(items: DashboardTailgate[]) {
+  return [...items].sort((a, b) => {
+    const aCancelled = isCancelledStatus(a.status);
+    const bCancelled = isCancelledStatus(b.status);
+    if (aCancelled !== bCancelled) return aCancelled ? 1 : -1;
+    return b.startDateTime.getTime() - a.startDateTime.getTime();
+  });
 }
 
 export function useDashboardTailgates(userId?: string) {
@@ -303,10 +325,10 @@ export function useDashboardTailgates(userId?: string) {
   }, [userId]);
 
   const now = new Date();
-  const upcomingTailgates = sortByDateAsc(
+  const upcomingTailgates = sortDashboardUpcoming(
     tailgates.filter((tailgate) => tailgate.startDateTime >= now)
   );
-  const pastTailgates = sortTailgates(
+  const pastTailgates = sortDashboardPast(
     tailgates.filter((tailgate) => tailgate.startDateTime < now)
   );
   const hostingCount = tailgates.filter((tailgate) => tailgate.relationship === "hosting").length;

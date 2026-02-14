@@ -12,25 +12,13 @@ import TailgateCheckin from "./pages/TailgateCheckin";
 import CheckinHub from "./pages/CheckinHub";
 import Messages from "./pages/Messages";
 import DiscoverTailgates from "./pages/DiscoverTailgates";
-import { useAuth } from "./hooks/useAuth";
-import { debugAuthLog } from "./utils/debug";
-
-function IndexRedirect() {
-  const { user, loading } = useAuth();
-
-  if (loading) {
-    return <div className="page-loading">Loading...</div>;
-  }
-
-  debugAuthLog("index-redirect", { authed: Boolean(user) });
-  return <Navigate to={user ? "/dashboard" : "/login"} replace />;
-}
+import Home from "./pages/Home";
 
 export default function App() {
   return (
     <AuthProvider>
       <Routes>
-        <Route path="/" element={<IndexRedirect />} />
+        <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
         <Route
           path="/dashboard"
@@ -58,11 +46,7 @@ export default function App() {
         />
         <Route
           path="/tailgates/:id"
-          element={
-            <ProtectedRoute>
-              <TailgateDetails />
-            </ProtectedRoute>
-          }
+          element={<TailgateDetails />}
         />
         <Route
           path="/tailgates/:id/edit"
@@ -98,13 +82,9 @@ export default function App() {
         />
         <Route
           path="/discover"
-          element={
-            <ProtectedRoute>
-              <DiscoverTailgates />
-            </ProtectedRoute>
-          }
+          element={<DiscoverTailgates />}
         />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AuthProvider>
   );

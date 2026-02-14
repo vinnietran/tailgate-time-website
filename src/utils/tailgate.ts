@@ -14,13 +14,13 @@ export function getVisibilityLabel(type: VisibilityType) {
 }
 
 export function getEventStatus(event: TailgateEvent, now = new Date()): TailgateStatus {
-  const status = (event.status ?? "") as string;
+  const status = ((event.status ?? "") as string).toLowerCase();
 
-  if (status.toLowerCase() === "cancelled") {
+  if (status === "cancelled" || status === "canceled" || status.startsWith("cancel")) {
     return "cancelled";
   }
 
-  if (status.toLowerCase() === "live") {
+  if (status === "live") {
     return "live";
   }
 
