@@ -13,6 +13,7 @@ import CheckinHub from "./pages/CheckinHub";
 import Messages from "./pages/Messages";
 import DiscoverTailgates from "./pages/DiscoverTailgates";
 import Home from "./pages/Home";
+import EventFeed from "./pages/EventFeed";
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Navigate to="/login?mode=signup" replace />} />
         <Route
           path="/dashboard"
           element={
@@ -63,6 +65,10 @@ export default function App() {
               <TailgateCheckin />
             </ProtectedRoute>
           }
+        />
+        <Route
+          path="/tailgates/:id/feed"
+          element={<EventFeed />}
         />
         <Route
           path="/checkin"

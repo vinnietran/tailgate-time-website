@@ -7,6 +7,7 @@ import { debugAuthLog } from "../utils/debug";
 export type UserProfile = {
   displayName?: string;
   email?: string;
+  phone?: string;
   photoURL?: string;
 };
 
@@ -91,6 +92,7 @@ export function useUserProfile(uid?: string) {
           const nextProfile: UserProfile = {
             displayName: firstString(data.displayName, data.name, data.fullName),
             email: firstString(data.email),
+            phone: firstString(data.phone, data.phoneNumber),
             photoURL: resolvedPhotoURL
           };
 
@@ -100,6 +102,7 @@ export function useUserProfile(uid?: string) {
             uid,
             hasDisplayName: Boolean(nextProfile.displayName),
             hasEmail: Boolean(nextProfile.email),
+            hasPhone: Boolean(nextProfile.phone),
             hasPhoto: Boolean(nextProfile.photoURL)
           });
         };

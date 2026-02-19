@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "firebase": "^10.12.2",
+    "heic-to": "^1.4.2",
+    "heic2any": "0.0.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.22.3"

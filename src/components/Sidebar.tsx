@@ -1,7 +1,15 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import tailgateTimeLogo from "../../ttnobg.png";
-import { IconCompass, IconDashboard, IconSpark, IconWallet } from "./Icons";
+import {
+  IconChevronLeft,
+  IconCompass,
+  IconDashboard,
+  IconSpark,
+  IconWallet
+} from "./Icons";
+
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "tt.sidebar.collapsed";
 
 const navItems = [
   {
@@ -31,12 +39,32 @@ const navItems = [
 ];
 
 export default function Sidebar() {
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
+    if (saved === "1") {
+      setIsCollapsed(true);
+    }
+  }, []);
+
+  const toggleCollapsed = () => {
+    setIsCollapsed((previous) => {
+      const next = !previous;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, next ? "1" : "0");
+      }
+      return next;
+    });
+  };
+
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${isCollapsed ? "collapsed" : ""}`}>
       <div className="sidebar-top">
         <div className="logo">
           <img className="logo-image" src={tailgateTimeLogo} alt="TailgateTime logo" />
-          <div>
+          <div className="logo-copy">
             <p className="logo-title">TailgateTime</p>
           </div>
         </div>
@@ -46,18 +74,33 @@ export default function Sidebar() {
             <NavLink
               key={item.to}
               to={item.to}
+              aria-label={item.label}
+              title={isCollapsed ? item.label : undefined}
               className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
             >
               <span className="nav-item-icon" aria-hidden>
                 {item.icon}
               </span>
-              <span className="nav-item-content">
-                <span className="nav-item-label">{item.label}</span>
-                <span className="nav-item-meta">{item.meta}</span>
-              </span>
+              {!isCollapsed ? (
+                <span className="nav-item-content">
+                  <span className="nav-item-label">{item.label}</span>
+                  <span className="nav-item-meta">{item.meta}</span>
+                </span>
+              ) : null}
             </NavLink>
           ))}
         </nav>
+      </div>
+      <div className="sidebar-bottom">
+        <button
+          type="button"
+          className="sidebar-collapse-toggle"
+          onClick={toggleCollapsed}
+          aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          <IconChevronLeft className={`sidebar-collapse-icon${isCollapsed ? " collapsed" : ""}`} />
+        </button>
       </div>
     </aside>
   );

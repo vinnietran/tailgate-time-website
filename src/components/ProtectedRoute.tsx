@@ -12,8 +12,14 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }
 
   if (!user) {
-    debugAuthLog("redirect:login", { path: location.pathname });
-    return <Navigate to="/login" replace />;
+    const redirectTarget = `${location.pathname}${location.search}`;
+    debugAuthLog("redirect:login", { path: redirectTarget });
+    return (
+      <Navigate
+        to={`/login?redirect=${encodeURIComponent(redirectTarget)}`}
+        replace
+      />
+    );
   }
 
   return <>{children}</>;

@@ -22,7 +22,7 @@ export default function TailgateCard({
   const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
 
   const showEdit = isHost === true && (status === "upcoming" || status === "live");
-  const showCheckIn = isHost === true;
+  const showCheckIn = isHost === true && event.visibilityType === "open_paid";
   const showHostMetrics = isHost === true;
   const isPaid = event.visibilityType === "open_paid";
 

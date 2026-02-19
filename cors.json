@@ -1,0 +1,18 @@
+[
+  {
+    "origin": [
+      "http://localhost:5173",
+      "https://tailgate-time.com",
+      "https://www.tailgate-time.com"
+    ],
+    "method": ["GET", "HEAD", "OPTIONS"],
+    "responseHeader": [
+      "Content-Type",
+      "Content-Disposition",
+      "Content-Range",
+      "Accept-Ranges",
+      "Range"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]

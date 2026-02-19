@@ -544,6 +544,8 @@ export default function CreateTailgateWizard() {
     choices: ["", "", "", ""],
     correctChoice: null
   });
+  const [quizEnabled, setQuizEnabled] = useState(false);
+  const [timelineEnabled, setTimelineEnabled] = useState(false);
   const [timelineSteps, setTimelineSteps] = useState<TimelineDraftStep[]>([]);
   const [timelineTitle, setTimelineTitle] = useState("");
   const [timelineDescription, setTimelineDescription] = useState("");
@@ -586,8 +588,10 @@ export default function CreateTailgateWizard() {
 
   const progressLabel = `${stepIndex + 1} / ${wizardSteps.length}`;
   const stepSubtitle =
-    stepIndex === 3 && !guestInvitesEnabled
-      ? "Quiz"
+    stepIndex === 3
+      ? guestInvitesEnabled
+        ? "Invite Friends + Add-ons"
+        : "Optional Add-ons"
       : wizardSteps[stepIndex].subtitle;
   const mapUrl = locationCoords
     ? buildMapEmbedUrl(locationCoords, MAPS_API_KEY, locationSummary)
@@ -925,11 +929,7 @@ export default function CreateTailgateWizard() {
     }
 
     if (index === 3) {
-      const quizUsed =
-        quizQuestion.text.trim() ||
-        quizQuestion.choices.some((choice) => choice.trim()) ||
-        quizQuestion.correctChoice !== null;
-      if (quizUsed) {
+      if (quizEnabled) {
         if (!quizQuestion.text.trim()) {
           nextErrors.quizText = "Question text is required when quiz is enabled.";
         }
@@ -1148,6 +1148,7 @@ export default function CreateTailgateWizard() {
     const locationPayload = buildLocationPayload(locationRecord, trimmedLocation, resolvedCoords);
     const normalizedLocationSummary = resolveLocationLabel(locationPayload) || trimmedLocation;
     const quizUsed =
+      quizEnabled &&
       quizQuestion.text.trim() &&
       quizQuestion.choices.every((choice) => choice.trim()) &&
       quizQuestion.correctChoice !== null;
@@ -1206,6 +1207,7 @@ export default function CreateTailgateWizard() {
       hostName: user.displayName ?? "",
       hostEmail: user.email ?? "",
       eventTargetTime: startDateTime,
+      timelineEnabled,
       schedulePublished: false,
       status: "upcoming",
       createdAt: new Date()
@@ -1258,7 +1260,7 @@ export default function CreateTailgateWizard() {
         const created = await addDoc(collection(db, "tailgateEvents"), payload);
         newId = created.id;
 
-        if (timelineSteps.length > 0) {
+        if (timelineEnabled && timelineSteps.length > 0) {
           const scheduleCollection = collection(db, "tailgateEvents", newId, "schedule");
           await Promise.all(
             timelineSteps.map((step) => {
@@ -1752,7 +1754,7 @@ export default function CreateTailgateWizard() {
       ) : (
         <div className="create-wizard-card">
           <div className="create-wizard-card-header">
-            <h2>Step 4: Quiz</h2>
+            <h2>Step 4: Optional Add-ons</h2>
           </div>
           <p className="meta-muted">
             Open tailgates do not support manual guest invites.
@@ -1762,240 +1764,287 @@ export default function CreateTailgateWizard() {
 
       <div className="create-wizard-card">
         <div className="create-wizard-card-header">
-          <h2>Timeline</h2>
+          <h2>Optional Add-ons</h2>
         </div>
         <p className="section-subtitle">
-          Build a run-of-show for attendees. You can publish it later from event details.
+          Select what to include. Leave these off and continue if you do not need them.
         </p>
-        <div className="create-wizard-inline-grid">
-          <div>
-            <label className="input-label" htmlFor="timeline-title">Step Title</label>
-            <input
-              id="timeline-title"
-              className="text-input create-wizard-input"
-              value={timelineTitle}
-              onChange={(event) => {
-                setTimelineTitle(event.target.value);
-                clearFieldError("timelineTitle");
-              }}
-              placeholder="Grill setup"
-            />
-            {errors.timelineTitle ? (
-              <p className="create-wizard-error">{errors.timelineTitle}</p>
-            ) : null}
-          </div>
-          <div>
-            <label className="input-label" htmlFor="timeline-start-time">Start Time</label>
-            <input
-              id="timeline-start-time"
-              className="text-input create-wizard-input"
-              type="time"
-              value={timelineStartTime}
-              onChange={(event) => {
-                setTimelineStartTime(event.target.value);
-                clearFieldError("timelineStartTime");
-              }}
-            />
-            {errors.timelineStartTime ? (
-              <p className="create-wizard-error">{errors.timelineStartTime}</p>
-            ) : null}
-          </div>
-        </div>
-        <label className="input-label" htmlFor="timeline-description">Description (optional)</label>
-        <textarea
-          id="timeline-description"
-          className="text-input create-wizard-input create-wizard-textarea"
-          value={timelineDescription}
-          onChange={(event) => setTimelineDescription(event.target.value)}
-          placeholder="Get coolers, chairs, and food stations ready."
-        />
-        <p className="input-label create-wizard-choice-label">Duration</p>
-        <div className="create-wizard-timeline-duration-row">
-          <div>
-            <input
-              className="text-input create-wizard-input"
-              value={timelineDurationHours}
-              onChange={(event) =>
-                setTimelineDurationHours(event.target.value.replace(/\D/g, ""))
+        <label className="create-wizard-switch-row">
+          <input
+            type="checkbox"
+            checked={timelineEnabled}
+            onChange={(event) => {
+              const checked = event.target.checked;
+              setTimelineEnabled(checked);
+              if (!checked) {
+                resetTimelineForm();
               }
-              placeholder="0"
-            />
-            <small>Hours</small>
-          </div>
-          <div>
-            <input
-              className="text-input create-wizard-input"
-              value={timelineDurationMinutes}
-              onChange={(event) =>
-                setTimelineDurationMinutes(event.target.value.replace(/\D/g, ""))
+            }}
+          />
+          <span>Include timeline</span>
+        </label>
+        <label className="create-wizard-switch-row">
+          <input
+            type="checkbox"
+            checked={quizEnabled}
+            onChange={(event) => {
+              const checked = event.target.checked;
+              setQuizEnabled(checked);
+              if (!checked) {
+                clearFieldError("quizText");
+                clearFieldError("quizChoices");
+                clearFieldError("quizCorrectChoice");
               }
-              placeholder="30"
-            />
-            <small>Minutes</small>
-          </div>
-          <div>
-            <input
-              className="text-input create-wizard-input"
-              value={timelineDurationSeconds}
-              onChange={(event) =>
-                setTimelineDurationSeconds(event.target.value.replace(/\D/g, ""))
-              }
-              placeholder="0"
-            />
-            <small>Seconds</small>
-          </div>
-        </div>
-        <div className="create-wizard-inline-actions create-wizard-timeline-actions">
-          <button
-            type="button"
-            className="primary-button"
-            onClick={handleSaveTimelineStep}
-          >
-            {editingTimelineId ? "Update step" : "Add step"}
-          </button>
-          {editingTimelineId ? (
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={resetTimelineForm}
-            >
-              Cancel edit
-            </button>
-          ) : null}
-        </div>
-        <div className="create-wizard-timeline-list">
-          {timelineSteps.length === 0 ? (
-            <p className="meta-muted">No timeline steps yet.</p>
-          ) : (
-            timelineSteps.map((step) => {
-              const baseDate = toStartDateTime(eventDate, eventTime);
-              const window = baseDate
-                ? buildTimelineWindow(
-                    baseDate,
-                    step.startTime,
-                    step.durationHours,
-                    step.durationMinutes,
-                    step.durationSeconds
-                  )
-                : null;
-              const timeUntilKickoff =
-                baseDate && window
-                  ? formatDurationCountdown(baseDate.getTime() - window.end.getTime())
-                  : "--:--:--";
-              return (
-                <div className="create-wizard-timeline-row" key={step.id}>
-                  <div>
-                    <p className="create-wizard-guest-name">{step.title}</p>
-                    {step.description ? (
-                      <p className="create-wizard-timeline-description">{step.description}</p>
-                    ) : null}
-                    <p className="create-wizard-guest-phone">
-                      {window
-                        ? `${window.start.toLocaleTimeString([], {
-                            hour: "numeric",
-                            minute: "2-digit"
-                          })} - ${window.end.toLocaleTimeString([], {
-                            hour: "numeric",
-                            minute: "2-digit"
-                          })}`
-                        : step.startTime}
-                    </p>
-                    <p className="create-wizard-timeline-countdown">
-                      Time until kickoff: {timeUntilKickoff}
-                    </p>
-                  </div>
-                  <div className="create-wizard-timeline-row-actions">
-                    <button
-                      type="button"
-                      className="link-button"
-                      onClick={() => editTimelineStep(step)}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="link-button"
-                      onClick={() => removeTimelineStep(step.id)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
+            }}
+          />
+          <span>Include quiz</span>
+        </label>
       </div>
 
-      <div className="create-wizard-card">
-        <div className="create-wizard-card-header">
-          <h2>Create Quiz - Question 1 / 1</h2>
-        </div>
-
-        <label className="input-label" htmlFor="quiz-question">Question Text</label>
-        <input
-          id="quiz-question"
-          className="text-input create-wizard-input"
-          value={quizQuestion.text}
-          onChange={(event) => {
-            setQuizQuestion((prev) => ({ ...prev, text: event.target.value }));
-            clearFieldError("quizText");
-          }}
-          placeholder="What is the name of our hall of fame RB?"
-        />
-        {errors.quizText ? <p className="create-wizard-error">{errors.quizText}</p> : null}
-
-        <p className="input-label create-wizard-choice-label">Choices</p>
-        <div className="create-wizard-choice-grid">
-          {quizQuestion.choices.map((choice, index) => (
-            <label key={index} className="create-wizard-choice-row">
+      {timelineEnabled ? (
+        <div className="create-wizard-card">
+          <div className="create-wizard-card-header">
+            <h2>Timeline</h2>
+          </div>
+          <p className="section-subtitle">
+            Build a run-of-show for attendees. You can publish it later from event details.
+          </p>
+          <div className="create-wizard-inline-grid">
+            <div>
+              <label className="input-label" htmlFor="timeline-title">Step Title</label>
               <input
-                type="radio"
-                name="quiz-correct-choice"
-                checked={quizQuestion.correctChoice === index}
-                onChange={() => {
-                  setQuizQuestion((prev) => ({ ...prev, correctChoice: index }));
-                  clearFieldError("quizCorrectChoice");
+                id="timeline-title"
+                className="text-input create-wizard-input"
+                value={timelineTitle}
+                onChange={(event) => {
+                  setTimelineTitle(event.target.value);
+                  clearFieldError("timelineTitle");
+                }}
+                placeholder="Grill setup"
+              />
+              {errors.timelineTitle ? (
+                <p className="create-wizard-error">{errors.timelineTitle}</p>
+              ) : null}
+            </div>
+            <div>
+              <label className="input-label" htmlFor="timeline-start-time">Start Time</label>
+              <input
+                id="timeline-start-time"
+                className="text-input create-wizard-input"
+                type="time"
+                value={timelineStartTime}
+                onChange={(event) => {
+                  setTimelineStartTime(event.target.value);
+                  clearFieldError("timelineStartTime");
                 }}
               />
+              {errors.timelineStartTime ? (
+                <p className="create-wizard-error">{errors.timelineStartTime}</p>
+              ) : null}
+            </div>
+          </div>
+          <label className="input-label" htmlFor="timeline-description">Description (optional)</label>
+          <textarea
+            id="timeline-description"
+            className="text-input create-wizard-input create-wizard-textarea"
+            value={timelineDescription}
+            onChange={(event) => setTimelineDescription(event.target.value)}
+            placeholder="Get coolers, chairs, and food stations ready."
+          />
+          <p className="input-label create-wizard-choice-label">Duration</p>
+          <div className="create-wizard-timeline-duration-row">
+            <div>
               <input
                 className="text-input create-wizard-input"
-                value={choice}
-                onChange={(event) => {
-                  const nextChoices = [...quizQuestion.choices] as QuizQuestion["choices"];
-                  nextChoices[index] = event.target.value;
-                  setQuizQuestion((prev) => ({ ...prev, choices: nextChoices }));
-                  clearFieldError("quizChoices");
-                }}
-                placeholder={`Choice ${index + 1}`}
+                value={timelineDurationHours}
+                onChange={(event) =>
+                  setTimelineDurationHours(event.target.value.replace(/\D/g, ""))
+                }
+                placeholder="0"
               />
-            </label>
-          ))}
+              <small>Hours</small>
+            </div>
+            <div>
+              <input
+                className="text-input create-wizard-input"
+                value={timelineDurationMinutes}
+                onChange={(event) =>
+                  setTimelineDurationMinutes(event.target.value.replace(/\D/g, ""))
+                }
+                placeholder="30"
+              />
+              <small>Minutes</small>
+            </div>
+            <div>
+              <input
+                className="text-input create-wizard-input"
+                value={timelineDurationSeconds}
+                onChange={(event) =>
+                  setTimelineDurationSeconds(event.target.value.replace(/\D/g, ""))
+                }
+                placeholder="0"
+              />
+              <small>Seconds</small>
+            </div>
+          </div>
+          <div className="create-wizard-inline-actions create-wizard-timeline-actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={handleSaveTimelineStep}
+            >
+              {editingTimelineId ? "Update step" : "Add step"}
+            </button>
+            {editingTimelineId ? (
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={resetTimelineForm}
+              >
+                Cancel edit
+              </button>
+            ) : null}
+          </div>
+          <div className="create-wizard-timeline-list">
+            {timelineSteps.length === 0 ? (
+              <p className="meta-muted">No timeline steps yet.</p>
+            ) : (
+              timelineSteps.map((step) => {
+                const baseDate = toStartDateTime(eventDate, eventTime);
+                const window = baseDate
+                  ? buildTimelineWindow(
+                      baseDate,
+                      step.startTime,
+                      step.durationHours,
+                      step.durationMinutes,
+                      step.durationSeconds
+                    )
+                  : null;
+                const timeUntilKickoff =
+                  baseDate && window
+                    ? formatDurationCountdown(baseDate.getTime() - window.end.getTime())
+                    : "--:--:--";
+                return (
+                  <div className="create-wizard-timeline-row" key={step.id}>
+                    <div>
+                      <p className="create-wizard-guest-name">{step.title}</p>
+                      {step.description ? (
+                        <p className="create-wizard-timeline-description">{step.description}</p>
+                      ) : null}
+                      <p className="create-wizard-guest-phone">
+                        {window
+                          ? `${window.start.toLocaleTimeString([], {
+                              hour: "numeric",
+                              minute: "2-digit"
+                            })} - ${window.end.toLocaleTimeString([], {
+                              hour: "numeric",
+                              minute: "2-digit"
+                            })}`
+                          : step.startTime}
+                      </p>
+                      <p className="create-wizard-timeline-countdown">
+                        Time until kickoff: {timeUntilKickoff}
+                      </p>
+                    </div>
+                    <div className="create-wizard-timeline-row-actions">
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => editTimelineStep(step)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => removeTimelineStep(step.id)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
-        {errors.quizChoices ? <p className="create-wizard-error">{errors.quizChoices}</p> : null}
-        {errors.quizCorrectChoice ? (
-          <p className="create-wizard-error">{errors.quizCorrectChoice}</p>
-        ) : null}
+      ) : null}
 
-        <div className="create-wizard-inline-actions create-wizard-review-jump">
-          <button
-            type="button"
-            className="primary-button"
-            onClick={() => {
-              if (!validateStep(3)) return;
-              setStepIndex(4);
+      {quizEnabled ? (
+        <div className="create-wizard-card">
+          <div className="create-wizard-card-header">
+            <h2>Create Quiz - Question 1 / 1</h2>
+          </div>
+
+          <label className="input-label" htmlFor="quiz-question">Question Text</label>
+          <input
+            id="quiz-question"
+            className="text-input create-wizard-input"
+            value={quizQuestion.text}
+            onChange={(event) => {
+              setQuizQuestion((prev) => ({ ...prev, text: event.target.value }));
+              clearFieldError("quizText");
             }}
-          >
-            Review and Save
-          </button>
+            placeholder="What is the name of our hall of fame RB?"
+          />
+          {errors.quizText ? <p className="create-wizard-error">{errors.quizText}</p> : null}
+
+          <p className="input-label create-wizard-choice-label">Choices</p>
+          <div className="create-wizard-choice-grid">
+            {quizQuestion.choices.map((choice, index) => (
+              <label key={index} className="create-wizard-choice-row">
+                <input
+                  type="radio"
+                  name="quiz-correct-choice"
+                  checked={quizQuestion.correctChoice === index}
+                  onChange={() => {
+                    setQuizQuestion((prev) => ({ ...prev, correctChoice: index }));
+                    clearFieldError("quizCorrectChoice");
+                  }}
+                />
+                <input
+                  className="text-input create-wizard-input"
+                  value={choice}
+                  onChange={(event) => {
+                    const nextChoices = [...quizQuestion.choices] as QuizQuestion["choices"];
+                    nextChoices[index] = event.target.value;
+                    setQuizQuestion((prev) => ({ ...prev, choices: nextChoices }));
+                    clearFieldError("quizChoices");
+                  }}
+                  placeholder={`Choice ${index + 1}`}
+                />
+              </label>
+            ))}
+          </div>
+          {errors.quizChoices ? <p className="create-wizard-error">{errors.quizChoices}</p> : null}
+          {errors.quizCorrectChoice ? (
+            <p className="create-wizard-error">{errors.quizCorrectChoice}</p>
+          ) : null}
+
+          <div className="create-wizard-inline-actions create-wizard-review-jump">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => {
+                if (!validateStep(3)) return;
+                setStepIndex(4);
+              }}
+            >
+              Review and Save
+            </button>
+          </div>
         </div>
-      </div>
+      ) : null}
     </section>
   );
 
   const renderStepReview = () => {
     const start = toStartDateTime(eventDate, eventTime);
     const end = toEndDateTime(eventDate, eventTime, eventEndTime);
+    const invitedGuestNames = guests.map((guest, index) => {
+      const trimmedName = guest.name.trim();
+      return trimmedName.length > 0 ? trimmedName : `Guest ${index + 1}`;
+    });
     const formattedStart = start
       ? start.toLocaleString([], { dateStyle: "short", timeStyle: "short" })
       : "Not set";
@@ -2053,7 +2102,24 @@ export default function CreateTailgateWizard() {
             {guestInvitesEnabled ? (
               <div>
                 <dt>Invited Guests</dt>
-                <dd>{guests.length}</dd>
+                <dd>
+                  {guests.length > 0 ? (
+                    <span className="create-wizard-guest-tooltip" tabIndex={0}>
+                      <span className="create-wizard-guest-tooltip-count">{guests.length}</span>
+                      <span className="create-wizard-guest-tooltip-hint">Hover to view</span>
+                      <span className="create-wizard-guest-tooltip-popover" role="tooltip">
+                        <strong>Invitees</strong>
+                        {invitedGuestNames.map((name, index) => (
+                          <span className="create-wizard-guest-tooltip-name" key={`${name}-${index}`}>
+                            {name}
+                          </span>
+                        ))}
+                      </span>
+                    </span>
+                  ) : (
+                    "0"
+                  )}
+                </dd>
               </div>
             ) : null}
             <div>
@@ -2064,11 +2130,11 @@ export default function CreateTailgateWizard() {
             </div>
             <div>
               <dt>Quiz</dt>
-              <dd>{quizQuestion.text.trim() ? "Enabled" : "Not added"}</dd>
+              <dd>{quizEnabled ? "Enabled" : "Not added"}</dd>
             </div>
             <div>
               <dt>Timeline Steps</dt>
-              <dd>{timelineSteps.length}</dd>
+              <dd>{timelineEnabled ? timelineSteps.length : "Not added"}</dd>
             </div>
             <div>
               <dt>Cover Photos</dt>
@@ -2152,8 +2218,8 @@ export default function CreateTailgateWizard() {
                 ? "Next: Event Location"
                 : stepIndex === 2
                 ? guestInvitesEnabled
-                  ? "Next: Invite Friends"
-                  : "Next: Quiz"
+                  ? "Next: Invite + Add-ons"
+                  : "Next: Optional Add-ons"
                 : "Next: Review and Create"}
             </button>
           ) : (

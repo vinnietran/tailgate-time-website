@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   addDoc,
+  arrayUnion,
   collection,
   deleteDoc,
   doc,
@@ -10,11 +11,11 @@ import {
   updateDoc,
   where
 } from "firebase/firestore";
-import { httpsCallable } from "firebase/functions";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import { useAuth } from "../hooks/useAuth";
-import { db, functions as firebaseFunctions } from "../lib/firebase";
+import { app as firebaseApp, db, functions as firebaseFunctions } from "../lib/firebase";
 import { mockTailgates } from "../data/mockTailgates";
 import { TailgateEvent, TailgateStatus, VisibilityType } from "../types";
 import { estimateHostPayout, getVisibilityLabel } from "../utils/tailgate";
@@ -26,6 +27,7 @@ const MAPS_API_KEY = (
   ""
 ).trim();
 const MAX_TICKET_QUANTITY = 8;
+const MAX_HOST_BROADCAST_MESSAGE_LENGTH = 320;
 
 type AttendeeFilterKey = "All" | "Going" | "Pending" | "Not Going";
 type AttendeeStatus = "Host" | "Attending" | "Pending" | "Not Attending";
@@ -87,6 +89,41 @@ type TimelineDraft = {
   durationSeconds: string;
 };
 
+type InlineEditDraft = {
+  eventName: string;
+  description: string;
+  eventDate: string;
+  eventStartTime: string;
+  locationSummary: string;
+  ticketPrice: string;
+  capacity: string;
+};
+
+type GuestInviteDraft = {
+  name: string;
+  phone: string;
+  email: string;
+};
+
+type HostBroadcastFeedbackTone = "success" | "info" | "error";
+
+type HostBroadcastFeedback = {
+  tone: HostBroadcastFeedbackTone;
+  text: string;
+};
+
+type HostTextToAttendeesInput = {
+  eventId: string;
+  message: string;
+};
+
+type HostTextToAttendeesResponse = {
+  attemptedCount?: unknown;
+  sentCount?: unknown;
+  failedCount?: unknown;
+  successfulPhones?: unknown;
+};
+
 type TailgateDetail = {
   id: string;
   eventName: string;
@@ -109,6 +146,7 @@ type TailgateDetail = {
   status?: string;
   cancelledAt?: Date | null;
   eventTargetTime?: Date | null;
+  timelineEnabled?: boolean;
   schedulePublished?: boolean;
   expectations?: Partial<Record<ExpectationKey, boolean>>;
 };
@@ -238,6 +276,21 @@ function parseDurationPart(value: string) {
   return Math.max(0, Math.floor(parsed));
 }
 
+function toPhoneDigits(value: string) {
+  return value.replace(/\D/g, "").slice(0, 10);
+}
+
+function formatPhoneInput(value: string) {
+  const digits = toPhoneDigits(value);
+  const area = digits.slice(0, 3);
+  const middle = digits.slice(3, 6);
+  const last = digits.slice(6, 10);
+
+  if (digits.length <= 3) return area;
+  if (digits.length <= 6) return `(${area}) ${middle}`;
+  return `(${area}) ${middle}-${last}`;
+}
+
 function formatDurationCountdown(diffMs: number) {
   if (diffMs <= 0) return "00:00:00";
   const totalSeconds = Math.floor(diffMs / 1000);
@@ -253,6 +306,44 @@ function toTimeInput(date: Date) {
   const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
   return `${hours}:${minutes}`;
+}
+
+function toDateInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function combineDateAndTime(dateValue: string, timeValue: string) {
+  const [yearRaw, monthRaw, dayRaw] = dateValue.split("-");
+  const [hoursRaw, minutesRaw] = timeValue.split(":");
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  const day = Number(dayRaw);
+  const hours = Number(hoursRaw);
+  const minutes = Number(minutesRaw);
+  if ([year, month, day, hours, minutes].some((value) => !Number.isFinite(value))) {
+    return null;
+  }
+  const combined = new Date(year, month - 1, day, hours, minutes, 0, 0);
+  if (Number.isNaN(combined.getTime())) return null;
+  return combined;
+}
+
+function parsePriceToCents(value: string) {
+  const normalized = value.replace(/[^0-9.]/g, "");
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.round(parsed * 100);
+}
+
+function parseCapacity(value: string) {
+  if (!value.trim()) return null;
+  const parsed = Number(value.trim());
+  if (!Number.isFinite(parsed) || parsed < 1) return null;
+  return Math.floor(parsed);
 }
 
 function buildTimelineWindow(
@@ -506,6 +597,7 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
       normalizeDate(data.eventTargetTime) ??
       normalizeDate(data.gameTime) ??
       startDateTime,
+    timelineEnabled: data.timelineEnabled === true || data.schedulePublished === true,
     schedulePublished: data.schedulePublished === true,
     expectations: asRecord(data.expectations) as TailgateDetail["expectations"]
   };
@@ -555,6 +647,7 @@ function toDetailFromMock(event: TailgateEvent): TailgateDetail {
     status: event.status,
     cancelledAt: null,
     eventTargetTime: event.startDateTime,
+    timelineEnabled: false,
     schedulePublished: false,
     expectations: {}
   };
@@ -575,6 +668,7 @@ export default function TailgateDetails() {
   const { user } = useAuth();
   const attendeeSectionRef = useRef<HTMLElement | null>(null);
   const timelineSectionRef = useRef<HTMLElement | null>(null);
+  const eventSnapshotSectionRef = useRef<HTMLElement | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -604,8 +698,35 @@ export default function TailgateDetails() {
   const [editingTimelineId, setEditingTimelineId] = useState<string | null>(null);
   const [timelineSaving, setTimelineSaving] = useState(false);
   const [publishingTimeline, setPublishingTimeline] = useState(false);
+  const [enablingTimeline, setEnablingTimeline] = useState(false);
   const [eventStartInput, setEventStartInput] = useState("09:00");
   const [activeCoverIndex, setActiveCoverIndex] = useState(0);
+  const [isInlineEditing, setIsInlineEditing] = useState(false);
+  const [inlineEditSaving, setInlineEditSaving] = useState(false);
+  const [inlineEditError, setInlineEditError] = useState<string | null>(null);
+  const [inlineEditSuccess, setInlineEditSuccess] = useState<string | null>(null);
+  const [inlineEditDraft, setInlineEditDraft] = useState<InlineEditDraft>({
+    eventName: "",
+    description: "",
+    eventDate: "",
+    eventStartTime: "",
+    locationSummary: "",
+    ticketPrice: "",
+    capacity: ""
+  });
+  const [guestInviteDraft, setGuestInviteDraft] = useState<GuestInviteDraft>({
+    name: "",
+    phone: "",
+    email: ""
+  });
+  const [guestInviteSaving, setGuestInviteSaving] = useState(false);
+  const [guestInviteError, setGuestInviteError] = useState<string | null>(null);
+  const [guestInviteSuccess, setGuestInviteSuccess] = useState<string | null>(null);
+  const [isHostBroadcastComposerOpen, setIsHostBroadcastComposerOpen] = useState(false);
+  const [hostBroadcastMessage, setHostBroadcastMessage] = useState("");
+  const [hostBroadcastSending, setHostBroadcastSending] = useState(false);
+  const [hostBroadcastFeedback, setHostBroadcastFeedback] =
+    useState<HostBroadcastFeedback | null>(null);
 
   useEffect(() => {
     if (!id) {
@@ -652,6 +773,12 @@ export default function TailgateDetails() {
 
   useEffect(() => {
     setActiveCoverIndex(0);
+  }, [detail?.id]);
+
+  useEffect(() => {
+    setIsInlineEditing(false);
+    setInlineEditError(null);
+    setInlineEditSuccess(null);
   }, [detail?.id]);
 
   useEffect(() => {
@@ -724,6 +851,69 @@ export default function TailgateDetails() {
     if (!detail || !user?.uid) return false;
     return detail.hostId === user.uid || detail.coHostIds.includes(user.uid);
   }, [detail, user?.uid]);
+  const sendHostTextToAttendees = useMemo(() => {
+    if (!firebaseApp) return null;
+    return httpsCallable<HostTextToAttendeesInput, HostTextToAttendeesResponse>(
+      getFunctions(firebaseApp),
+      "sendHostTextToAttendees"
+    );
+  }, []);
+
+  const buildInlineEditDraft = (value: TailgateDetail): InlineEditDraft => {
+    const start = value.startDateTime ?? value.eventTargetTime ?? new Date();
+    return {
+      eventName: value.eventName,
+      description: value.description ?? "",
+      eventDate: toDateInput(start),
+      eventStartTime: toTimeInput(start),
+      locationSummary:
+        value.locationSummary ??
+        resolveLocationString(value.locationRaw) ??
+        "",
+      ticketPrice:
+        value.visibilityType === "open_paid" && typeof value.ticketPriceCents === "number"
+          ? (value.ticketPriceCents / 100).toFixed(2)
+          : "",
+      capacity:
+        typeof value.capacity === "number" && value.capacity > 0
+          ? String(value.capacity)
+          : ""
+    };
+  };
+
+  useEffect(() => {
+    if (!detail || isInlineEditing) return;
+    setInlineEditDraft(buildInlineEditDraft(detail));
+  }, [detail, isInlineEditing]);
+
+  useEffect(() => {
+    if (!inlineEditSuccess) return;
+    const timer = setTimeout(() => setInlineEditSuccess(null), 4000);
+    return () => clearTimeout(timer);
+  }, [inlineEditSuccess]);
+
+  useEffect(() => {
+    setGuestInviteDraft({
+      name: "",
+      phone: "",
+      email: ""
+    });
+    setGuestInviteError(null);
+    setGuestInviteSuccess(null);
+  }, [detail?.id]);
+
+  useEffect(() => {
+    if (!guestInviteSuccess) return;
+    const timer = setTimeout(() => setGuestInviteSuccess(null), 3000);
+    return () => clearTimeout(timer);
+  }, [guestInviteSuccess]);
+
+  useEffect(() => {
+    setIsHostBroadcastComposerOpen(false);
+    setHostBroadcastMessage("");
+    setHostBroadcastSending(false);
+    setHostBroadcastFeedback(null);
+  }, [detail?.id]);
 
   useEffect(() => {
     setTicketQuantity(1);
@@ -962,6 +1152,10 @@ export default function TailgateDetails() {
     const value = params.get("checkout");
     return value === "success" || value === "cancel" ? value : null;
   }, [location.search]);
+  const isEmbeddedMapPanel = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get("embed") === "discover-map";
+  }, [location.search]);
 
   const attendeeCounts = useMemo(() => {
     if (!detail) {
@@ -1055,16 +1249,141 @@ export default function TailgateDetails() {
       ? "Payment received. Ticket confirmation is in progress."
       : "Continue to checkout to purchase tickets.";
   const timelineBaseEventTime = detail?.eventTargetTime ?? detail?.startDateTime ?? null;
-  const canViewTimeline = isHostUser || detail?.schedulePublished === true;
+  const hasTimelineSteps = timelineSteps.length > 0;
+  const timelineEnabledForEvent =
+    detail?.timelineEnabled === true ||
+    detail?.schedulePublished === true ||
+    hasTimelineSteps;
+  const canViewTimeline = detail
+    ? isHostUser
+      ? timelineEnabledForEvent
+      : detail.schedulePublished === true && timelineEnabledForEvent
+    : false;
   const timelinePublishLabel = detail?.schedulePublished
     ? "Schedule is visible to attendees."
     : "Schedule is hidden from attendees.";
+  const canManageGuestInvites = isHostUser && detail?.visibilityType === "private";
+  const hostBroadcastCharacterCount = hostBroadcastMessage.length;
+  const canSendHostBroadcast =
+    hostBroadcastMessage.trim().length > 0 &&
+    hostBroadcastCharacterCount <= MAX_HOST_BROADCAST_MESSAGE_LENGTH &&
+    !hostBroadcastSending &&
+    Boolean(sendHostTextToAttendees);
 
   useEffect(() => {
     setTicketQuantity((current) =>
       Math.max(1, Math.min(current, maxSelectableQuantity))
     );
   }, [maxSelectableQuantity]);
+
+  const openInlineEventEditor = (scrollToSection = false) => {
+    if (!detail) return;
+    setInlineEditDraft(buildInlineEditDraft(detail));
+    setInlineEditError(null);
+    setInlineEditSuccess(null);
+    setIsInlineEditing(true);
+    if (scrollToSection) {
+      requestAnimationFrame(() => {
+        eventSnapshotSectionRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start"
+        });
+      });
+    }
+  };
+
+  const cancelInlineEventEditor = () => {
+    if (!detail) return;
+    setInlineEditDraft(buildInlineEditDraft(detail));
+    setInlineEditError(null);
+    setIsInlineEditing(false);
+  };
+
+  const saveInlineEventDetails = async () => {
+    if (!db || !id || !detail) {
+      setInlineEditError("Inline editing is unavailable right now.");
+      return;
+    }
+
+    const nextName = inlineEditDraft.eventName.trim();
+    const nextLocation = inlineEditDraft.locationSummary.trim();
+    const nextDescription = inlineEditDraft.description.trim();
+    if (!nextName) {
+      setInlineEditError("Event name is required.");
+      return;
+    }
+    if (!nextLocation) {
+      setInlineEditError("Location is required.");
+      return;
+    }
+
+    const startDateTime = combineDateAndTime(
+      inlineEditDraft.eventDate,
+      inlineEditDraft.eventStartTime
+    );
+    if (!startDateTime) {
+      setInlineEditError("Set a valid event date and start time.");
+      return;
+    }
+
+    const updates: Record<string, unknown> = {
+      eventName: nextName,
+      name: nextName,
+      description: nextDescription,
+      startDateTime: startDateTime,
+      dateTime: startDateTime,
+      eventTargetTime: startDateTime,
+      locationSummary: nextLocation,
+      updatedAt: new Date()
+    };
+
+    const existingLocation = asRecord(detail.locationRaw);
+    updates.location = existingLocation
+      ? {
+          ...existingLocation,
+          description: nextLocation,
+          formatted: nextLocation,
+          formattedAddress: nextLocation,
+          address: nextLocation,
+          text: nextLocation,
+          name: nextLocation
+        }
+      : nextLocation;
+
+    if (detail.visibilityType === "open_paid") {
+      const priceCents = parsePriceToCents(inlineEditDraft.ticketPrice);
+      if (!priceCents || priceCents < 2000) {
+        setInlineEditError("Paid events require a ticket price of at least $20.");
+        return;
+      }
+      updates.priceCents = priceCents;
+      updates.ticketPriceCents = priceCents;
+
+      if (inlineEditDraft.capacity.trim()) {
+        const parsedCapacity = parseCapacity(inlineEditDraft.capacity);
+        if (!parsedCapacity) {
+          setInlineEditError("Capacity must be a whole number greater than 0.");
+          return;
+        }
+        updates.capacity = parsedCapacity;
+      } else {
+        updates.capacity = null;
+      }
+    }
+
+    setInlineEditSaving(true);
+    setInlineEditError(null);
+    try {
+      await updateDoc(doc(db, "tailgateEvents", id), updates);
+      setInlineEditSuccess("Event details updated.");
+      setIsInlineEditing(false);
+    } catch (saveError) {
+      console.error("Failed to save inline event details", saveError);
+      setInlineEditError("Unable to save event details. Please try again.");
+    } finally {
+      setInlineEditSaving(false);
+    }
+  };
 
   const openMaps = () => {
     if (!detail) return;
@@ -1379,6 +1698,252 @@ export default function TailgateDetails() {
     }
   };
 
+  const enableTimelineForEvent = async () => {
+    if (!db || !id || !detail || enablingTimeline) return;
+    setEnablingTimeline(true);
+    try {
+      setTimelineError(null);
+      await updateDoc(doc(db, "tailgateEvents", id), {
+        timelineEnabled: true,
+        schedulePublished: detail.schedulePublished === true,
+        updatedAt: new Date()
+      });
+    } catch (enableError) {
+      console.error("Failed to enable timeline", enableError);
+      setTimelineError("Unable to enable schedule right now.");
+    } finally {
+      setEnablingTimeline(false);
+    }
+  };
+
+  const addGuestInvite = async () => {
+    if (!db || !id || !detail) {
+      setGuestInviteError("Guest invites are unavailable right now.");
+      return;
+    }
+    if (!canManageGuestInvites) {
+      setGuestInviteError("Manual invites are only available for invite-only tailgates.");
+      return;
+    }
+
+    const name = guestInviteDraft.name.trim();
+    const phone = formatPhoneInput(guestInviteDraft.phone);
+    const phoneDigits = toPhoneDigits(phone);
+    const email = guestInviteDraft.email.trim().toLowerCase();
+
+    if (!name) {
+      setGuestInviteError("Guest name is required.");
+      return;
+    }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setGuestInviteError("Enter a valid email address.");
+      return;
+    }
+
+    const duplicateExists = detail.attendees.some((attendee) => {
+      if (attendee.status === "Host") return false;
+      const attendeeName = attendee.name.trim().toLowerCase();
+      const attendeeEmail = attendee.email?.trim().toLowerCase() ?? "";
+      const attendeePhoneDigits = toPhoneDigits(attendee.phone ?? "");
+
+      if (email && attendeeEmail && attendeeEmail === email) {
+        return true;
+      }
+      if (phoneDigits && attendeePhoneDigits && attendeePhoneDigits === phoneDigits) {
+        return true;
+      }
+      return !email && !phoneDigits && attendeeName === name.toLowerCase();
+    });
+
+    if (duplicateExists) {
+      setGuestInviteError("That guest is already invited.");
+      return;
+    }
+
+    const invitePayload: Record<string, unknown> = {
+      id: `invite-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      status: "Pending",
+      invitedAt: new Date().toISOString()
+    };
+    if (phoneDigits.length > 0) {
+      invitePayload.phone = phone;
+    }
+    if (email) {
+      invitePayload.email = email;
+    }
+
+    setGuestInviteSaving(true);
+    setGuestInviteError(null);
+    try {
+      await updateDoc(doc(db, "tailgateEvents", id), {
+        attendees: arrayUnion(invitePayload),
+        updatedAt: new Date()
+      });
+      setGuestInviteDraft({
+        name: "",
+        phone: "",
+        email: ""
+      });
+      setGuestInviteSuccess("Guest invited.");
+    } catch (inviteError) {
+      console.error("Failed to add guest invite", inviteError);
+      setGuestInviteError("Unable to invite guest. Please try again.");
+    } finally {
+      setGuestInviteSaving(false);
+    }
+  };
+
+  const openHostBroadcastComposer = () => {
+    setIsHostBroadcastComposerOpen(true);
+    setHostBroadcastFeedback(null);
+  };
+
+  const closeHostBroadcastComposer = () => {
+    setIsHostBroadcastComposerOpen(false);
+    setHostBroadcastFeedback(null);
+  };
+
+  const handleHostBroadcastMessageChange = (
+    event: React.ChangeEvent<HTMLTextAreaElement>
+  ) => {
+    const nextValue = event.target.value.slice(0, MAX_HOST_BROADCAST_MESSAGE_LENGTH);
+    setHostBroadcastMessage(nextValue);
+    if (hostBroadcastFeedback) {
+      setHostBroadcastFeedback(null);
+    }
+  };
+
+  const sendHostBroadcastMessage = async () => {
+    if (!detail) return;
+    if (!isHostUser) {
+      setHostBroadcastFeedback({
+        tone: "error",
+        text: "Only the host can message attendees."
+      });
+      return;
+    }
+
+    const message = hostBroadcastMessage.trim();
+    if (!message) {
+      setHostBroadcastFeedback({
+        tone: "error",
+        text: "Enter a message before sending."
+      });
+      return;
+    }
+    if (message.length > MAX_HOST_BROADCAST_MESSAGE_LENGTH) {
+      setHostBroadcastFeedback({
+        tone: "error",
+        text: `Message cannot exceed ${MAX_HOST_BROADCAST_MESSAGE_LENGTH} characters.`
+      });
+      return;
+    }
+    if (!sendHostTextToAttendees) {
+      setHostBroadcastFeedback({
+        tone: "error",
+        text: "Messaging is unavailable right now."
+      });
+      return;
+    }
+
+    setHostBroadcastSending(true);
+    setHostBroadcastFeedback(null);
+    try {
+      const result = await sendHostTextToAttendees({
+        eventId: detail.id,
+        message
+      });
+      const response = (result.data ?? {}) as HostTextToAttendeesResponse;
+      const toCount = (value: unknown) => {
+        const numeric = coerceNumber(value);
+        if (typeof numeric !== "number" || numeric < 0) return 0;
+        return Math.floor(numeric);
+      };
+
+      const attemptedCount = toCount(response.attemptedCount);
+      const sentCount = toCount(response.sentCount);
+      const failedCount = toCount(response.failedCount);
+      const successfulPhonesCount = Array.isArray(response.successfulPhones)
+        ? response.successfulPhones.filter(
+            (phone): phone is string => typeof phone === "string" && phone.trim().length > 0
+          ).length
+        : 0;
+      const sentTotal = sentCount > 0 ? sentCount : successfulPhonesCount;
+      const attemptedTotal =
+        attemptedCount > 0 ? attemptedCount : Math.max(sentTotal + failedCount, sentTotal);
+
+      if (attemptedTotal === 0) {
+        setHostBroadcastFeedback({
+          tone: "info",
+          text: "No eligible attendees to text for this event."
+        });
+        return;
+      }
+
+      if (sentTotal > 0 && failedCount > 0) {
+        setHostBroadcastFeedback({
+          tone: "success",
+          text: `Sent ${sentTotal} of ${attemptedTotal} attendees.`
+        });
+        setHostBroadcastMessage("");
+        return;
+      }
+
+      if (sentTotal > 0) {
+        setHostBroadcastFeedback({
+          tone: "success",
+          text: `Sent to ${sentTotal} attendee${sentTotal === 1 ? "" : "s"}.`
+        });
+        setHostBroadcastMessage("");
+        return;
+      }
+
+      setHostBroadcastFeedback({
+        tone: "error",
+        text: "Unable to send texts right now. Please try again."
+      });
+    } catch (sendFailure) {
+      const errorCode =
+        typeof sendFailure === "object" &&
+        sendFailure !== null &&
+        "code" in sendFailure &&
+        typeof sendFailure.code === "string"
+          ? sendFailure.code
+          : "";
+      const errorMessage = sendFailure instanceof Error ? sendFailure.message : "";
+      const combinedError = `${errorCode} ${errorMessage}`.toLowerCase();
+
+      if (
+        combinedError.includes("permission-denied") ||
+        combinedError.includes("unauthenticated") ||
+        combinedError.includes("not_authorized") ||
+        combinedError.includes("not-host")
+      ) {
+        setHostBroadcastFeedback({
+          tone: "error",
+          text: "Only the event host can message attendees."
+        });
+      } else if (
+        combinedError.includes("invalid-argument") ||
+        combinedError.includes("message") ||
+        combinedError.includes("eventid")
+      ) {
+        setHostBroadcastFeedback({
+          tone: "error",
+          text: "Enter a valid message (max 320 chars) and try again."
+        });
+      } else {
+        setHostBroadcastFeedback({
+          tone: "error",
+          text: "Unable to send attendee text right now. Please try again."
+        });
+      }
+    } finally {
+      setHostBroadcastSending(false);
+    }
+  };
+
   const pageContent = loading ? (
         <section className="tailgate-details-stack">
           <div className="tailgate-card skeleton" />
@@ -1400,6 +1965,157 @@ export default function TailgateDetails() {
             <section className="tailgate-details-checkout-banner">
               Checkout was canceled. You can try again whenever you're ready.
             </section>
+          ) : null}
+
+          {isHostUser ? (
+            <article className="tailgate-details-card tailgate-details-actions-hub">
+              <div className="section-header">
+                <div>
+                  <h2>Host Actions</h2>
+                  <p className="section-subtitle">Run your event from one place.</p>
+                </div>
+              </div>
+              <div className="tailgate-details-action-grid">
+                <button
+                  className="tailgate-details-action-card is-primary"
+                  onClick={() => openInlineEventEditor(true)}
+                  disabled={!db}
+                >
+                  <strong>{isInlineEditing ? "Editing event details" : "Edit event details"}</strong>
+                  <small>Update name, kickoff, pricing, and meetup details inline</small>
+                </button>
+                <button className="tailgate-details-action-card" onClick={scrollToAttendees}>
+                  <strong>{detail.visibilityType === "open_paid" ? "View ticket holders" : "View guest list"}</strong>
+                  <small>
+                    {detail.visibilityType === "open_paid"
+                      ? "Review ticket and RSVP status"
+                      : "Review invites and RSVPs"}
+                  </small>
+                </button>
+                <button
+                  className="tailgate-details-action-card"
+                  onClick={() => {
+                    if (!timelineEnabledForEvent) {
+                      void enableTimelineForEvent();
+                      return;
+                    }
+                    scrollToTimeline();
+                  }}
+                  disabled={enablingTimeline}
+                >
+                  <strong>
+                    {timelineEnabledForEvent
+                      ? detail.schedulePublished
+                        ? "Edit schedule"
+                        : "Build schedule"
+                      : enablingTimeline
+                      ? "Adding schedule..."
+                      : "Add schedule"}
+                  </strong>
+                  <small>
+                    {timelineEnabledForEvent
+                      ? detail.schedulePublished
+                        ? "Fine tune your published run of show"
+                        : "Map out the timeline so guests know the plan"
+                      : "Optional add-on. Turn this on to build your run of show."}
+                  </small>
+                </button>
+                {detail.visibilityType === "open_paid" ? (
+                  <button
+                    className="tailgate-details-action-card"
+                    onClick={() => navigate(`/tailgates/${detail.id}/checkin`)}
+                  >
+                    <strong>Check-in by code</strong>
+                    <small>Enter ticket codes from the host list</small>
+                  </button>
+                ) : null}
+                <button
+                  className="tailgate-details-action-card"
+                  onClick={() => navigate(`/tailgates/${detail.id}/feed`)}
+                >
+                  <strong>Open event feed</strong>
+                  <small>Post updates and share photos with attendees</small>
+                </button>
+                <button
+                  className={`tailgate-details-action-card${
+                    isHostBroadcastComposerOpen ? " is-primary" : ""
+                  }`}
+                  onClick={openHostBroadcastComposer}
+                >
+                  <strong>Message attendees</strong>
+                  <small>Send a one-time SMS update to your attendees</small>
+                </button>
+                <button
+                  className="tailgate-details-action-card"
+                  onClick={dropLocationPin}
+                  disabled={pinning}
+                >
+                  <strong>{pinning ? "Dropping pin..." : "Drop location pin"}</strong>
+                  <small>Share exact meetup point from your current location</small>
+                </button>
+              </div>
+              {isHostBroadcastComposerOpen ? (
+                <div className="tailgate-details-host-broadcast">
+                  <label className="input-group" htmlFor="host-broadcast-message">
+                    <span className="input-label">Message</span>
+                    <textarea
+                      id="host-broadcast-message"
+                      className="text-input tailgate-details-host-broadcast-input"
+                      value={hostBroadcastMessage}
+                      onChange={handleHostBroadcastMessageChange}
+                      maxLength={MAX_HOST_BROADCAST_MESSAGE_LENGTH}
+                      placeholder="Example: We moved to Lot C near Gate 4. See you soon."
+                      rows={4}
+                    />
+                  </label>
+                  <div className="tailgate-details-host-broadcast-actions">
+                    <p className="tailgate-details-host-broadcast-counter">
+                      {hostBroadcastCharacterCount}/{MAX_HOST_BROADCAST_MESSAGE_LENGTH}
+                    </p>
+                    <div className="tailgate-details-inline-editor-actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={closeHostBroadcastComposer}
+                        disabled={hostBroadcastSending}
+                      >
+                        Close
+                      </button>
+                      <button
+                        type="button"
+                        className="primary-button"
+                        onClick={() => void sendHostBroadcastMessage()}
+                        disabled={!canSendHostBroadcast}
+                      >
+                        {hostBroadcastSending ? "Sending..." : "Send message"}
+                      </button>
+                    </div>
+                  </div>
+                  {!sendHostTextToAttendees ? (
+                    <p className="tailgate-details-ticket-error">
+                      Messaging is unavailable in this environment.
+                    </p>
+                  ) : null}
+                  {hostBroadcastFeedback?.tone === "success" ? (
+                    <p className="tailgate-details-inline-editor-success">
+                      {hostBroadcastFeedback.text}
+                    </p>
+                  ) : null}
+                  {hostBroadcastFeedback?.tone === "info" ? (
+                    <p className="meta-muted">{hostBroadcastFeedback.text}</p>
+                  ) : null}
+                  {hostBroadcastFeedback?.tone === "error" ? (
+                    <p className="tailgate-details-ticket-error">{hostBroadcastFeedback.text}</p>
+                  ) : null}
+                </div>
+              ) : null}
+              {status !== "cancelled" ? (
+                <button className="tailgate-details-control-row danger" onClick={() => void cancelTailgate()}>
+                  <span>Cancel tailgate</span>
+                  <small>Notify all guests the event is cancelled</small>
+                </button>
+              ) : null}
+            </article>
           ) : null}
 
           {activeCoverImageUrl ? (
@@ -1475,6 +2191,12 @@ export default function TailgateDetails() {
               </button>
               <button
                 className="secondary-button"
+                onClick={() => navigate(`/tailgates/${detail.id}/feed`)}
+              >
+                Event feed
+              </button>
+              <button
+                className="secondary-button"
                 onClick={() => {
                   const shareUrl = `${window.location.origin}/#/tailgates/${detail.id}`;
                   navigator.clipboard?.writeText(shareUrl);
@@ -1544,74 +2266,159 @@ export default function TailgateDetails() {
             </article>
           ) : null}
 
-          {isHostUser ? (
-            <article className="tailgate-details-card">
-              <div className="section-header">
-                <div>
-                  <h2>Quick actions</h2>
-                  <p className="section-subtitle">Keep everything on track.</p>
-                </div>
-              </div>
-              <div className="tailgate-details-control-list">
-                <button
-                  className="tailgate-details-control-row"
-                  onClick={() => navigate(`/tailgates/${detail.id}/edit`)}
-                >
-                  <span>Edit event details</span>
-                  <small>Update event name, kickoff, and meetup details</small>
-                </button>
-                <button className="tailgate-details-control-row" onClick={scrollToAttendees}>
-                  <span>{detail.visibilityType === "open_paid" ? "View ticket holders" : "View guest list"}</span>
-                  <small>
-                    {detail.visibilityType === "open_paid"
-                      ? "Review ticket and RSVP status"
-                      : "Review invites and RSVPs"}
-                  </small>
-                </button>
-                <button className="tailgate-details-control-row" onClick={scrollToTimeline}>
-                  <span>{detail.schedulePublished ? "Edit schedule" : "Build schedule"}</span>
-                  <small>
-                    {detail.schedulePublished
-                      ? "Fine tune your published run of show"
-                      : "Map out the timeline so guests know the plan"}
-                  </small>
-                </button>
-                <button
-                  className="tailgate-details-control-row"
-                  onClick={() => navigate(`/tailgates/${detail.id}/checkin`)}
-                >
-                  <span>Check-in by code</span>
-                  <small>Enter ticket codes from the host list</small>
-                </button>
-                <button className="tailgate-details-control-row" onClick={() => navigate("/messages")}>
-                  <span>Message guests</span>
-                  <small>Broadcast updates to attendees</small>
-                </button>
-                <button
-                  className="tailgate-details-control-row"
-                  onClick={dropLocationPin}
-                  disabled={pinning}
-                >
-                  <span>{pinning ? "Dropping pin..." : "Drop location pin"}</span>
-                  <small>Share exact meetup point from your current location</small>
-                </button>
-                {status !== "cancelled" ? (
-                  <button className="tailgate-details-control-row danger" onClick={() => void cancelTailgate()}>
-                    <span>Cancel tailgate</span>
-                    <small>Notify all guests the event is cancelled</small>
-                  </button>
-                ) : null}
-              </div>
-            </article>
-          ) : null}
-
-          <article className="tailgate-details-card">
+          <article className="tailgate-details-card" ref={eventSnapshotSectionRef}>
             <div className="section-header">
               <div>
                 <h2>Event Snapshot</h2>
                 <p className="section-subtitle">Essential details guests need.</p>
               </div>
+              {isHostUser ? (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() =>
+                    isInlineEditing ? cancelInlineEventEditor() : openInlineEventEditor(false)
+                  }
+                  disabled={!db || inlineEditSaving}
+                >
+                  {isInlineEditing ? "Cancel edit" : "Edit inline"}
+                </button>
+              ) : null}
             </div>
+            {isInlineEditing ? (
+              <div className="tailgate-details-inline-editor">
+                <div className="tailgate-details-inline-editor-grid">
+                  <label className="input-group">
+                    <span className="input-label">Event name</span>
+                    <input
+                      className="text-input"
+                      value={inlineEditDraft.eventName}
+                      onChange={(event) =>
+                        setInlineEditDraft((previous) => ({
+                          ...previous,
+                          eventName: event.target.value
+                        }))
+                      }
+                      placeholder="Tailgate event name"
+                    />
+                  </label>
+                  <label className="input-group">
+                    <span className="input-label">Location</span>
+                    <input
+                      className="text-input"
+                      value={inlineEditDraft.locationSummary}
+                      onChange={(event) =>
+                        setInlineEditDraft((previous) => ({
+                          ...previous,
+                          locationSummary: event.target.value
+                        }))
+                      }
+                      placeholder="Lot, street, city"
+                    />
+                  </label>
+                  <label className="input-group">
+                    <span className="input-label">Event date</span>
+                    <input
+                      className="text-input"
+                      type="date"
+                      value={inlineEditDraft.eventDate}
+                      onChange={(event) =>
+                        setInlineEditDraft((previous) => ({
+                          ...previous,
+                          eventDate: event.target.value
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="input-group">
+                    <span className="input-label">Start time</span>
+                    <input
+                      className="text-input"
+                      type="time"
+                      value={inlineEditDraft.eventStartTime}
+                      onChange={(event) =>
+                        setInlineEditDraft((previous) => ({
+                          ...previous,
+                          eventStartTime: event.target.value
+                        }))
+                      }
+                    />
+                  </label>
+                  {detail.visibilityType === "open_paid" ? (
+                    <>
+                      <label className="input-group">
+                        <span className="input-label">Ticket price (USD)</span>
+                        <input
+                          className="text-input"
+                          value={inlineEditDraft.ticketPrice}
+                          onChange={(event) =>
+                            setInlineEditDraft((previous) => ({
+                              ...previous,
+                              ticketPrice: event.target.value.replace(/[^0-9.]/g, "")
+                            }))
+                          }
+                          placeholder="20.00"
+                          inputMode="decimal"
+                        />
+                      </label>
+                      <label className="input-group">
+                        <span className="input-label">Capacity (optional)</span>
+                        <input
+                          className="text-input"
+                          value={inlineEditDraft.capacity}
+                          onChange={(event) =>
+                            setInlineEditDraft((previous) => ({
+                              ...previous,
+                              capacity: event.target.value.replace(/\D/g, "")
+                            }))
+                          }
+                          placeholder="100"
+                          inputMode="numeric"
+                        />
+                      </label>
+                    </>
+                  ) : null}
+                </div>
+                <label className="input-group">
+                  <span className="input-label">Description</span>
+                  <textarea
+                    className="text-input tailgate-details-inline-editor-description"
+                    value={inlineEditDraft.description}
+                    onChange={(event) =>
+                      setInlineEditDraft((previous) => ({
+                        ...previous,
+                        description: event.target.value
+                      }))
+                    }
+                    placeholder="Describe your setup, parking cues, and game-day vibe."
+                  />
+                </label>
+                {inlineEditError ? (
+                  <p className="tailgate-details-ticket-error">{inlineEditError}</p>
+                ) : null}
+                <div className="tailgate-details-inline-editor-actions">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => void saveInlineEventDetails()}
+                    disabled={inlineEditSaving}
+                  >
+                    {inlineEditSaving ? "Saving..." : "Save details"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={cancelInlineEventEditor}
+                    disabled={inlineEditSaving}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {inlineEditSuccess ? (
+              <p className="tailgate-details-inline-editor-success">{inlineEditSuccess}</p>
+            ) : null}
             <div className="tailgate-details-info-grid">
               <div className="tailgate-details-info-card">
                 <p>When</p>
@@ -1658,7 +2465,13 @@ export default function TailgateDetails() {
                   <button
                     type="button"
                     className="primary-button"
-                    onClick={() => navigate("/login?mode=login")}
+                    onClick={() =>
+                      navigate(
+                        `/login?mode=login&redirect=${encodeURIComponent(
+                          `/tailgates/${encodeURIComponent(detail.id)}`
+                        )}`
+                      )
+                    }
                   >
                     Sign in to purchase
                   </button>
@@ -1991,6 +2804,86 @@ export default function TailgateDetails() {
                 <p className="section-subtitle">Filter by RSVP status.</p>
               </div>
             </div>
+            {isHostUser ? (
+              <div className="tailgate-details-attendee-invite">
+                {canManageGuestInvites ? (
+                  <>
+                    <p className="tailgate-details-attendee-invite-title">Invite guest</p>
+                    <p className="tailgate-details-attendee-invite-copy">
+                      Add invitees directly from the event details screen.
+                    </p>
+                    <div className="tailgate-details-attendee-invite-grid">
+                      <label className="input-group">
+                        <span className="input-label">Guest name</span>
+                        <input
+                          className="text-input"
+                          value={guestInviteDraft.name}
+                          onChange={(event) =>
+                            setGuestInviteDraft((previous) => ({
+                              ...previous,
+                              name: event.target.value
+                            }))
+                          }
+                          placeholder="Jane Doe"
+                        />
+                      </label>
+                      <label className="input-group">
+                        <span className="input-label">Phone (optional)</span>
+                        <input
+                          className="text-input"
+                          value={guestInviteDraft.phone}
+                          onChange={(event) =>
+                            setGuestInviteDraft((previous) => ({
+                              ...previous,
+                              phone: formatPhoneInput(event.target.value)
+                            }))
+                          }
+                          placeholder="(555) 555-5555"
+                          inputMode="tel"
+                        />
+                      </label>
+                      <label className="input-group">
+                        <span className="input-label">Email (optional)</span>
+                        <input
+                          className="text-input"
+                          value={guestInviteDraft.email}
+                          onChange={(event) =>
+                            setGuestInviteDraft((previous) => ({
+                              ...previous,
+                              email: event.target.value
+                            }))
+                          }
+                          placeholder="jane@example.com"
+                          inputMode="email"
+                        />
+                      </label>
+                    </div>
+                    <div className="tailgate-details-attendee-invite-actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void addGuestInvite()}
+                        disabled={guestInviteSaving}
+                      >
+                        {guestInviteSaving ? "Adding..." : "Add guest"}
+                      </button>
+                      {guestInviteError ? (
+                        <p className="tailgate-details-ticket-error">{guestInviteError}</p>
+                      ) : null}
+                      {guestInviteSuccess ? (
+                        <p className="tailgate-details-inline-editor-success">
+                          {guestInviteSuccess}
+                        </p>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <p className="meta-muted">
+                    Manual guest invites are available for invite-only tailgates.
+                  </p>
+                )}
+              </div>
+            ) : null}
             <div className="tailgate-details-filter-row">
               {([
                 { key: "All", label: `All (${attendeeCounts.nonHost})` },
@@ -2013,12 +2906,16 @@ export default function TailgateDetails() {
               {filteredAttendees.length > 0 ? (
                 filteredAttendees.map((attendee) => {
                   const meta = attendeeStatusMeta[attendee.status];
+                  const attendeeContact = [attendee.email, attendee.phone]
+                    .map((value) => value?.trim())
+                    .filter((value): value is string => Boolean(value))
+                    .join(" · ");
                   return (
                     <div className="tailgate-details-attendee-row" key={attendee.id}>
                       <div>
                         <p className="tailgate-details-attendee-name">{attendee.name}</p>
-                        {attendee.email ? (
-                          <p className="tailgate-details-attendee-meta">{attendee.email}</p>
+                        {attendeeContact ? (
+                          <p className="tailgate-details-attendee-meta">{attendeeContact}</p>
                         ) : null}
                       </div>
                       <span className={`chip ${meta.className}`}>{meta.label}</span>
@@ -2032,6 +2929,10 @@ export default function TailgateDetails() {
           </article>
         </section>
       );
+
+  if (isEmbeddedMapPanel) {
+    return <main className="tailgate-details-embedded">{pageContent}</main>;
+  }
 
   return (
     <AppShell header={<div className="simple-header"><h1>Tailgate Details</h1></div>}>

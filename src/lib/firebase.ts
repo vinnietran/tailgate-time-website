@@ -17,7 +17,7 @@ const hasConfig = Boolean(
   firebaseConfig.apiKey && firebaseConfig.authDomain && firebaseConfig.projectId
 );
 
-const app = hasConfig
+export const app = hasConfig
   ? getApps().length
     ? getApps()[0]
     : initializeApp(firebaseConfig)

@@ -37,7 +37,7 @@ export default function HostDashboard() {
       };
 
   return (
-    <AppShell header={<TopBar firstName={firstName} />}>
+    <AppShell header={<TopBar firstName={firstName} />} showHeaderActions={false}>
       <QuickActionsBar />
 
       <section className="tailgates-section">

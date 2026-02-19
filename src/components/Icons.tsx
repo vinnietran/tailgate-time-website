@@ -246,3 +246,22 @@ export function IconWallet({ size = 20, ...props }: IconProps) {
     </svg>
   );
 }
+
+export function IconChevronLeft({ size = 18, ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...props}
+    >
+      <path d="M15 18l-6-6 6-6" />
+    </svg>
+  );
+}
