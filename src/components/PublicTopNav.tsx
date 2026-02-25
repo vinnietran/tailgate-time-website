@@ -23,7 +23,6 @@ export function PublicTopNav() {
           <Link to="/discover" className={pathname.startsWith("/discover") ? "active" : ""}>
             Discover
           </Link>
-          <a href="/landing.html">Marketing</a>
           <a href="/contact.html">Contact</a>
         </nav>
         <div className="public-auth-actions">

@@ -8,14 +8,22 @@ import {
   onSnapshot,
   orderBy,
   query,
+  serverTimestamp,
   updateDoc,
   where
 } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
+import { getBlob, getDownloadURL, ref } from "firebase/storage";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import { useAuth } from "../hooks/useAuth";
-import { app as firebaseApp, db, functions as firebaseFunctions } from "../lib/firebase";
+import { useCreateRefundRequest } from "../hooks/useCreateRefundRequest";
+import {
+  app as firebaseApp,
+  db,
+  functions as firebaseFunctions,
+  storage as firebaseStorage
+} from "../lib/firebase";
 import { mockTailgates } from "../data/mockTailgates";
 import { TailgateEvent, TailgateStatus, VisibilityType } from "../types";
 import { estimateHostPayout, getVisibilityLabel } from "../utils/tailgate";
@@ -28,10 +36,11 @@ const MAPS_API_KEY = (
 ).trim();
 const MAX_TICKET_QUANTITY = 8;
 const MAX_HOST_BROADCAST_MESSAGE_LENGTH = 320;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 type AttendeeFilterKey = "All" | "Going" | "Pending" | "Not Going";
 type AttendeeStatus = "Host" | "Attending" | "Pending" | "Not Attending";
-type TicketCheckState = "loading" | "confirmed" | "pending" | "missing";
+type TicketCheckState = "loading" | "confirmed" | "missing";
 type TimelineStep = {
   id: string;
   title: string;
@@ -112,6 +121,31 @@ type HostBroadcastFeedback = {
   text: string;
 };
 
+type CancelRefundProgress = {
+  loading: boolean;
+  totalPaid: number;
+  refunded: number;
+  error: boolean;
+};
+
+type RefundRequestStatus = "pending" | "approved" | "denied" | null;
+
+type GuestRefundTicket = {
+  ticketId: string;
+  ticketCode: string;
+  quantity: number;
+  amountCents?: number;
+  ticketStatus: string;
+  refundRequestStatus: RefundRequestStatus;
+  refundRequestId?: string;
+  guestReason?: string;
+  hostDecisionReason?: string;
+  isConfirmedTicket: boolean;
+  isRefunded: boolean;
+  isEligibleForRequest: boolean;
+  createdAtMs: number;
+};
+
 type HostTextToAttendeesInput = {
   eventId: string;
   message: string;
@@ -140,6 +174,7 @@ type TailgateDetail = {
   visibilityType: VisibilityType;
   capacity?: number;
   ticketPriceCents?: number;
+  ticketSalesCloseAt?: Date | null;
   currency: string;
   ticketsSold?: number;
   checkedInCount?: number;
@@ -198,6 +233,57 @@ const normalizedStatusMap: Record<string, AttendeeStatus> = {
   "not going": "Not Attending",
   declined: "Not Attending"
 };
+
+function normalizeTicketLifecycleStatus(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function isConfirmedPaidTicketStatus(status: string): boolean {
+  return status === "valid" || status === "checked_in" || status === "confirmed";
+}
+
+function isRefundedTicketStatus(status: string): boolean {
+  return (
+    status === "refunded" ||
+    status === "refund_processed" ||
+    status === "refund_succeeded"
+  );
+}
+
+function isPaidTicketStatus(status: string): boolean {
+  return (
+    isConfirmedPaidTicketStatus(status) ||
+    isRefundedTicketStatus(status) ||
+    status === "paid" ||
+    status === "purchase_succeeded"
+  );
+}
+
+function normalizeRefundRequestStatus(value: unknown): RefundRequestStatus {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return null;
+  if (
+    raw === "pending" ||
+    raw === "requested" ||
+    raw === "open" ||
+    raw === "awaiting_host"
+  ) {
+    return "pending";
+  }
+  if (
+    raw === "approved" ||
+    raw === "refunded" ||
+    raw === "processed" ||
+    raw === "completed" ||
+    raw === "succeeded"
+  ) {
+    return "approved";
+  }
+  if (raw === "denied" || raw === "declined" || raw === "rejected") {
+    return "denied";
+  }
+  return null;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -552,6 +638,92 @@ function resolveCoverImageUrls(data: Record<string, unknown>): string[] {
   return uniqueStrings([...singles, ...arrays]);
 }
 
+function isHttpUrl(value: string) {
+  return /^https?:\/\//i.test(value);
+}
+
+function inferMimeTypeFromValue(value: string) {
+  const lower = value.toLowerCase();
+  if (lower.includes(".png")) return "image/png";
+  if (lower.includes(".webp")) return "image/webp";
+  if (lower.includes(".gif")) return "image/gif";
+  if (lower.includes(".heic")) return "image/heic";
+  return "image/jpeg";
+}
+
+function toInlineImageUrl(urlValue: string) {
+  if (!isHttpUrl(urlValue)) return urlValue;
+
+  try {
+    const parsed = new URL(urlValue);
+    const isFirebaseStorageHost =
+      parsed.hostname === "firebasestorage.googleapis.com" ||
+      parsed.hostname === "storage.googleapis.com";
+    if (!isFirebaseStorageHost) return urlValue;
+
+    if (!parsed.searchParams.has("alt")) {
+      parsed.searchParams.set("alt", "media");
+    }
+    if (!parsed.searchParams.has("response-content-disposition")) {
+      parsed.searchParams.set("response-content-disposition", "inline");
+    }
+    if (!parsed.searchParams.has("response-content-type")) {
+      parsed.searchParams.set("response-content-type", inferMimeTypeFromValue(urlValue));
+    }
+
+    return parsed.toString();
+  } catch {
+    return urlValue;
+  }
+}
+
+function extractStoragePathFromValue(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  if (!isHttpUrl(trimmed)) {
+    return trimmed.replace(/^\/+/, "");
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    const oSegmentMatch = parsed.pathname.match(/\/o\/(.+)$/);
+    if (oSegmentMatch?.[1]) {
+      return decodeURIComponent(oSegmentMatch[1]);
+    }
+
+    if (parsed.hostname === "storage.googleapis.com") {
+      const segments = parsed.pathname.split("/").filter(Boolean);
+      if (segments.length >= 2) {
+        return decodeURIComponent(segments.slice(1).join("/"));
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function resolveTicketSalesCloseAt(
+  data: Record<string, unknown>,
+  startDateTime: Date | null
+): Date | null {
+  const direct =
+    normalizeDate(data.ticketSalesCloseAt) ??
+    normalizeDate(data.ticketSalesCutoffAt) ??
+    normalizeDate(data.salesCloseAt);
+  if (direct) return direct;
+
+  const daysBefore =
+    coerceNumber(data.ticketSalesCloseDaysBefore) ?? coerceNumber(data.ticketSalesCutoffDays);
+  if (typeof daysBefore !== "number" || !startDateTime) {
+    return null;
+  }
+
+  return new Date(startDateTime.getTime() - Math.max(0, daysBefore) * DAY_IN_MS);
+}
+
 function toDetailFromFirestore(id: string, data: Record<string, unknown>): TailgateDetail {
   const hostId = firstString(data.hostId, data.hostUserId, data.ownerId) ?? "";
   const hostName = firstString(data.hostName, data.displayName) ?? "Host";
@@ -567,6 +739,7 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     coerceNumber(data.ticketsSold) ??
     coerceNumber(data.rsvpsConfirmed) ??
     0;
+  const ticketSalesCloseAt = resolveTicketSalesCloseAt(data, startDateTime);
 
   return {
     id,
@@ -588,6 +761,7 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     visibilityType,
     capacity: coerceNumber(data.capacity),
     ticketPriceCents: priceCents,
+    ticketSalesCloseAt,
     currency: firstString(data.currency) ?? "USD",
     ticketsSold,
     checkedInCount: coerceNumber(data.checkedInCount),
@@ -641,6 +815,7 @@ function toDetailFromMock(event: TailgateEvent): TailgateDetail {
     visibilityType: event.visibilityType,
     capacity: event.capacity,
     ticketPriceCents: event.ticketPriceCents,
+    ticketSalesCloseAt: null,
     currency: "USD",
     ticketsSold: event.ticketsSold ?? event.rsvpsConfirmed ?? 0,
     checkedInCount: undefined,
@@ -669,6 +844,9 @@ export default function TailgateDetails() {
   const attendeeSectionRef = useRef<HTMLElement | null>(null);
   const timelineSectionRef = useRef<HTMLElement | null>(null);
   const eventSnapshotSectionRef = useRef<HTMLElement | null>(null);
+  const attemptedCoverImageResolutionRef = useRef<Set<string>>(new Set());
+  const attemptedCoverBlobFallbackRef = useRef<Set<string>>(new Set());
+  const createdCoverBlobUrlsRef = useRef<string[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -680,8 +858,13 @@ export default function TailgateDetails() {
   const [ticketCheckState, setTicketCheckState] = useState<TicketCheckState>("loading");
   const [hasConfirmedTicket, setHasConfirmedTicket] = useState(false);
   const [confirmedTicketCount, setConfirmedTicketCount] = useState(0);
-  const [ticketPurchaseCount, setTicketPurchaseCount] = useState(0);
-  const [hasPendingTickets, setHasPendingTickets] = useState(false);
+  const [guestRefundTickets, setGuestRefundTickets] = useState<GuestRefundTicket[]>([]);
+  const [guestRefundModalTicketId, setGuestRefundModalTicketId] = useState<string | null>(null);
+  const [guestRefundReason, setGuestRefundReason] = useState("");
+  const [guestRefundFeedback, setGuestRefundFeedback] = useState<{
+    tone: "success" | "error";
+    text: string;
+  } | null>(null);
   const [liveCheckedInCount, setLiveCheckedInCount] = useState<number | null>(null);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [timelineSteps, setTimelineSteps] = useState<TimelineStep[]>([]);
@@ -701,6 +884,21 @@ export default function TailgateDetails() {
   const [enablingTimeline, setEnablingTimeline] = useState(false);
   const [eventStartInput, setEventStartInput] = useState("09:00");
   const [activeCoverIndex, setActiveCoverIndex] = useState(0);
+  const [resolvedCoverImageUrlsByRaw, setResolvedCoverImageUrlsByRaw] = useState<
+    Record<string, string>
+  >({});
+  const [blobCoverImageUrlsByRaw, setBlobCoverImageUrlsByRaw] = useState<
+    Record<string, string>
+  >({});
+  const [loadedCoverImagesByKey, setLoadedCoverImagesByKey] = useState<Record<string, boolean>>(
+    {}
+  );
+  const [coverImageLoadErrorsByRaw, setCoverImageLoadErrorsByRaw] = useState<
+    Record<string, string>
+  >({});
+  const [recoveringCoverImageByRaw, setRecoveringCoverImageByRaw] = useState<
+    Record<string, boolean>
+  >({});
   const [isInlineEditing, setIsInlineEditing] = useState(false);
   const [inlineEditSaving, setInlineEditSaving] = useState(false);
   const [inlineEditError, setInlineEditError] = useState<string | null>(null);
@@ -727,6 +925,189 @@ export default function TailgateDetails() {
   const [hostBroadcastSending, setHostBroadcastSending] = useState(false);
   const [hostBroadcastFeedback, setHostBroadcastFeedback] =
     useState<HostBroadcastFeedback | null>(null);
+  const [isCancelTailgateModalOpen, setIsCancelTailgateModalOpen] = useState(false);
+  const [cancelTailgateSubmitting, setCancelTailgateSubmitting] = useState(false);
+  const [cancelTailgateFeedback, setCancelTailgateFeedback] = useState<{
+    tone: "success" | "error";
+    text: string;
+  } | null>(null);
+  const [cancelRefundProgress, setCancelRefundProgress] = useState<CancelRefundProgress | null>(
+    null
+  );
+  const rawCoverImageUrls = detail?.coverImageUrls ?? [];
+
+  const clearCreatedCoverBlobUrls = () => {
+    createdCoverBlobUrlsRef.current.forEach((blobUrl) => URL.revokeObjectURL(blobUrl));
+    createdCoverBlobUrlsRef.current = [];
+  };
+
+  const getDisplayCoverImageUrl = (rawUrl: string) => {
+    const normalized = rawUrl.trim();
+    const resolved =
+      blobCoverImageUrlsByRaw[rawUrl] ??
+      blobCoverImageUrlsByRaw[normalized] ??
+      resolvedCoverImageUrlsByRaw[rawUrl] ??
+      resolvedCoverImageUrlsByRaw[normalized] ??
+      normalized;
+    return toInlineImageUrl(resolved);
+  };
+
+  const canBrowserDecodeBlob = async (blob: Blob) =>
+    await new Promise<boolean>((resolve) => {
+      const objectUrl = URL.createObjectURL(blob);
+      const image = new Image();
+      image.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(true);
+      };
+      image.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(false);
+      };
+      image.src = objectUrl;
+    });
+
+  const blobLooksLikeHeif = async (blob: Blob) => {
+    try {
+      const buffer = await blob.slice(0, 128).arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      if (bytes.length < 12) return false;
+
+      const toAscii = (start: number, length: number) =>
+        Array.from(bytes.slice(start, start + length))
+          .map((byte) => String.fromCharCode(byte))
+          .join("");
+
+      const fileTypeBox = toAscii(4, 4).toLowerCase();
+      if (fileTypeBox !== "ftyp") return false;
+
+      const header = toAscii(8, Math.max(0, bytes.length - 8)).toLowerCase();
+      return /(heic|heix|hevc|heim|heis|mif1|msf1)/.test(header);
+    } catch {
+      return false;
+    }
+  };
+
+  const convertHeifBlobWithHeicTo = async (blob: Blob) => {
+    try {
+      const converterModule = await import("heic-to");
+      const convertHeic = converterModule.heicTo as (args: {
+        blob: Blob;
+        type: string;
+        quality?: number;
+      }) => Promise<Blob>;
+      const convertedBlob = await convertHeic({
+        blob,
+        type: "image/jpeg",
+        quality: 0.92
+      });
+      if (!(convertedBlob instanceof Blob)) return null;
+      const convertedDecodable = await canBrowserDecodeBlob(convertedBlob);
+      return convertedDecodable ? convertedBlob : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const convertHeifBlobWithHeic2Any = async (blob: Blob) => {
+    try {
+      const converterModule = await import("heic2any");
+      const convertHeicToAny = converterModule.default as (
+        options: Record<string, unknown>
+      ) => Promise<Blob | Blob[]>;
+      const converted = await convertHeicToAny({
+        blob,
+        toType: "image/jpeg",
+        quality: 0.92
+      });
+      const convertedBlob = Array.isArray(converted) ? converted[0] : converted;
+      if (!(convertedBlob instanceof Blob)) return null;
+      const convertedDecodable = await canBrowserDecodeBlob(convertedBlob);
+      return convertedDecodable ? convertedBlob : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const convertBlobToJpegIfNeeded = async (blob: Blob) => {
+    const alreadyDecodable = await canBrowserDecodeBlob(blob);
+    if (alreadyDecodable) return blob;
+    const looksLikeHeif = await blobLooksLikeHeif(blob);
+    if (!looksLikeHeif) return null;
+
+    const convertedWithHeicTo = await convertHeifBlobWithHeicTo(blob);
+    if (convertedWithHeicTo) return convertedWithHeicTo;
+
+    return await convertHeifBlobWithHeic2Any(blob);
+  };
+
+  const createCoverBlobFallback = async (rawUrl: string) => {
+    if (!firebaseStorage) return false;
+    const candidate = getDisplayCoverImageUrl(rawUrl);
+    const normalizedCandidate = candidate.trim();
+    if (!normalizedCandidate) return false;
+    if (normalizedCandidate.startsWith("blob:") || normalizedCandidate.startsWith("data:")) {
+      return false;
+    }
+    if (attemptedCoverBlobFallbackRef.current.has(normalizedCandidate)) return false;
+    attemptedCoverBlobFallbackRef.current.add(normalizedCandidate);
+
+    try {
+      const candidateStoragePath =
+        extractStoragePathFromValue(rawUrl) ?? extractStoragePathFromValue(normalizedCandidate);
+      let blob: Blob | null = null;
+
+      if (candidateStoragePath) {
+        try {
+          blob = await getBlob(ref(firebaseStorage, candidateStoragePath));
+        } catch {
+          blob = null;
+        }
+      }
+
+      if (!blob) {
+        const response = await fetch(normalizedCandidate);
+        if (!response.ok) return false;
+        blob = await response.blob();
+      }
+
+      if (blob.size <= 0) return false;
+      if (
+        blob.type.startsWith("text/") ||
+        blob.type.includes("json") ||
+        blob.type.includes("xml")
+      ) {
+        return false;
+      }
+
+      const typedBlob =
+        blob.type && blob.type.startsWith("image/")
+          ? blob
+          : new Blob([blob], { type: inferMimeTypeFromValue(normalizedCandidate) });
+      const renderableBlob = await convertBlobToJpegIfNeeded(typedBlob);
+      if (!(renderableBlob instanceof Blob)) return false;
+      const blobUrl = URL.createObjectURL(renderableBlob);
+      createdCoverBlobUrlsRef.current.push(blobUrl);
+
+      const normalizedRaw = rawUrl.trim();
+      setBlobCoverImageUrlsByRaw((previous) => ({
+        ...previous,
+        [rawUrl]: blobUrl,
+        [normalizedRaw]: blobUrl,
+        [normalizedCandidate]: blobUrl
+      }));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  useEffect(
+    () => () => {
+      clearCreatedCoverBlobUrls();
+    },
+    []
+  );
 
   useEffect(() => {
     if (!id) {
@@ -773,7 +1154,89 @@ export default function TailgateDetails() {
 
   useEffect(() => {
     setActiveCoverIndex(0);
+    attemptedCoverImageResolutionRef.current.clear();
+    attemptedCoverBlobFallbackRef.current.clear();
+    setResolvedCoverImageUrlsByRaw({});
+    setBlobCoverImageUrlsByRaw({});
+    setLoadedCoverImagesByKey({});
+    setCoverImageLoadErrorsByRaw({});
+    setRecoveringCoverImageByRaw({});
+    clearCreatedCoverBlobUrls();
   }, [detail?.id]);
+
+  useEffect(() => {
+    if (!firebaseStorage || rawCoverImageUrls.length === 0) return;
+    let isCancelled = false;
+
+    const uniqueRawUrls = Array.from(
+      new Set(
+        rawCoverImageUrls
+          .map((url) => url.trim())
+          .filter((url) => url.length > 0)
+      )
+    );
+
+    const urlsToResolve = uniqueRawUrls.filter((rawUrl) => {
+      if (resolvedCoverImageUrlsByRaw[rawUrl]) return false;
+      if (attemptedCoverImageResolutionRef.current.has(rawUrl)) return false;
+      if (!isHttpUrl(rawUrl)) return true;
+      return (
+        rawUrl.includes("firebasestorage.googleapis.com") ||
+        rawUrl.includes("storage.googleapis.com")
+      );
+    });
+    if (urlsToResolve.length === 0) return;
+
+    const resolveUrlFromStorage = async (rawUrl: string) => {
+      const normalized = rawUrl.replace(/^\/+/, "");
+      try {
+        if (!isHttpUrl(normalized)) {
+          return await getDownloadURL(ref(firebaseStorage, normalized));
+        }
+        if (
+          normalized.includes("firebasestorage.googleapis.com") ||
+          normalized.includes("storage.googleapis.com")
+        ) {
+          return await getDownloadURL(ref(firebaseStorage, normalized));
+        }
+        return normalized;
+      } catch {
+        return rawUrl;
+      }
+    };
+
+    const resolveUrls = async () => {
+      const mappedEntries = await Promise.all(
+        urlsToResolve.map(async (rawUrl) => {
+          attemptedCoverImageResolutionRef.current.add(rawUrl);
+          const resolvedUrl = await resolveUrlFromStorage(rawUrl);
+          return [rawUrl, resolvedUrl] as const;
+        })
+      );
+
+      if (isCancelled) return;
+      const nextMap: Record<string, string> = {};
+      mappedEntries.forEach(([rawUrl, resolvedUrl]) => {
+        if (!resolvedUrl) return;
+        const normalizedRaw = rawUrl.trim();
+        nextMap[rawUrl] = resolvedUrl;
+        nextMap[normalizedRaw] = resolvedUrl;
+      });
+
+      if (Object.keys(nextMap).length > 0) {
+        setResolvedCoverImageUrlsByRaw((previous) => ({
+          ...previous,
+          ...nextMap
+        }));
+      }
+    };
+
+    void resolveUrls();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [rawCoverImageUrls, resolvedCoverImageUrlsByRaw]);
 
   useEffect(() => {
     setIsInlineEditing(false);
@@ -851,6 +1314,10 @@ export default function TailgateDetails() {
     if (!detail || !user?.uid) return false;
     return detail.hostId === user.uid || detail.coHostIds.includes(user.uid);
   }, [detail, user?.uid]);
+  const eventStartForCancellation = detail?.startDateTime ?? detail?.eventTargetTime ?? null;
+  const hasEventStarted =
+    eventStartForCancellation instanceof Date &&
+    eventStartForCancellation.getTime() <= Date.now();
   const sendHostTextToAttendees = useMemo(() => {
     if (!firebaseApp) return null;
     return httpsCallable<HostTextToAttendeesInput, HostTextToAttendeesResponse>(
@@ -858,6 +1325,12 @@ export default function TailgateDetails() {
       "sendHostTextToAttendees"
     );
   }, []);
+  const {
+    createRefundRequest,
+    loading: createRefundRequestLoading,
+    error: createRefundRequestError,
+    clearError: clearCreateRefundRequestError
+  } = useCreateRefundRequest();
 
   const buildInlineEditDraft = (value: TailgateDetail): InlineEditDraft => {
     const start = value.startDateTime ?? value.eventTargetTime ?? new Date();
@@ -913,65 +1386,68 @@ export default function TailgateDetails() {
     setHostBroadcastMessage("");
     setHostBroadcastSending(false);
     setHostBroadcastFeedback(null);
+    setIsCancelTailgateModalOpen(false);
+    setCancelTailgateSubmitting(false);
+    setCancelTailgateFeedback(null);
+    setCancelRefundProgress(null);
   }, [detail?.id]);
+
+  useEffect(() => {
+    if (status !== "cancelled") return;
+    setIsCancelTailgateModalOpen(false);
+  }, [status]);
 
   useEffect(() => {
     setTicketQuantity(1);
     setCheckoutError(null);
+    setGuestRefundTickets([]);
+    setGuestRefundModalTicketId(null);
+    setGuestRefundReason("");
+    setGuestRefundFeedback(null);
+    clearCreateRefundRequestError();
   }, [detail?.id]);
+
+  useEffect(() => {
+    if (!guestRefundFeedback) return;
+    const timer = setTimeout(() => setGuestRefundFeedback(null), 4000);
+    return () => clearTimeout(timer);
+  }, [guestRefundFeedback]);
 
   useEffect(() => {
     if (!detail || detail.visibilityType !== "open_paid" || isHostUser) {
       setHasConfirmedTicket(true);
       setTicketCheckState("confirmed");
       setConfirmedTicketCount(0);
-      setTicketPurchaseCount(0);
-      setHasPendingTickets(false);
+      setGuestRefundTickets([]);
       return;
     }
     if (!user?.uid || !db) {
       setHasConfirmedTicket(false);
       setTicketCheckState("missing");
       setConfirmedTicketCount(0);
-      setTicketPurchaseCount(0);
-      setHasPendingTickets(false);
+      setGuestRefundTickets([]);
       return;
     }
 
     setTicketCheckState("loading");
     let newTicketCount = 0;
-    let purchaseCount = 0;
-    let pendingPurchaseCount = 0;
     let legacyConfirmedCount = 0;
-    let legacyPendingExists = false;
-    let legacyPurchaseCount = 0;
     let hasNewSnapshot = false;
-    let hasPurchaseSnapshot = false;
     let hasLegacySnapshot = false;
 
     const applyTicketState = () => {
-      if (!hasNewSnapshot || !hasPurchaseSnapshot || !hasLegacySnapshot) {
+      if (!hasNewSnapshot || !hasLegacySnapshot) {
         return;
       }
 
-      const useNewModel = newTicketCount > 0 || purchaseCount > 0;
+      const useNewModel = newTicketCount > 0;
       if (useNewModel) {
-        setTicketPurchaseCount(purchaseCount);
-        setHasPendingTickets(pendingPurchaseCount > 0);
-        if (newTicketCount > 0) {
-          setHasConfirmedTicket(true);
-          setTicketCheckState("confirmed");
-          setConfirmedTicketCount(newTicketCount);
-          return;
-        }
-        setHasConfirmedTicket(false);
-        setTicketCheckState(pendingPurchaseCount > 0 ? "pending" : "missing");
-        setConfirmedTicketCount(0);
+        setHasConfirmedTicket(true);
+        setTicketCheckState("confirmed");
+        setConfirmedTicketCount(newTicketCount);
         return;
       }
 
-      setTicketPurchaseCount(legacyPurchaseCount);
-      setHasPendingTickets(legacyPendingExists);
       if (legacyConfirmedCount > 0) {
         setHasConfirmedTicket(true);
         setTicketCheckState("confirmed");
@@ -979,19 +1455,17 @@ export default function TailgateDetails() {
         return;
       }
       setHasConfirmedTicket(false);
-      setTicketCheckState(legacyPendingExists ? "pending" : "missing");
+      setTicketCheckState("missing");
       setConfirmedTicketCount(0);
     };
+
+    const eventHasStarted =
+      detail.startDateTime instanceof Date && detail.startDateTime.getTime() <= Date.now();
 
     const newTicketsQuery = query(
       collection(db, "tickets"),
       where("tailgateId", "==", detail.id),
       where("attendeeUserId", "==", user.uid)
-    );
-    const purchasesQuery = query(
-      collection(db, "ticketPurchases"),
-      where("tailgateId", "==", detail.id),
-      where("buyerUserId", "==", user.uid)
     );
     const legacyTicketsQuery = query(
       collection(db, "tailgateTickets"),
@@ -1002,38 +1476,101 @@ export default function TailgateDetails() {
     const unsubscribeNew = onSnapshot(
       newTicketsQuery,
       (snapshot) => {
-        newTicketCount = snapshot.docs.filter((docSnap) => {
-          const statusValue = docSnap.get("status");
-          return statusValue === "valid" || statusValue === "checked_in";
-        }).length;
+        const tickets = snapshot.docs
+          .map((docSnap) => {
+            const data = docSnap.data() as Record<string, unknown>;
+            const ticketStatus = normalizeTicketLifecycleStatus(data.status);
+            const quantity = Math.max(1, Math.floor(coerceNumber(data.quantity) ?? 1));
+            const basePriceCents = coerceNumber(data.ticketPriceCents);
+            const amountCents =
+              coerceNumber(data.totalPaidCents) ??
+              coerceNumber(data.amountPaidCents) ??
+              coerceNumber(data.totalAmountCents) ??
+              (typeof basePriceCents === "number" ? basePriceCents * quantity : undefined);
+
+            const refundRecord = asRecord(data.refund);
+            const refundRequestRecord = asRecord(data.refundRequest);
+            const refundRequestStatus = normalizeRefundRequestStatus(
+              firstString(
+                data.refundRequestStatus,
+                data.refundStatus,
+                data.refundState,
+                refundRecord?.status,
+                refundRecord?.requestStatus,
+                refundRequestRecord?.status
+              )
+            );
+
+            const refundedAt = normalizeDate(
+              data.refundedAt ??
+                data.refundProcessedAt ??
+                refundRecord?.refundedAt ??
+                refundRequestRecord?.approvedAt
+            );
+            const isConfirmedTicket = isConfirmedPaidTicketStatus(ticketStatus);
+            const isRefunded =
+              isRefundedTicketStatus(ticketStatus) ||
+              refundRequestStatus === "approved" ||
+              refundedAt !== null;
+
+            const nextTicket: GuestRefundTicket = {
+              ticketId: docSnap.id,
+              ticketCode: firstString(data.ticketCode) ?? "—",
+              quantity,
+              amountCents,
+              ticketStatus,
+              refundRequestStatus,
+              refundRequestId: firstString(
+                data.refundRequestId,
+                refundRecord?.refundRequestId,
+                refundRecord?.requestId,
+                refundRequestRecord?.refundRequestId,
+                refundRequestRecord?.id
+              ),
+              guestReason: firstString(
+                data.refundGuestReason,
+                data.guestReason,
+                refundRecord?.guestReason,
+                refundRequestRecord?.guestReason
+              ),
+              hostDecisionReason: firstString(
+                data.refundHostDecisionReason,
+                data.hostDecisionReason,
+                data.refundDecisionReason,
+                refundRecord?.hostDecisionReason,
+                refundRequestRecord?.hostDecisionReason
+              ),
+              isConfirmedTicket,
+              isRefunded,
+              isEligibleForRequest:
+                isConfirmedTicket &&
+                !isRefunded &&
+                refundRequestStatus === null &&
+                !eventHasStarted,
+              createdAtMs:
+                normalizeDate(data.createdAt)?.getTime() ??
+                normalizeDate(data.updatedAt)?.getTime() ??
+                0
+            };
+            return nextTicket;
+          })
+          .sort((left, right) => right.createdAtMs - left.createdAtMs);
+
+        newTicketCount = tickets.filter((ticket) => ticket.isConfirmedTicket).length;
+        setGuestRefundTickets(tickets);
         hasNewSnapshot = true;
         applyTicketState();
       },
       (snapshotError) => {
         console.error("Ticket lookup failed", snapshotError);
+        setGuestRefundTickets([]);
         hasNewSnapshot = true;
-        applyTicketState();
-      }
-    );
-    const unsubscribePurchases = onSnapshot(
-      purchasesQuery,
-      (snapshot) => {
-        purchaseCount = snapshot.docs.filter((docSnap) => docSnap.get("status") !== "cancelled").length;
-        pendingPurchaseCount = snapshot.docs.filter((docSnap) => docSnap.get("status") === "pending").length;
-        hasPurchaseSnapshot = true;
-        applyTicketState();
-      },
-      (snapshotError) => {
-        console.error("Purchase lookup failed", snapshotError);
-        hasPurchaseSnapshot = true;
         applyTicketState();
       }
     );
     const unsubscribeLegacy = onSnapshot(
       legacyTicketsQuery,
       (snapshot) => {
-        legacyPurchaseCount = snapshot.docs.filter((docSnap) => docSnap.get("status") !== "cancelled").length;
-        legacyPendingExists = snapshot.docs.some((docSnap) => docSnap.get("status") === "pending");
         legacyConfirmedCount = snapshot.docs.reduce((sum, docSnap) => {
           const data = docSnap.data() || {};
           if (data?.status !== "confirmed") {
@@ -1054,7 +1591,6 @@ export default function TailgateDetails() {
 
     return () => {
       unsubscribeNew();
-      unsubscribePurchases();
       unsubscribeLegacy();
     };
   }, [detail, isHostUser, user?.uid]);
@@ -1135,14 +1671,40 @@ export default function TailgateDetails() {
   }, [detail, isHostUser]);
 
   const locationLabel = detail?.locationSummary ?? "Location not set";
-  const coverImageUrls = detail?.coverImageUrls ?? [];
+  const coverImageUrls = rawCoverImageUrls;
   const safeCoverIndex =
     coverImageUrls.length > 0
       ? Math.min(activeCoverIndex, coverImageUrls.length - 1)
       : 0;
-  const activeCoverImageUrl =
+  const activeCoverImageRaw =
     coverImageUrls[safeCoverIndex] ?? coverImageUrls[0] ?? null;
+  const activeCoverImageUrl = activeCoverImageRaw
+    ? getDisplayCoverImageUrl(activeCoverImageRaw)
+    : null;
   const hasMultipleCoverImages = coverImageUrls.length > 1;
+  const activeCoverImageErrorUrl = activeCoverImageRaw
+    ? coverImageLoadErrorsByRaw[activeCoverImageRaw] ??
+      coverImageLoadErrorsByRaw[activeCoverImageRaw.trim()] ??
+      null
+    : null;
+  const activeCoverImageLoadingKey =
+    activeCoverImageRaw && activeCoverImageUrl
+      ? `${activeCoverImageRaw}:${activeCoverImageUrl}`
+      : null;
+  const activeCoverImageLoaded = activeCoverImageLoadingKey
+    ? Boolean(loadedCoverImagesByKey[activeCoverImageLoadingKey])
+    : false;
+  const isRecoveringActiveCoverImage = activeCoverImageRaw
+    ? Boolean(
+        recoveringCoverImageByRaw[activeCoverImageRaw] ??
+          recoveringCoverImageByRaw[activeCoverImageRaw.trim()]
+      )
+    : false;
+  const hasActiveCoverImageLoadError = Boolean(activeCoverImageErrorUrl);
+  const showActiveCoverImageLoading =
+    Boolean(activeCoverImageUrl) &&
+    !activeCoverImageLoaded &&
+    (!hasActiveCoverImageLoadError || isRecoveringActiveCoverImage);
   const locationCoords = detail?.locationCoords ?? null;
   const mapUrl = locationCoords
     ? buildMapEmbedUrl(locationCoords, MAPS_API_KEY, locationLabel)
@@ -1191,6 +1753,7 @@ export default function TailgateDetails() {
   }, [detail?.expectations]);
 
   const ticketPriceCents = detail?.ticketPriceCents ?? 0;
+  const isPaidTailgate = detail?.visibilityType === "open_paid";
   const ticketsSold = detail?.ticketsSold ?? attendeeCounts.going;
   const checkedInCountForHost = liveCheckedInCount ?? detail?.checkedInCount;
   const payout = estimateHostPayout({
@@ -1208,6 +1771,10 @@ export default function TailgateDetails() {
   const capacityRemaining =
     capacity !== null ? Math.max(0, capacity - confirmedPaidCount) : null;
   const isSoldOut = capacityRemaining !== null && capacityRemaining <= 0;
+  const isTicketSalesClosed =
+    detail?.visibilityType === "open_paid" &&
+    detail.ticketSalesCloseAt instanceof Date &&
+    detail.ticketSalesCloseAt.getTime() <= Date.now();
   const maxSelectableQuantity =
     capacityRemaining !== null
       ? Math.max(1, Math.min(MAX_TICKET_QUANTITY, capacityRemaining))
@@ -1216,11 +1783,20 @@ export default function TailgateDetails() {
     detail?.visibilityType === "open_paid" &&
     !isHostUser &&
     status !== "cancelled";
+  const selectedGuestRefundTicket = useMemo(
+    () =>
+      guestRefundModalTicketId
+        ? guestRefundTickets.find((ticket) => ticket.ticketId === guestRefundModalTicketId) ?? null
+        : null,
+    [guestRefundModalTicketId, guestRefundTickets]
+  );
+  const canShowGuestRefundSection = showTicketPurchase && Boolean(user) && guestRefundTickets.length > 0;
   const canPurchaseTickets =
     showTicketPurchase &&
     Boolean(user) &&
     (ticketCheckState === "missing" || ticketCheckState === "confirmed") &&
-    !isSoldOut;
+    !isSoldOut &&
+    !isTicketSalesClosed;
   const totalTicketCents =
     typeof detail?.ticketPriceCents === "number"
       ? detail.ticketPriceCents * ticketQuantity
@@ -1237,6 +1813,8 @@ export default function TailgateDetails() {
   const ticketStatusMessage =
     isSoldOut
       ? "This tailgate is sold out."
+      : isTicketSalesClosed
+      ? "Ticket sales are closed for this event."
       : !user && showTicketPurchase
       ? "Sign in to purchase tickets."
       : ticketCheckState === "loading"
@@ -1245,8 +1823,6 @@ export default function TailgateDetails() {
       ? hasConfirmedTicket && confirmedTicketCount > 0
         ? `You already have ${confirmedTicketCount} ticket${confirmedTicketCount === 1 ? "" : "s"}.`
         : "Your tickets are confirmed."
-      : ticketCheckState === "pending"
-      ? "Payment received. Ticket confirmation is in progress."
       : "Continue to checkout to purchase tickets.";
   const timelineBaseEventTime = detail?.eventTargetTime ?? detail?.startDateTime ?? null;
   const hasTimelineSteps = timelineSteps.length > 0;
@@ -1262,6 +1838,9 @@ export default function TailgateDetails() {
   const timelinePublishLabel = detail?.schedulePublished
     ? "Schedule is visible to attendees."
     : "Schedule is hidden from attendees.";
+  const canEditCancelledEvent = status !== "cancelled";
+  const canOpenCheckIn = detail?.visibilityType === "open_paid" && status !== "cancelled";
+  const canShowWhosComingSection = detail?.visibilityType === "private";
   const canManageGuestInvites = isHostUser && detail?.visibilityType === "private";
   const hostBroadcastCharacterCount = hostBroadcastMessage.length;
   const canSendHostBroadcast =
@@ -1269,6 +1848,163 @@ export default function TailgateDetails() {
     hostBroadcastCharacterCount <= MAX_HOST_BROADCAST_MESSAGE_LENGTH &&
     !hostBroadcastSending &&
     Boolean(sendHostTextToAttendees);
+  const refundProgressMessage = useMemo(() => {
+    if (!isHostUser || !isPaidTailgate || status !== "cancelled") return null;
+    if (!cancelRefundProgress || cancelRefundProgress.loading) {
+      return "Refund status is being updated. This may take a few minutes.";
+    }
+    if (cancelRefundProgress.error) {
+      return "Refunds in progress. This may take a few minutes.";
+    }
+    if (cancelRefundProgress.totalPaid <= 0) {
+      return "No paid tickets were found for refund.";
+    }
+    if (cancelRefundProgress.refunded >= cancelRefundProgress.totalPaid) {
+      return `Refunds completed. ${cancelRefundProgress.totalPaid} ticket${
+        cancelRefundProgress.totalPaid === 1 ? "" : "s"
+      } refunded.`;
+    }
+    return `Refunds in progress. ${cancelRefundProgress.refunded} of ${
+      cancelRefundProgress.totalPaid
+    } ticket${cancelRefundProgress.totalPaid === 1 ? "" : "s"} refunded.`;
+  }, [cancelRefundProgress, isHostUser, isPaidTailgate, status]);
+
+  useEffect(() => {
+    if (!detail || !db || !isHostUser || !isPaidTailgate || status !== "cancelled") {
+      setCancelRefundProgress(null);
+      return;
+    }
+
+    setCancelRefundProgress({
+      loading: true,
+      totalPaid: 0,
+      refunded: 0,
+      error: false
+    });
+
+    let hasNewSnapshot = false;
+    let hasLegacySnapshot = false;
+    let newErrored = false;
+    let legacyErrored = false;
+    let newDocCount = 0;
+    let newTotalPaid = 0;
+    let newRefunded = 0;
+    let legacyTotalPaid = 0;
+    let legacyRefunded = 0;
+
+    const applyRefundProgress = () => {
+      if (!hasNewSnapshot || !hasLegacySnapshot) return;
+      const useNewModel = newDocCount > 0;
+      const totalPaid = useNewModel ? newTotalPaid : legacyTotalPaid;
+      const refunded = useNewModel ? newRefunded : legacyRefunded;
+      const errored = useNewModel ? newErrored : legacyErrored;
+      setCancelRefundProgress({
+        loading: false,
+        totalPaid,
+        refunded,
+        error: errored
+      });
+    };
+
+    const newTicketsQuery = query(
+      collection(db, "tickets"),
+      where("tailgateId", "==", detail.id)
+    );
+    const legacyTicketsQuery = query(
+      collection(db, "tailgateTickets"),
+      where("tailgateId", "==", detail.id)
+    );
+
+    const unsubscribeNew = onSnapshot(
+      newTicketsQuery,
+      (snapshot) => {
+        newDocCount = snapshot.size;
+        newTotalPaid = 0;
+        newRefunded = 0;
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data() as Record<string, unknown>;
+          const statusLabel = normalizeTicketLifecycleStatus(data.status);
+          const quantity = Math.max(1, Math.floor(coerceNumber(data.quantity) ?? 1));
+          const refundRecord = asRecord(data.refund);
+          const refundRequestRecord = asRecord(data.refundRequest);
+          const refundRequestStatus = normalizeRefundRequestStatus(
+            firstString(
+              data.refundRequestStatus,
+              data.refundStatus,
+              data.refundState,
+              refundRecord?.status,
+              refundRecord?.requestStatus,
+              refundRequestRecord?.status
+            )
+          );
+          const isRefunded =
+            isRefundedTicketStatus(statusLabel) || refundRequestStatus === "approved";
+          const isPaid = isPaidTicketStatus(statusLabel) || isRefunded;
+          if (isPaid) {
+            newTotalPaid += quantity;
+          }
+          if (isRefunded) {
+            newRefunded += quantity;
+          }
+        });
+        hasNewSnapshot = true;
+        applyRefundProgress();
+      },
+      (snapshotError) => {
+        console.error("Failed to load refund progress (new tickets)", snapshotError);
+        newErrored = true;
+        hasNewSnapshot = true;
+        applyRefundProgress();
+      }
+    );
+
+    const unsubscribeLegacy = onSnapshot(
+      legacyTicketsQuery,
+      (snapshot) => {
+        legacyTotalPaid = 0;
+        legacyRefunded = 0;
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data() as Record<string, unknown>;
+          const statusLabel = normalizeTicketLifecycleStatus(data.status);
+          const quantity = Math.max(1, Math.floor(coerceNumber(data.quantity) ?? 1));
+          const refundRecord = asRecord(data.refund);
+          const refundRequestStatus = normalizeRefundRequestStatus(
+            firstString(
+              data.refundRequestStatus,
+              data.refundStatus,
+              data.refundState,
+              refundRecord?.status,
+              refundRecord?.requestStatus
+            )
+          );
+          const paymentStatus = String(data.paymentStatus ?? "").trim().toLowerCase();
+          const paidFlag = data.paid === true || paymentStatus === "paid";
+          const isRefunded =
+            isRefundedTicketStatus(statusLabel) || refundRequestStatus === "approved";
+          const isPaid = statusLabel === "confirmed" || paidFlag || isRefunded;
+          if (isPaid) {
+            legacyTotalPaid += quantity;
+          }
+          if (isRefunded) {
+            legacyRefunded += quantity;
+          }
+        });
+        hasLegacySnapshot = true;
+        applyRefundProgress();
+      },
+      (snapshotError) => {
+        console.error("Failed to load refund progress (legacy tickets)", snapshotError);
+        legacyErrored = true;
+        hasLegacySnapshot = true;
+        applyRefundProgress();
+      }
+    );
+
+    return () => {
+      unsubscribeNew();
+      unsubscribeLegacy();
+    };
+  }, [db, detail, isHostUser, isPaidTailgate, status]);
 
   useEffect(() => {
     setTicketQuantity((current) =>
@@ -1276,8 +2012,21 @@ export default function TailgateDetails() {
     );
   }, [maxSelectableQuantity]);
 
+  useEffect(() => {
+    if (status !== "cancelled") return;
+    if (!isInlineEditing) return;
+    setIsInlineEditing(false);
+    setInlineEditError("Cancelled events can't be edited.");
+  }, [isInlineEditing, status]);
+
   const openInlineEventEditor = (scrollToSection = false) => {
     if (!detail) return;
+    if (status === "cancelled") {
+      setInlineEditError("Cancelled events can't be edited.");
+      setInlineEditSuccess(null);
+      setIsInlineEditing(false);
+      return;
+    }
     setInlineEditDraft(buildInlineEditDraft(detail));
     setInlineEditError(null);
     setInlineEditSuccess(null);
@@ -1302,6 +2051,10 @@ export default function TailgateDetails() {
   const saveInlineEventDetails = async () => {
     if (!db || !id || !detail) {
       setInlineEditError("Inline editing is unavailable right now.");
+      return;
+    }
+    if (status === "cancelled") {
+      setInlineEditError("Cancelled events can't be edited.");
       return;
     }
 
@@ -1408,12 +2161,51 @@ export default function TailgateDetails() {
     );
   };
 
+  const handleActiveCoverImageError = (rawUrl: string, renderedUrl: string) => {
+    const normalizedRaw = rawUrl.trim();
+    setRecoveringCoverImageByRaw((previous) => ({
+      ...previous,
+      [rawUrl]: true,
+      [normalizedRaw]: true
+    }));
+
+    void (async () => {
+      const recovered = await createCoverBlobFallback(rawUrl);
+      setRecoveringCoverImageByRaw((previous) => {
+        const next = { ...previous };
+        delete next[rawUrl];
+        delete next[normalizedRaw];
+        return next;
+      });
+
+      if (recovered) {
+        setCoverImageLoadErrorsByRaw((previous) => {
+          const next = { ...previous };
+          delete next[rawUrl];
+          delete next[normalizedRaw];
+          return next;
+        });
+        return;
+      }
+
+      setCoverImageLoadErrorsByRaw((previous) => ({
+        ...previous,
+        [rawUrl]: renderedUrl,
+        [normalizedRaw]: renderedUrl
+      }));
+    })();
+  };
+
   const handleCheckoutPress = async () => {
     if (!detail || !canPurchaseTickets || isCheckoutLoading) {
       return;
     }
     if (!user) {
       setCheckoutError("Please sign in to purchase tickets.");
+      return;
+    }
+    if (isTicketSalesClosed) {
+      setCheckoutError("Ticket sales are closed for this event.");
       return;
     }
     if (!firebaseFunctions) {
@@ -1467,6 +2259,8 @@ export default function TailgateDetails() {
 
       if (message.includes("SOLD_OUT")) {
         setCheckoutError("This tailgate is sold out.");
+      } else if (message.includes("SALES_CLOSED")) {
+        setCheckoutError("Ticket sales are closed for this event.");
       } else if (message.includes("unauthenticated")) {
         setCheckoutError("Please sign in again.");
       } else {
@@ -1474,6 +2268,61 @@ export default function TailgateDetails() {
       }
     } finally {
       setIsCheckoutLoading(false);
+    }
+  };
+
+  const openGuestRefundModal = (ticketId: string) => {
+    setGuestRefundModalTicketId(ticketId);
+    setGuestRefundReason("");
+    setGuestRefundFeedback(null);
+    clearCreateRefundRequestError();
+  };
+
+  const closeGuestRefundModal = () => {
+    if (createRefundRequestLoading) return;
+    setGuestRefundModalTicketId(null);
+    setGuestRefundReason("");
+    clearCreateRefundRequestError();
+  };
+
+  const submitGuestRefundRequest = async () => {
+    if (!selectedGuestRefundTicket || createRefundRequestLoading) {
+      return;
+    }
+
+    try {
+      const result = await createRefundRequest({
+        ticketId: selectedGuestRefundTicket.ticketId,
+        guestReason: guestRefundReason.trim() || undefined
+      });
+
+      setGuestRefundTickets((previous) =>
+        previous.map((ticket) =>
+          ticket.ticketId === selectedGuestRefundTicket.ticketId
+            ? {
+                ...ticket,
+                refundRequestStatus: "pending",
+                refundRequestId:
+                  result?.refundRequestId ?? ticket.refundRequestId ?? `pending-${ticket.ticketId}`,
+                guestReason: guestRefundReason.trim() || ticket.guestReason,
+                isEligibleForRequest: false
+              }
+            : ticket
+        )
+      );
+      setGuestRefundFeedback({
+        tone: "success",
+        text: "Refund requested • Waiting for host decision."
+      });
+      setGuestRefundModalTicketId(null);
+      setGuestRefundReason("");
+      clearCreateRefundRequestError();
+    } catch (requestError) {
+      console.error("Failed to request refund", requestError);
+      setGuestRefundFeedback({
+        tone: "error",
+        text: "Unable to process refund. Try again."
+      });
     }
   };
 
@@ -1520,21 +2369,50 @@ export default function TailgateDetails() {
     );
   };
 
+  const openCancelTailgateModal = () => {
+    if (!isHostUser || status === "cancelled" || cancelTailgateSubmitting || hasEventStarted) return;
+    setIsCancelTailgateModalOpen(true);
+  };
+
+  const closeCancelTailgateModal = () => {
+    if (cancelTailgateSubmitting) return;
+    setIsCancelTailgateModalOpen(false);
+  };
+
   const cancelTailgate = async () => {
     if (!detail || !id || !db) return;
-    const ok = window.confirm(
-      "Cancel this tailgate? Guests will see that this event is cancelled."
-    );
-    if (!ok) return;
+    if (!isHostUser || cancelTailgateSubmitting || status === "cancelled") return;
+    if (hasEventStarted) {
+      setCancelTailgateFeedback({
+        tone: "error",
+        text: "Events cannot be cancelled after the start time."
+      });
+      setIsCancelTailgateModalOpen(false);
+      return;
+    }
 
+    setCancelTailgateSubmitting(true);
+    setCancelTailgateFeedback(null);
     try {
       await updateDoc(doc(db, "tailgateEvents", id), {
         status: "cancelled",
-        cancelledAt: new Date()
+        cancelledAt: serverTimestamp()
+      });
+      setIsCancelTailgateModalOpen(false);
+      setCancelTailgateFeedback({
+        tone: "success",
+        text: isPaidTailgate
+          ? "Tailgate cancelled. Refunds are now processing automatically."
+          : "Tailgate cancelled."
       });
     } catch (cancelError) {
       console.error("Failed to cancel tailgate", cancelError);
-      window.alert("Unable to cancel tailgate right now.");
+      setCancelTailgateFeedback({
+        tone: "error",
+        text: "Unable to cancel event. Try again."
+      });
+    } finally {
+      setCancelTailgateSubmitting(false);
     }
   };
 
@@ -1944,6 +2822,101 @@ export default function TailgateDetails() {
     }
   };
 
+  const cancelConfirmationMessage = isPaidTailgate
+    ? "Are you sure you want to cancel? All tickets purchased for this event will be fully refunded."
+    : "Are you sure you want to cancel this tailgate?";
+  const canCancelTailgate = !hasEventStarted && status !== "cancelled" && !cancelTailgateSubmitting;
+
+  const cancelTailgateModal =
+    isHostUser && detail && isCancelTailgateModalOpen ? (
+      <div className="create-wizard-modal-overlay" role="dialog" aria-modal="true">
+        <div className="create-wizard-modal create-wizard-refund-modal tailgate-details-cancel-modal">
+          <div className="create-wizard-modal-header">
+            <h3>Cancel tailgate?</h3>
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={closeCancelTailgateModal}
+              disabled={cancelTailgateSubmitting}
+            >
+              Close
+            </button>
+          </div>
+          <p className="tailgate-details-cancel-modal-copy">{cancelConfirmationMessage}</p>
+          <div className="create-wizard-payout-actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => void cancelTailgate()}
+              disabled={!canCancelTailgate}
+            >
+              {cancelTailgateSubmitting ? "Cancelling..." : "Confirm cancel"}
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={closeCancelTailgateModal}
+              disabled={cancelTailgateSubmitting}
+            >
+              Keep event
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null;
+
+  const guestRefundModal = selectedGuestRefundTicket ? (
+    <div className="create-wizard-modal-overlay" role="dialog" aria-modal="true">
+      <div className="create-wizard-modal create-wizard-refund-modal">
+        <div className="create-wizard-modal-header">
+          <h3>Request a refund</h3>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={closeGuestRefundModal}
+            disabled={createRefundRequestLoading}
+          >
+            Close
+          </button>
+        </div>
+        <p className="meta-muted">
+          Ticket {selectedGuestRefundTicket.ticketCode} · Qty {selectedGuestRefundTicket.quantity}
+        </p>
+        <label className="input-group">
+          <span className="input-label">Reason (optional)</span>
+          <textarea
+            className="text-input tailgate-details-host-broadcast-input"
+            rows={4}
+            value={guestRefundReason}
+            onChange={(event) => setGuestRefundReason(event.target.value)}
+            placeholder="Share details for the host."
+          />
+        </label>
+        {createRefundRequestError ? (
+          <p className="tailgate-details-ticket-error">Unable to process refund. Try again.</p>
+        ) : null}
+        <div className="create-wizard-payout-actions">
+          <button
+            type="button"
+            className="primary-button"
+            disabled={createRefundRequestLoading}
+            onClick={() => void submitGuestRefundRequest()}
+          >
+            {createRefundRequestLoading ? "Submitting..." : "Submit request"}
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={createRefundRequestLoading}
+            onClick={closeGuestRefundModal}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   const pageContent = loading ? (
         <section className="tailgate-details-stack">
           <div className="tailgate-card skeleton" />
@@ -1966,6 +2939,22 @@ export default function TailgateDetails() {
               Checkout was canceled. You can try again whenever you're ready.
             </section>
           ) : null}
+          {cancelTailgateFeedback ? (
+            <section
+              className={`tailgate-details-checkout-banner cancel-feedback${
+                cancelTailgateFeedback.tone === "success"
+                  ? " cancel-feedback-success"
+                  : " cancel-feedback-error"
+              }`}
+            >
+              {cancelTailgateFeedback.text}
+            </section>
+          ) : null}
+          {refundProgressMessage ? (
+            <section className="tailgate-details-checkout-banner cancel-refund-info">
+              {refundProgressMessage}
+            </section>
+          ) : null}
 
           {isHostUser ? (
             <article className="tailgate-details-card tailgate-details-actions-hub">
@@ -1979,19 +2968,17 @@ export default function TailgateDetails() {
                 <button
                   className="tailgate-details-action-card is-primary"
                   onClick={() => openInlineEventEditor(true)}
-                  disabled={!db}
+                  disabled={!db || !canEditCancelledEvent}
                 >
                   <strong>{isInlineEditing ? "Editing event details" : "Edit event details"}</strong>
                   <small>Update name, kickoff, pricing, and meetup details inline</small>
                 </button>
-                <button className="tailgate-details-action-card" onClick={scrollToAttendees}>
-                  <strong>{detail.visibilityType === "open_paid" ? "View ticket holders" : "View guest list"}</strong>
-                  <small>
-                    {detail.visibilityType === "open_paid"
-                      ? "Review ticket and RSVP status"
-                      : "Review invites and RSVPs"}
-                  </small>
-                </button>
+                {canShowWhosComingSection ? (
+                  <button className="tailgate-details-action-card" onClick={scrollToAttendees}>
+                    <strong>View guest list</strong>
+                    <small>Review invites and RSVPs</small>
+                  </button>
+                ) : null}
                 <button
                   className="tailgate-details-action-card"
                   onClick={() => {
@@ -2024,9 +3011,14 @@ export default function TailgateDetails() {
                   <button
                     className="tailgate-details-action-card"
                     onClick={() => navigate(`/tailgates/${detail.id}/checkin`)}
+                    disabled={!canOpenCheckIn}
                   >
                     <strong>Check-in by code</strong>
-                    <small>Enter ticket codes from the host list</small>
+                    <small>
+                      {canOpenCheckIn
+                        ? "Enter ticket codes from the host list"
+                        : "Check-in is unavailable for cancelled events"}
+                    </small>
                   </button>
                 ) : null}
                 <button
@@ -2109,12 +3101,28 @@ export default function TailgateDetails() {
                   ) : null}
                 </div>
               ) : null}
-              {status !== "cancelled" ? (
-                <button className="tailgate-details-control-row danger" onClick={() => void cancelTailgate()}>
-                  <span>Cancel tailgate</span>
-                  <small>Notify all guests the event is cancelled</small>
-                </button>
-              ) : null}
+              <button
+                className="tailgate-details-control-row danger"
+                onClick={openCancelTailgateModal}
+                disabled={!canCancelTailgate}
+              >
+                <span>
+                  {status === "cancelled"
+                    ? "Tailgate cancelled"
+                    : hasEventStarted
+                    ? "Cancellation unavailable"
+                    : cancelTailgateSubmitting
+                    ? "Cancelling..."
+                    : "Cancel tailgate"}
+                </span>
+                <small>
+                  {status === "cancelled"
+                    ? "This event is already cancelled"
+                    : hasEventStarted
+                    ? "This event has already started"
+                    : "Notify all guests the event is cancelled"}
+                </small>
+              </button>
             </article>
           ) : null}
 
@@ -2127,7 +3135,57 @@ export default function TailgateDetails() {
                 </span>
               </div>
               <div className="tailgate-details-carousel-viewport">
-                <img src={activeCoverImageUrl} alt={`${detail.eventName} cover`} loading="lazy" />
+                {showActiveCoverImageLoading ? (
+                  <span className="tailgate-details-carousel-image-loading" aria-hidden="true">
+                    <span className="tailgate-details-carousel-image-spinner" />
+                  </span>
+                ) : null}
+                {hasActiveCoverImageLoadError && !isRecoveringActiveCoverImage ? (
+                  <span className="tailgate-details-carousel-image-fallback">
+                    Image unavailable.{" "}
+                    <a
+                      href={activeCoverImageErrorUrl ?? activeCoverImageUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Open image
+                    </a>
+                  </span>
+                ) : null}
+                <img
+                  className={`tailgate-details-carousel-image${
+                    showActiveCoverImageLoading ? " is-loading" : ""
+                  }`}
+                  src={activeCoverImageUrl}
+                  alt={`${detail.eventName} cover`}
+                  loading="lazy"
+                  onLoad={() => {
+                    if (!activeCoverImageRaw) return;
+                    const normalizedRaw = activeCoverImageRaw.trim();
+                    setRecoveringCoverImageByRaw((previous) => {
+                      const next = { ...previous };
+                      delete next[activeCoverImageRaw];
+                      delete next[normalizedRaw];
+                      return next;
+                    });
+                    if (activeCoverImageLoadingKey) {
+                      setLoadedCoverImagesByKey((previous) => {
+                        if (previous[activeCoverImageLoadingKey]) return previous;
+                        return { ...previous, [activeCoverImageLoadingKey]: true };
+                      });
+                    }
+                    setCoverImageLoadErrorsByRaw((previous) => {
+                      const next = { ...previous };
+                      delete next[activeCoverImageRaw];
+                      delete next[normalizedRaw];
+                      return next;
+                    });
+                  }}
+                  onError={() => {
+                    if (!activeCoverImageRaw || !activeCoverImageUrl) return;
+                    handleActiveCoverImageError(activeCoverImageRaw, activeCoverImageUrl);
+                  }}
+                />
                 {hasMultipleCoverImages ? (
                   <>
                     <button
@@ -2221,22 +3279,6 @@ export default function TailgateDetails() {
                 </div>
               </div>
               <div className="tailgate-details-metric-grid">
-                <div className="tailgate-details-metric-card">
-                  <p>Invited</p>
-                  <strong>{attendeeCounts.nonHost}</strong>
-                </div>
-                <div className="tailgate-details-metric-card">
-                  <p>Going</p>
-                  <strong>{attendeeCounts.going}</strong>
-                </div>
-                <div className="tailgate-details-metric-card">
-                  <p>Pending</p>
-                  <strong>{attendeeCounts.pending}</strong>
-                </div>
-                <div className="tailgate-details-metric-card">
-                  <p>Not Going</p>
-                  <strong>{attendeeCounts.notGoing}</strong>
-                </div>
                 {detail.visibilityType === "open_paid" ? (
                   <>
                     <div className="tailgate-details-metric-card">
@@ -2256,12 +3298,32 @@ export default function TailgateDetails() {
                       <strong>{formatCurrencyFromCents(payout.payout)}</strong>
                     </div>
                   </>
-                ) : detail.capacity ? (
-                  <div className="tailgate-details-metric-card">
-                    <p>Capacity</p>
-                    <strong>{detail.capacity}</strong>
-                  </div>
-                ) : null}
+                ) : (
+                  <>
+                    <div className="tailgate-details-metric-card">
+                      <p>Invited</p>
+                      <strong>{attendeeCounts.nonHost}</strong>
+                    </div>
+                    <div className="tailgate-details-metric-card">
+                      <p>Going</p>
+                      <strong>{attendeeCounts.going}</strong>
+                    </div>
+                    <div className="tailgate-details-metric-card">
+                      <p>Pending</p>
+                      <strong>{attendeeCounts.pending}</strong>
+                    </div>
+                    <div className="tailgate-details-metric-card">
+                      <p>Not Going</p>
+                      <strong>{attendeeCounts.notGoing}</strong>
+                    </div>
+                    {detail.capacity ? (
+                      <div className="tailgate-details-metric-card">
+                        <p>Capacity</p>
+                        <strong>{detail.capacity}</strong>
+                      </div>
+                    ) : null}
+                  </>
+                )}
               </div>
             </article>
           ) : null}
@@ -2279,7 +3341,7 @@ export default function TailgateDetails() {
                   onClick={() =>
                     isInlineEditing ? cancelInlineEventEditor() : openInlineEventEditor(false)
                   }
-                  disabled={!db || inlineEditSaving}
+                  disabled={!db || inlineEditSaving || !canEditCancelledEvent}
                 >
                   {isInlineEditing ? "Cancel edit" : "Edit inline"}
                 </button>
@@ -2456,12 +3518,7 @@ export default function TailgateDetails() {
                   </span>
                 </div>
                 <p className="tailgate-details-ticket-copy">{ticketStatusMessage}</p>
-                {ticketPurchaseCount > 0 || hasPendingTickets ? (
-                  <p className="tailgate-details-ticket-copy app-note">
-                    Purchase detected. Open the TailgateTime app to view your tickets.
-                  </p>
-                ) : null}
-                {!user && !isSoldOut ? (
+                {!user && !isSoldOut && !isTicketSalesClosed ? (
                   <button
                     type="button"
                     className="primary-button"
@@ -2517,6 +3574,89 @@ export default function TailgateDetails() {
                   </div>
                 ) : null}
                 {checkoutError ? <p className="tailgate-details-ticket-error">{checkoutError}</p> : null}
+                {canShowGuestRefundSection ? (
+                  <div className="tailgate-details-refund-block">
+                    <div className="tailgate-details-ticket-row">
+                      <p className="tailgate-details-ticket-title">Refunds</p>
+                    </div>
+                    <div className="tailgate-details-refund-list">
+                      {guestRefundTickets.map((ticket) => {
+                        const refundStatusLabel =
+                          ticket.refundRequestStatus === "pending"
+                            ? "Pending"
+                            : ticket.refundRequestStatus === "approved"
+                            ? "Approved"
+                            : ticket.refundRequestStatus === "denied"
+                            ? "Denied"
+                            : ticket.isRefunded
+                            ? "Approved"
+                            : "Confirmed";
+                        const refundStatusChipClass =
+                          ticket.refundRequestStatus === "pending"
+                            ? "chip-upcoming"
+                            : ticket.refundRequestStatus === "denied"
+                            ? "chip-cancelled"
+                            : ticket.refundRequestStatus === "approved" || ticket.isRefunded
+                            ? "chip-live"
+                            : "chip-outline";
+
+                        return (
+                          <div className="tailgate-details-refund-row" key={ticket.ticketId}>
+                            <div>
+                              <p className="tailgate-details-attendee-name">
+                                Ticket {ticket.ticketCode} · Qty {ticket.quantity}
+                              </p>
+                              {ticket.refundRequestStatus === "pending" ? (
+                                <p className="tailgate-details-refund-status-copy">
+                                  Refund requested • Waiting for host decision.
+                                </p>
+                              ) : ticket.refundRequestStatus === "approved" || ticket.isRefunded ? (
+                                <p className="tailgate-details-refund-status-copy">Refund approved.</p>
+                              ) : ticket.refundRequestStatus === "denied" ? (
+                                <p className="tailgate-details-ticket-error">
+                                  Refund denied.
+                                </p>
+                              ) : (
+                                <p className="tailgate-details-refund-status-copy">
+                                  Ticket confirmed.
+                                </p>
+                              )}
+                              {ticket.hostDecisionReason?.trim() ? (
+                                <p className="tailgate-details-refund-host-note">
+                                  Host note: {ticket.hostDecisionReason}
+                                </p>
+                              ) : null}
+                            </div>
+                            <div className="tailgate-details-refund-row-actions">
+                              <span className={`chip ${refundStatusChipClass}`}>{refundStatusLabel}</span>
+                              {ticket.isEligibleForRequest ? (
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  disabled={createRefundRequestLoading}
+                                  onClick={() => openGuestRefundModal(ticket.ticketId)}
+                                >
+                                  Request refund
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {guestRefundFeedback?.tone === "success" ? (
+                      <p className="tailgate-details-inline-editor-success">
+                        {guestRefundFeedback.text}
+                      </p>
+                    ) : null}
+                    {guestRefundFeedback?.tone === "error" ? (
+                      <p className="tailgate-details-ticket-error">{guestRefundFeedback.text}</p>
+                    ) : null}
+                    {createRefundRequestError ? (
+                      <p className="tailgate-details-ticket-error">Unable to process refund. Try again.</p>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </article>
@@ -2797,146 +3937,156 @@ export default function TailgateDetails() {
             )}
           </article>
 
-          <article className="tailgate-details-card" ref={attendeeSectionRef}>
-            <div className="section-header">
-              <div>
-                <h2>Who's Going</h2>
-                <p className="section-subtitle">Filter by RSVP status.</p>
+          {canShowWhosComingSection ? (
+            <article className="tailgate-details-card" ref={attendeeSectionRef}>
+              <div className="section-header">
+                <div>
+                  <h2>Who's Going</h2>
+                  <p className="section-subtitle">Filter by RSVP status.</p>
+                </div>
               </div>
-            </div>
-            {isHostUser ? (
-              <div className="tailgate-details-attendee-invite">
-                {canManageGuestInvites ? (
-                  <>
-                    <p className="tailgate-details-attendee-invite-title">Invite guest</p>
-                    <p className="tailgate-details-attendee-invite-copy">
-                      Add invitees directly from the event details screen.
-                    </p>
-                    <div className="tailgate-details-attendee-invite-grid">
-                      <label className="input-group">
-                        <span className="input-label">Guest name</span>
-                        <input
-                          className="text-input"
-                          value={guestInviteDraft.name}
-                          onChange={(event) =>
-                            setGuestInviteDraft((previous) => ({
-                              ...previous,
-                              name: event.target.value
-                            }))
-                          }
-                          placeholder="Jane Doe"
-                        />
-                      </label>
-                      <label className="input-group">
-                        <span className="input-label">Phone (optional)</span>
-                        <input
-                          className="text-input"
-                          value={guestInviteDraft.phone}
-                          onChange={(event) =>
-                            setGuestInviteDraft((previous) => ({
-                              ...previous,
-                              phone: formatPhoneInput(event.target.value)
-                            }))
-                          }
-                          placeholder="(555) 555-5555"
-                          inputMode="tel"
-                        />
-                      </label>
-                      <label className="input-group">
-                        <span className="input-label">Email (optional)</span>
-                        <input
-                          className="text-input"
-                          value={guestInviteDraft.email}
-                          onChange={(event) =>
-                            setGuestInviteDraft((previous) => ({
-                              ...previous,
-                              email: event.target.value
-                            }))
-                          }
-                          placeholder="jane@example.com"
-                          inputMode="email"
-                        />
-                      </label>
-                    </div>
-                    <div className="tailgate-details-attendee-invite-actions">
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => void addGuestInvite()}
-                        disabled={guestInviteSaving}
-                      >
-                        {guestInviteSaving ? "Adding..." : "Add guest"}
-                      </button>
-                      {guestInviteError ? (
-                        <p className="tailgate-details-ticket-error">{guestInviteError}</p>
-                      ) : null}
-                      {guestInviteSuccess ? (
-                        <p className="tailgate-details-inline-editor-success">
-                          {guestInviteSuccess}
-                        </p>
-                      ) : null}
-                    </div>
-                  </>
-                ) : (
-                  <p className="meta-muted">
-                    Manual guest invites are available for invite-only tailgates.
-                  </p>
-                )}
-              </div>
-            ) : null}
-            <div className="tailgate-details-filter-row">
-              {([
-                { key: "All", label: `All (${attendeeCounts.nonHost})` },
-                { key: "Going", label: `Going (${attendeeCounts.going})` },
-                { key: "Pending", label: `Pending (${attendeeCounts.pending})` },
-                { key: "Not Going", label: `Not Going (${attendeeCounts.notGoing})` }
-              ] as Array<{ key: AttendeeFilterKey; label: string }>).map((filter) => (
-                <button
-                  key={filter.key}
-                  className={`tailgate-details-filter-chip${
-                    attendeeFilter === filter.key ? " is-active" : ""
-                  }`}
-                  onClick={() => setAttendeeFilter(filter.key)}
-                >
-                  {filter.label}
-                </button>
-              ))}
-            </div>
-            <div className="tailgate-details-attendee-list">
-              {filteredAttendees.length > 0 ? (
-                filteredAttendees.map((attendee) => {
-                  const meta = attendeeStatusMeta[attendee.status];
-                  const attendeeContact = [attendee.email, attendee.phone]
-                    .map((value) => value?.trim())
-                    .filter((value): value is string => Boolean(value))
-                    .join(" · ");
-                  return (
-                    <div className="tailgate-details-attendee-row" key={attendee.id}>
-                      <div>
-                        <p className="tailgate-details-attendee-name">{attendee.name}</p>
-                        {attendeeContact ? (
-                          <p className="tailgate-details-attendee-meta">{attendeeContact}</p>
+              {isHostUser ? (
+                <div className="tailgate-details-attendee-invite">
+                  {canManageGuestInvites ? (
+                    <>
+                      <p className="tailgate-details-attendee-invite-title">Invite guest</p>
+                      <p className="tailgate-details-attendee-invite-copy">
+                        Add invitees directly from the event details screen.
+                      </p>
+                      <div className="tailgate-details-attendee-invite-grid">
+                        <label className="input-group">
+                          <span className="input-label">Guest name</span>
+                          <input
+                            className="text-input"
+                            value={guestInviteDraft.name}
+                            onChange={(event) =>
+                              setGuestInviteDraft((previous) => ({
+                                ...previous,
+                                name: event.target.value
+                              }))
+                            }
+                            placeholder="Jane Doe"
+                          />
+                        </label>
+                        <label className="input-group">
+                          <span className="input-label">Phone (optional)</span>
+                          <input
+                            className="text-input"
+                            value={guestInviteDraft.phone}
+                            onChange={(event) =>
+                              setGuestInviteDraft((previous) => ({
+                                ...previous,
+                                phone: formatPhoneInput(event.target.value)
+                              }))
+                            }
+                            placeholder="(555) 555-5555"
+                            inputMode="tel"
+                          />
+                        </label>
+                        <label className="input-group">
+                          <span className="input-label">Email (optional)</span>
+                          <input
+                            className="text-input"
+                            value={guestInviteDraft.email}
+                            onChange={(event) =>
+                              setGuestInviteDraft((previous) => ({
+                                ...previous,
+                                email: event.target.value
+                              }))
+                            }
+                            placeholder="jane@example.com"
+                            inputMode="email"
+                          />
+                        </label>
+                      </div>
+                      <div className="tailgate-details-attendee-invite-actions">
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => void addGuestInvite()}
+                          disabled={guestInviteSaving}
+                        >
+                          {guestInviteSaving ? "Adding..." : "Add guest"}
+                        </button>
+                        {guestInviteError ? (
+                          <p className="tailgate-details-ticket-error">{guestInviteError}</p>
+                        ) : null}
+                        {guestInviteSuccess ? (
+                          <p className="tailgate-details-inline-editor-success">
+                            {guestInviteSuccess}
+                          </p>
                         ) : null}
                       </div>
-                      <span className={`chip ${meta.className}`}>{meta.label}</span>
-                    </div>
-                  );
-                })
-              ) : (
-                <p className="meta-muted">No attendees for this filter yet.</p>
-              )}
-            </div>
-          </article>
+                    </>
+                  ) : (
+                    <p className="meta-muted">
+                      Manual guest invites are available for invite-only tailgates.
+                    </p>
+                  )}
+                </div>
+              ) : null}
+              <div className="tailgate-details-filter-row">
+                {([
+                  { key: "All", label: `All (${attendeeCounts.nonHost})` },
+                  { key: "Going", label: `Going (${attendeeCounts.going})` },
+                  { key: "Pending", label: `Pending (${attendeeCounts.pending})` },
+                  { key: "Not Going", label: `Not Going (${attendeeCounts.notGoing})` }
+                ] as Array<{ key: AttendeeFilterKey; label: string }>).map((filter) => (
+                  <button
+                    key={filter.key}
+                    className={`tailgate-details-filter-chip${
+                      attendeeFilter === filter.key ? " is-active" : ""
+                    }`}
+                    onClick={() => setAttendeeFilter(filter.key)}
+                  >
+                    {filter.label}
+                  </button>
+                ))}
+              </div>
+              <div className="tailgate-details-attendee-list">
+                {filteredAttendees.length > 0 ? (
+                  filteredAttendees.map((attendee) => {
+                    const meta = attendeeStatusMeta[attendee.status];
+                    const attendeeContact = [attendee.email, attendee.phone]
+                      .map((value) => value?.trim())
+                      .filter((value): value is string => Boolean(value))
+                      .join(" · ");
+                    return (
+                      <div className="tailgate-details-attendee-row" key={attendee.id}>
+                        <div>
+                          <p className="tailgate-details-attendee-name">{attendee.name}</p>
+                          {attendeeContact ? (
+                            <p className="tailgate-details-attendee-meta">{attendeeContact}</p>
+                          ) : null}
+                        </div>
+                        <span className={`chip ${meta.className}`}>{meta.label}</span>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="meta-muted">No attendees for this filter yet.</p>
+                )}
+              </div>
+            </article>
+          ) : null}
         </section>
       );
 
   if (isEmbeddedMapPanel) {
-    return <main className="tailgate-details-embedded">{pageContent}</main>;
+    return (
+      <main className="tailgate-details-embedded">
+        {pageContent}
+        {guestRefundModal}
+        {cancelTailgateModal}
+      </main>
+    );
   }
 
   return (
     <AppShell header={<div className="simple-header"><h1>Tailgate Details</h1></div>}>
       {pageContent}
+      {guestRefundModal}
+      {cancelTailgateModal}
     </AppShell>
   );
 }

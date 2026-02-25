@@ -22,9 +22,11 @@ export default function TailgateCard({
   const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
 
   const showEdit = isHost === true && (status === "upcoming" || status === "live");
-  const showCheckIn = isHost === true && event.visibilityType === "open_paid";
+  const showCheckIn =
+    isHost === true && event.visibilityType === "open_paid" && status !== "cancelled";
   const showHostMetrics = isHost === true;
   const isPaid = event.visibilityType === "open_paid";
+  const showPaidOutChip = isHost === true && isPaid && event.payoutStatus === "sent";
 
   return (
     <article
@@ -43,6 +45,7 @@ export default function TailgateCard({
           <h3>{event.name}</h3>
           <div className="chip-row">
             {isHost === true ? <span className="chip chip-live">Hosting</span> : null}
+            {showPaidOutChip ? <span className="chip chip-payout">Paid out</span> : null}
             <span className="chip chip-outline">{visibilityLabel}</span>
             <span className={`chip chip-status chip-${status}`}>{statusLabel}</span>
           </div>

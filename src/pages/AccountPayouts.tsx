@@ -13,9 +13,13 @@ import {
   IconUser
 } from "../components/Icons";
 import { useAuth } from "../hooks/useAuth";
+import { useDenyRefundRequest } from "../hooks/useDenyRefundRequest";
 import { useHostTailgates } from "../hooks/useHostTailgates";
+import { useHostRefundRequests } from "../hooks/useHostRefundRequests";
+import { useProcessTicketRefund } from "../hooks/useProcessTicketRefund";
 import { useUserProfile } from "../hooks/useUserProfile";
 import { auth, db, functions as firebaseFunctions, storage } from "../lib/firebase";
+import { HostRefundRequest } from "../services/refunds";
 import { formatCurrencyFromCents, formatDateTime } from "../utils/format";
 import { estimateHostPayout } from "../utils/tailgate";
 
@@ -28,6 +32,14 @@ type PayoutAccountState = {
   requirementsDueCount: number;
   loading: boolean;
   error: string | null;
+};
+
+type RefundDecisionFilter = "pending" | "approved" | "denied";
+type RefundActionType = "approve" | "deny";
+
+type RefundActionDraft = {
+  type: RefundActionType;
+  request: HostRefundRequest;
 };
 
 const CONNECT_RETURN_URL =
@@ -47,6 +59,20 @@ function statusLabel(status: StripeConnectStatus) {
   if (status === "pending") return "Pending setup";
   if (status === "restricted") return "Restricted";
   return "Connected";
+}
+
+function refundStatusLabel(status: string) {
+  if (status === "pending") return "Pending";
+  if (status === "approved") return "Approved";
+  if (status === "denied") return "Denied";
+  return status ? status.charAt(0).toUpperCase() + status.slice(1) : "Pending";
+}
+
+function refundStatusChipClass(status: string) {
+  if (status === "approved") return "chip-live";
+  if (status === "cancelled") return "chip-cancelled";
+  if (status === "denied") return "chip-cancelled";
+  return "chip-upcoming";
 }
 
 export default function AccountPayouts() {
@@ -79,6 +105,13 @@ export default function AccountPayouts() {
   const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
   const [optionsError, setOptionsError] = useState<string | null>(null);
   const [showMoreOptions, setShowMoreOptions] = useState(false);
+  const [refundFilter, setRefundFilter] = useState<RefundDecisionFilter>("pending");
+  const [refundActionDraft, setRefundActionDraft] = useState<RefundActionDraft | null>(null);
+  const [refundActionReason, setRefundActionReason] = useState("");
+  const [refundActionFeedback, setRefundActionFeedback] = useState<{
+    tone: "success" | "error";
+    text: string;
+  } | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -170,8 +203,13 @@ export default function AccountPayouts() {
     [tailgates, user?.uid]
   );
 
+  const paidTailgatesWithSales = useMemo(
+    () => paidTailgates.filter((tailgate) => (tailgate.ticketsSold ?? 0) > 0),
+    [paidTailgates]
+  );
+
   const payoutTotals = useMemo(() => {
-    return paidTailgates.reduce(
+    return paidTailgatesWithSales.reduce(
       (summary, tailgate) => {
         const sold = tailgate.ticketsSold ?? 0;
         const estimate = estimateHostPayout({
@@ -198,9 +236,40 @@ export default function AccountPayouts() {
         sent: 0
       }
     );
-  }, [paidTailgates]);
+  }, [paidTailgatesWithSales]);
 
-  const recentPaidTailgates = paidTailgates.slice(0, 6);
+  const recentPaidTailgates = paidTailgatesWithSales.slice(0, 6);
+  const showRefundRequestsSection = paidTailgates.length > 0;
+  const {
+    requests: hostRefundRequests,
+    loading: hostRefundRequestsLoading,
+    error: hostRefundRequestsError,
+    refresh: refreshHostRefundRequests
+  } = useHostRefundRequests({
+    status: refundFilter,
+    limit: 50,
+    enabled: Boolean(user?.uid) && showRefundRequestsSection
+  });
+  const {
+    processTicketRefund,
+    loading: approveRefundLoading,
+    error: approveRefundError,
+    clearError: clearApproveRefundError
+  } = useProcessTicketRefund();
+  const {
+    denyRefundRequest,
+    loading: denyRefundLoading,
+    error: denyRefundError,
+    clearError: clearDenyRefundError
+  } = useDenyRefundRequest();
+  const refundActionLoading = approveRefundLoading || denyRefundLoading;
+  const refundActionError = approveRefundError ?? denyRefundError;
+
+  useEffect(() => {
+    if (!refundActionFeedback) return;
+    const timer = setTimeout(() => setRefundActionFeedback(null), 4000);
+    return () => clearTimeout(timer);
+  }, [refundActionFeedback]);
 
   const handleLogout = async () => {
     setOptionsError(null);
@@ -344,6 +413,60 @@ export default function AccountPayouts() {
       setSetupError("Unable to open payout setup. Please try again.");
     } finally {
       setSetupLoading(false);
+    }
+  };
+
+  const openRefundActionModal = (type: RefundActionType, request: HostRefundRequest) => {
+    setRefundActionDraft({ type, request });
+    setRefundActionReason("");
+    setRefundActionFeedback(null);
+    clearApproveRefundError();
+    clearDenyRefundError();
+  };
+
+  const closeRefundActionModal = () => {
+    if (refundActionLoading) return;
+    setRefundActionDraft(null);
+    setRefundActionReason("");
+    clearApproveRefundError();
+    clearDenyRefundError();
+  };
+
+  const submitRefundAction = async () => {
+    if (!refundActionDraft || refundActionLoading) return;
+    const note = refundActionReason.trim() || undefined;
+    setRefundActionFeedback(null);
+
+    try {
+      if (refundActionDraft.type === "approve") {
+        await processTicketRefund({
+          ticketId: refundActionDraft.request.ticketId,
+          refundRequestId: refundActionDraft.request.refundRequestId,
+          hostDecisionReason: note
+        });
+        setRefundActionFeedback({
+          tone: "success",
+          text: "Refund processed."
+        });
+      } else {
+        await denyRefundRequest({
+          refundRequestId: refundActionDraft.request.refundRequestId,
+          hostDecisionReason: note
+        });
+        setRefundActionFeedback({
+          tone: "success",
+          text: "Refund request denied."
+        });
+      }
+      setRefundActionDraft(null);
+      setRefundActionReason("");
+      refreshHostRefundRequests();
+    } catch (actionError) {
+      console.error("Refund action failed", actionError);
+      setRefundActionFeedback({
+        tone: "error",
+        text: "Unable to process refund. Try again."
+      });
     }
   };
 
@@ -594,7 +717,7 @@ export default function AccountPayouts() {
             <div className="payouts-metric-grid">
               <div className="tailgate-details-metric-card">
                 <p>Paid Tailgates</p>
-                <strong>{paidTailgates.length}</strong>
+                <strong>{paidTailgatesWithSales.length}</strong>
               </div>
               <div className="tailgate-details-metric-card">
                 <p>Tickets Sold</p>
@@ -631,7 +754,7 @@ export default function AccountPayouts() {
           </div>
           {recentPaidTailgates.length === 0 ? (
             <div className="empty-state">
-              <p>No paid tailgates yet.</p>
+              <p>No paid ticket sales yet.</p>
               <Link className="primary-button" to="/tailgates/new">
                 Create a paid tailgate
               </Link>
@@ -677,6 +800,111 @@ export default function AccountPayouts() {
             </div>
           )}
         </article>
+
+        {showRefundRequestsSection ? (
+          <article className="payouts-card">
+            <div className="section-header">
+              <div>
+                <h2>Refund requests</h2>
+                <p className="section-subtitle">
+                  Review guest requests and approve or deny.
+                </p>
+              </div>
+            </div>
+            <div className="filter-tabs payouts-refund-filter-tabs" role="tablist" aria-label="Refund request status">
+              {(["pending", "approved", "denied"] as RefundDecisionFilter[]).map((filterValue) => (
+                <button
+                  key={filterValue}
+                  type="button"
+                  role="tab"
+                  aria-selected={refundFilter === filterValue}
+                  className={`filter-tab ${refundFilter === filterValue ? "active" : ""}`}
+                  onClick={() => setRefundFilter(filterValue)}
+                >
+                  {refundStatusLabel(filterValue)}
+                </button>
+              ))}
+            </div>
+            {hostRefundRequestsLoading ? (
+              <p className="meta-muted">Loading refund requests...</p>
+            ) : hostRefundRequestsError ? (
+              <p className="error-banner">{hostRefundRequestsError}</p>
+            ) : hostRefundRequests.length === 0 ? (
+              <p className="meta-muted">No refund requests in this status.</p>
+            ) : (
+              <div className="payouts-refund-list">
+                {hostRefundRequests.map((request) => (
+                  <div className="payouts-refund-row" key={request.refundRequestId}>
+                    <div>
+                      <p className="payouts-tailgate-name">{request.eventName ?? "Tailgate event"}</p>
+                      <p className="payouts-tailgate-meta">
+                        {request.requestedAt ? formatDateTime(request.requestedAt) : "Requested recently"}
+                      </p>
+                      {request.status === "approved" ? (
+                        <p className="payouts-refund-decision-date">
+                          {request.decidedAt
+                            ? `Approved ${formatDateTime(request.decidedAt)}`
+                            : "Approved recently"}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="payouts-refund-meta-block">
+                      <p className="payouts-tailgate-meta">
+                        Guest: {request.guestName ?? "Unknown guest"}
+                      </p>
+                      <p className="payouts-tailgate-amount">
+                        {typeof request.amountCents === "number"
+                          ? formatCurrencyFromCents(request.amountCents)
+                          : "Amount unavailable"}
+                      </p>
+                    </div>
+                    <div className="payouts-refund-reason-block">
+                      <p className="payouts-tailgate-meta">
+                        {request.guestReason?.trim() ? request.guestReason : "No guest reason provided."}
+                      </p>
+                      {request.hostDecisionReason?.trim() ? (
+                        <p className="payouts-refund-host-note">
+                          Host note: {request.hostDecisionReason}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="payouts-refund-actions">
+                      <span className={`chip ${refundStatusChipClass(request.status)}`}>
+                        {refundStatusLabel(request.status)}
+                      </span>
+                      {request.status === "pending" ? (
+                        <div className="payouts-refund-action-buttons">
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            disabled={refundActionLoading}
+                            onClick={() => openRefundActionModal("deny", request)}
+                          >
+                            Deny
+                          </button>
+                          <button
+                            type="button"
+                            className="primary-button"
+                            disabled={refundActionLoading}
+                            onClick={() => openRefundActionModal("approve", request)}
+                          >
+                            Approve
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {refundActionFeedback?.tone === "success" ? (
+              <p className="success-banner">{refundActionFeedback.text}</p>
+            ) : null}
+            {refundActionFeedback?.tone === "error" ? (
+              <p className="error-banner">{refundActionFeedback.text}</p>
+            ) : null}
+          </article>
+        ) : null}
 
         <article className="payouts-card">
           <div className="section-header">
@@ -749,6 +977,69 @@ export default function AccountPayouts() {
           ) : null}
           {optionsError ? <p className="error-banner">{optionsError}</p> : null}
         </article>
+
+        {refundActionDraft ? (
+          <div className="create-wizard-modal-overlay" role="dialog" aria-modal="true">
+            <div className="create-wizard-modal create-wizard-refund-modal">
+              <div className="create-wizard-modal-header">
+                <h3>
+                  {refundActionDraft.type === "approve"
+                    ? `Refund this ticket for ${
+                        typeof refundActionDraft.request.amountCents === "number"
+                          ? formatCurrencyFromCents(refundActionDraft.request.amountCents)
+                          : "the ticket amount"
+                      }?`
+                    : "Deny refund request?"}
+                </h3>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={closeRefundActionModal}
+                  disabled={refundActionLoading}
+                >
+                  Close
+                </button>
+              </div>
+              <label className="input-group">
+                <span className="input-label">Optional note</span>
+                <textarea
+                  className="text-input tailgate-details-host-broadcast-input"
+                  rows={4}
+                  value={refundActionReason}
+                  onChange={(event) => setRefundActionReason(event.target.value)}
+                  placeholder="Add context for the guest."
+                />
+              </label>
+              {refundActionError ? (
+                <p className="tailgate-details-ticket-error">
+                  Unable to process refund. Try again.
+                </p>
+              ) : null}
+              <div className="create-wizard-payout-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={refundActionLoading}
+                  onClick={() => void submitRefundAction()}
+                >
+                  {refundActionLoading
+                    ? "Processing..."
+                    : refundActionDraft.type === "approve"
+                    ? "Approve refund"
+                    : "Deny request"}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={refundActionLoading}
+                  onClick={closeRefundActionModal}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </section>
     </AppShell>
   );

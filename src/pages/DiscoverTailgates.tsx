@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { collection, onSnapshot } from "firebase/firestore";
+import { getBlob, getDownloadURL, ref } from "firebase/storage";
 import { useNavigate } from "react-router-dom";
 import tailgateTimeLogo from "../../ttnobg.png";
 import AppShell from "../components/AppShell";
@@ -8,7 +9,7 @@ import SiteFooter from "../components/SiteFooter";
 import { mockTailgates } from "../data/mockTailgates";
 import { useAuth } from "../hooks/useAuth";
 import { usePlacesAutocomplete } from "../hooks/usePlacesAutocomplete";
-import { db } from "../lib/firebase";
+import { db, storage as firebaseStorage } from "../lib/firebase";
 import { loadGoogleMapsSdk } from "../lib/googleMapsSdk";
 import { formatCurrencyFromCents } from "../utils/format";
 
@@ -187,6 +188,73 @@ function resolveCoverImageUrl(data: Record<string, unknown>) {
     firstStringFromArray(media?.coverImageUrls),
     firstStringFromArray(media?.imageUrls)
   );
+}
+
+function isHttpUrl(value: string) {
+  return /^https?:\/\//i.test(value);
+}
+
+function inferMimeTypeFromValue(value: string) {
+  const lower = value.toLowerCase();
+  if (lower.includes(".png")) return "image/png";
+  if (lower.includes(".webp")) return "image/webp";
+  if (lower.includes(".gif")) return "image/gif";
+  if (lower.includes(".heic")) return "image/heic";
+  return "image/jpeg";
+}
+
+function toInlineImageUrl(urlValue: string) {
+  if (!isHttpUrl(urlValue)) return urlValue;
+
+  try {
+    const parsed = new URL(urlValue);
+    const isFirebaseStorageHost =
+      parsed.hostname === "firebasestorage.googleapis.com" ||
+      parsed.hostname === "storage.googleapis.com";
+    if (!isFirebaseStorageHost) return urlValue;
+
+    if (!parsed.searchParams.has("alt")) {
+      parsed.searchParams.set("alt", "media");
+    }
+    if (!parsed.searchParams.has("response-content-disposition")) {
+      parsed.searchParams.set("response-content-disposition", "inline");
+    }
+    if (!parsed.searchParams.has("response-content-type")) {
+      parsed.searchParams.set("response-content-type", inferMimeTypeFromValue(urlValue));
+    }
+
+    return parsed.toString();
+  } catch {
+    return urlValue;
+  }
+}
+
+function extractStoragePathFromValue(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  if (!isHttpUrl(trimmed)) {
+    return trimmed.replace(/^\/+/, "");
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    const oSegmentMatch = parsed.pathname.match(/\/o\/(.+)$/);
+    if (oSegmentMatch?.[1]) {
+      return decodeURIComponent(oSegmentMatch[1]);
+    }
+
+    if (parsed.hostname === "storage.googleapis.com") {
+      const segments = parsed.pathname.split("/").filter(Boolean);
+      if (segments.length >= 2) {
+        return decodeURIComponent(segments.slice(1).join("/"));
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 function resolveLocationCoords(
@@ -595,6 +663,190 @@ export default function DiscoverTailgates() {
   const [locating, setLocating] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mapPanelMode, setMapPanelMode] = useState<MapPanelMode>("results");
+  const attemptedCoverImageResolutionRef = useRef<Set<string>>(new Set());
+  const attemptedCoverBlobFallbackRef = useRef<Set<string>>(new Set());
+  const createdCoverBlobUrlsRef = useRef<string[]>([]);
+  const [resolvedCoverImageUrlsByRaw, setResolvedCoverImageUrlsByRaw] = useState<
+    Record<string, string>
+  >({});
+  const [blobCoverImageUrlsByRaw, setBlobCoverImageUrlsByRaw] = useState<
+    Record<string, string>
+  >({});
+  const [loadedCoverImagesByKey, setLoadedCoverImagesByKey] = useState<Record<string, boolean>>(
+    {}
+  );
+  const [coverImageLoadErrorsByRaw, setCoverImageLoadErrorsByRaw] = useState<
+    Record<string, string>
+  >({});
+  const [recoveringCoverImageByRaw, setRecoveringCoverImageByRaw] = useState<
+    Record<string, boolean>
+  >({});
+
+  const clearCreatedCoverBlobUrls = () => {
+    createdCoverBlobUrlsRef.current.forEach((blobUrl) => URL.revokeObjectURL(blobUrl));
+    createdCoverBlobUrlsRef.current = [];
+  };
+
+  const getDisplayCoverImageUrl = (rawUrl: string) => {
+    const normalized = rawUrl.trim();
+    const resolved =
+      blobCoverImageUrlsByRaw[rawUrl] ??
+      blobCoverImageUrlsByRaw[normalized] ??
+      resolvedCoverImageUrlsByRaw[rawUrl] ??
+      resolvedCoverImageUrlsByRaw[normalized] ??
+      normalized;
+    return toInlineImageUrl(resolved);
+  };
+
+  const canBrowserDecodeBlob = async (blob: Blob) =>
+    await new Promise<boolean>((resolve) => {
+      const objectUrl = URL.createObjectURL(blob);
+      const image = new Image();
+      image.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(true);
+      };
+      image.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(false);
+      };
+      image.src = objectUrl;
+    });
+
+  const blobLooksLikeHeif = async (blob: Blob) => {
+    try {
+      const buffer = await blob.slice(0, 128).arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      if (bytes.length < 12) return false;
+
+      const toAscii = (start: number, length: number) =>
+        Array.from(bytes.slice(start, start + length))
+          .map((byte) => String.fromCharCode(byte))
+          .join("");
+
+      const fileTypeBox = toAscii(4, 4).toLowerCase();
+      if (fileTypeBox !== "ftyp") return false;
+
+      const header = toAscii(8, Math.max(0, bytes.length - 8)).toLowerCase();
+      return /(heic|heix|hevc|heim|heis|mif1|msf1)/.test(header);
+    } catch {
+      return false;
+    }
+  };
+
+  const convertHeifBlobWithHeicTo = async (blob: Blob) => {
+    try {
+      const converterModule = await import("heic-to");
+      const convertHeic = converterModule.heicTo as (args: {
+        blob: Blob;
+        type: string;
+        quality?: number;
+      }) => Promise<Blob>;
+      const convertedBlob = await convertHeic({
+        blob,
+        type: "image/jpeg",
+        quality: 0.92
+      });
+      if (!(convertedBlob instanceof Blob)) return null;
+      const convertedDecodable = await canBrowserDecodeBlob(convertedBlob);
+      return convertedDecodable ? convertedBlob : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const convertHeifBlobWithHeic2Any = async (blob: Blob) => {
+    try {
+      const converterModule = await import("heic2any");
+      const convertHeicToAny = converterModule.default as (
+        options: Record<string, unknown>
+      ) => Promise<Blob | Blob[]>;
+      const converted = await convertHeicToAny({
+        blob,
+        toType: "image/jpeg",
+        quality: 0.92
+      });
+      const convertedBlob = Array.isArray(converted) ? converted[0] : converted;
+      if (!(convertedBlob instanceof Blob)) return null;
+      const convertedDecodable = await canBrowserDecodeBlob(convertedBlob);
+      return convertedDecodable ? convertedBlob : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const convertBlobToJpegIfNeeded = async (blob: Blob) => {
+    const alreadyDecodable = await canBrowserDecodeBlob(blob);
+    if (alreadyDecodable) return blob;
+    const looksLikeHeif = await blobLooksLikeHeif(blob);
+    if (!looksLikeHeif) return null;
+
+    const convertedWithHeicTo = await convertHeifBlobWithHeicTo(blob);
+    if (convertedWithHeicTo) return convertedWithHeicTo;
+
+    return await convertHeifBlobWithHeic2Any(blob);
+  };
+
+  const createCoverBlobFallback = async (rawUrl: string) => {
+    if (!firebaseStorage) return false;
+    const candidate = getDisplayCoverImageUrl(rawUrl);
+    const normalizedCandidate = candidate.trim();
+    if (!normalizedCandidate) return false;
+    if (normalizedCandidate.startsWith("blob:") || normalizedCandidate.startsWith("data:")) {
+      return false;
+    }
+    if (attemptedCoverBlobFallbackRef.current.has(normalizedCandidate)) return false;
+    attemptedCoverBlobFallbackRef.current.add(normalizedCandidate);
+
+    try {
+      const candidateStoragePath =
+        extractStoragePathFromValue(rawUrl) ?? extractStoragePathFromValue(normalizedCandidate);
+      let blob: Blob | null = null;
+
+      if (candidateStoragePath) {
+        try {
+          blob = await getBlob(ref(firebaseStorage, candidateStoragePath));
+        } catch {
+          blob = null;
+        }
+      }
+
+      if (!blob) {
+        const response = await fetch(normalizedCandidate);
+        if (!response.ok) return false;
+        blob = await response.blob();
+      }
+
+      if (blob.size <= 0) return false;
+      if (
+        blob.type.startsWith("text/") ||
+        blob.type.includes("json") ||
+        blob.type.includes("xml")
+      ) {
+        return false;
+      }
+
+      const typedBlob =
+        blob.type && blob.type.startsWith("image/")
+          ? blob
+          : new Blob([blob], { type: inferMimeTypeFromValue(normalizedCandidate) });
+      const renderableBlob = await convertBlobToJpegIfNeeded(typedBlob);
+      if (!(renderableBlob instanceof Blob)) return false;
+      const blobUrl = URL.createObjectURL(renderableBlob);
+      createdCoverBlobUrlsRef.current.push(blobUrl);
+
+      const normalizedRaw = rawUrl.trim();
+      setBlobCoverImageUrlsByRaw((previous) => ({
+        ...previous,
+        [rawUrl]: blobUrl,
+        [normalizedRaw]: blobUrl,
+        [normalizedCandidate]: blobUrl
+      }));
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
   useEffect(() => {
     if (!db) {
@@ -637,7 +889,15 @@ export default function DiscoverTailgates() {
           return false;
         }
         if (!item.startDateTime) return false;
-        return item.startDateTime.getTime() >= nowTime;
+        if (item.startDateTime.getTime() < nowTime) return false;
+        if (
+          item.visibilityType === "open_paid" &&
+          item.ticketSalesCloseAt instanceof Date &&
+          item.ticketSalesCloseAt.getTime() <= nowTime
+        ) {
+          return false;
+        }
+        return true;
       })
       .map((item) => {
       const distanceMiles = center && item.coords ? haversineMiles(center, item.coords) : undefined;
@@ -667,6 +927,85 @@ export default function DiscoverTailgates() {
       return aDate - bDate;
     });
   }, [center, sourceTailgates]);
+
+  useEffect(
+    () => () => {
+      clearCreatedCoverBlobUrls();
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!firebaseStorage || tailgates.length === 0) return;
+    let isCancelled = false;
+
+    const rawCoverImageUrls = Array.from(
+      new Set(
+        tailgates
+          .map((item) => item.coverImageUrl.trim())
+          .filter((url) => url.length > 0)
+      )
+    );
+
+    const urlsToResolve = rawCoverImageUrls.filter((rawUrl) => {
+      if (rawUrl === DEFAULT_TAILGATE_COVER_IMAGE) return false;
+      if (resolvedCoverImageUrlsByRaw[rawUrl]) return false;
+      if (attemptedCoverImageResolutionRef.current.has(rawUrl)) return false;
+      if (!isHttpUrl(rawUrl)) return true;
+      return (
+        rawUrl.includes("firebasestorage.googleapis.com") ||
+        rawUrl.includes("storage.googleapis.com")
+      );
+    });
+    if (urlsToResolve.length === 0) return;
+
+    const resolveUrlFromStorage = async (rawUrl: string) => {
+      const normalized = rawUrl.replace(/^\/+/, "");
+      try {
+        if (!isHttpUrl(normalized)) {
+          return await getDownloadURL(ref(firebaseStorage, normalized));
+        }
+        if (
+          normalized.includes("firebasestorage.googleapis.com") ||
+          normalized.includes("storage.googleapis.com")
+        ) {
+          return await getDownloadURL(ref(firebaseStorage, normalized));
+        }
+        return normalized;
+      } catch {
+        return rawUrl;
+      }
+    };
+
+    const resolveUrls = async () => {
+      const mappedEntries = await Promise.all(
+        urlsToResolve.map(async (rawUrl) => {
+          attemptedCoverImageResolutionRef.current.add(rawUrl);
+          const resolvedUrl = await resolveUrlFromStorage(rawUrl);
+          return [rawUrl, resolvedUrl] as const;
+        })
+      );
+
+      if (isCancelled) return;
+      const nextMap: Record<string, string> = {};
+      mappedEntries.forEach(([rawUrl, resolvedUrl]) => {
+        if (!resolvedUrl) return;
+        const normalizedRaw = rawUrl.trim();
+        nextMap[rawUrl] = resolvedUrl;
+        nextMap[normalizedRaw] = resolvedUrl;
+      });
+
+      if (Object.keys(nextMap).length > 0) {
+        setResolvedCoverImageUrlsByRaw((previous) => ({ ...previous, ...nextMap }));
+      }
+    };
+
+    void resolveUrls();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [tailgates, resolvedCoverImageUrlsByRaw]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -803,6 +1142,41 @@ export default function DiscoverTailgates() {
     },
     [navigate]
   );
+
+  const handleDiscoverCoverImageError = (rawUrl: string, renderedUrl: string) => {
+    const normalizedRaw = rawUrl.trim();
+    setRecoveringCoverImageByRaw((previous) => ({
+      ...previous,
+      [rawUrl]: true,
+      [normalizedRaw]: true
+    }));
+
+    void (async () => {
+      const recovered = await createCoverBlobFallback(rawUrl);
+      setRecoveringCoverImageByRaw((previous) => {
+        const next = { ...previous };
+        delete next[rawUrl];
+        delete next[normalizedRaw];
+        return next;
+      });
+
+      if (recovered) {
+        setCoverImageLoadErrorsByRaw((previous) => {
+          const next = { ...previous };
+          delete next[rawUrl];
+          delete next[normalizedRaw];
+          return next;
+        });
+        return;
+      }
+
+      setCoverImageLoadErrorsByRaw((previous) => ({
+        ...previous,
+        [rawUrl]: renderedUrl,
+        [normalizedRaw]: renderedUrl
+      }));
+    })();
+  };
 
   const locationPillText = !center
     ? "Set a location"
@@ -1066,7 +1440,21 @@ export default function DiscoverTailgates() {
           <div className="discover-list">
             {tailgates.map((item) => {
               const cutoffLabel = formatTicketSalesCountdown(item);
-              const usesDefaultCover = isDefaultTailgateCoverImage(item.coverImageUrl);
+              const rawCoverImageUrl = item.coverImageUrl;
+              const renderedCoverImageUrl = getDisplayCoverImageUrl(rawCoverImageUrl);
+              const coverLoadingKey = `${item.id}:${renderedCoverImageUrl}`;
+              const coverLoadErrorUrl =
+                coverImageLoadErrorsByRaw[rawCoverImageUrl] ??
+                coverImageLoadErrorsByRaw[rawCoverImageUrl.trim()] ??
+                null;
+              const isCoverRecovering = Boolean(
+                recoveringCoverImageByRaw[rawCoverImageUrl] ??
+                  recoveringCoverImageByRaw[rawCoverImageUrl.trim()]
+              );
+              const isCoverLoaded = Boolean(loadedCoverImagesByKey[coverLoadingKey]);
+              const hasCoverError = Boolean(coverLoadErrorUrl);
+              const showCoverLoading = !isCoverLoaded && (!hasCoverError || isCoverRecovering);
+              const usesDefaultCover = isDefaultTailgateCoverImage(renderedCoverImageUrl);
               return (
                 <article
                   key={item.id}
@@ -1085,7 +1473,52 @@ export default function DiscoverTailgates() {
                       className={`discover-card-media has-image${usesDefaultCover ? " is-logo" : ""}`}
                       aria-hidden="true"
                     >
-                      <img src={item.coverImageUrl} alt="" loading="lazy" />
+                      {showCoverLoading ? (
+                        <span className="discover-card-media-loading" aria-hidden="true">
+                          <span className="discover-card-media-spinner" />
+                        </span>
+                      ) : null}
+                      {hasCoverError && !isCoverRecovering ? (
+                        <span className="discover-card-media-error">
+                          Image unavailable.{" "}
+                          <a
+                            href={coverLoadErrorUrl ?? renderedCoverImageUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            Open image
+                          </a>
+                        </span>
+                      ) : null}
+                      <img
+                        className={`discover-card-media-image${showCoverLoading ? " is-loading" : ""}`}
+                        src={renderedCoverImageUrl}
+                        alt=""
+                        loading="lazy"
+                        onLoad={() => {
+                          const normalizedRaw = rawCoverImageUrl.trim();
+                          setRecoveringCoverImageByRaw((previous) => {
+                            const next = { ...previous };
+                            delete next[rawCoverImageUrl];
+                            delete next[normalizedRaw];
+                            return next;
+                          });
+                          setLoadedCoverImagesByKey((previous) => {
+                            if (previous[coverLoadingKey]) return previous;
+                            return { ...previous, [coverLoadingKey]: true };
+                          });
+                          setCoverImageLoadErrorsByRaw((previous) => {
+                            const next = { ...previous };
+                            delete next[rawCoverImageUrl];
+                            delete next[normalizedRaw];
+                            return next;
+                          });
+                        }}
+                        onError={() =>
+                          handleDiscoverCoverImageError(rawCoverImageUrl, renderedCoverImageUrl)
+                        }
+                      />
                     </div>
                     <div>
                       <div className="discover-card-heading">

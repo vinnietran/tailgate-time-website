@@ -123,11 +123,70 @@ function deriveStatus(data: Record<string, unknown>) {
   return raw;
 }
 
+const PAYOUT_SENT_STATUSES = new Set([
+  "sent",
+  "paid",
+  "completed",
+  "succeeded",
+  "success"
+]);
+
+function isTrueFlag(value: unknown) {
+  if (value === true) return true;
+  if (value === 1) return true;
+  if (typeof value !== "string") return false;
+  const raw = value.trim().toLowerCase();
+  return raw === "true" || raw === "1" || raw === "yes";
+}
+
+function hasValidDate(value: unknown) {
+  return normalizeDate(value).getTime() > 0;
+}
+
 function derivePayoutStatus(data: Record<string, unknown>): TailgateEvent["payoutStatus"] {
-  const raw = String(data.payoutStatus ?? "").toLowerCase();
-  if (raw === "sent" || raw === "paid" || raw === "completed" || raw === "succeeded") {
+  const payouts = asRecord(data.payouts);
+  const payout = asRecord(data.payout);
+  const statusCandidates = [
+    firstString(data.payoutStatus),
+    firstString(data.stripePayoutStatus),
+    firstString(data.transferStatus),
+    firstString(payouts?.status),
+    firstString(payout?.status)
+  ];
+
+  for (const status of statusCandidates) {
+    if (status && PAYOUT_SENT_STATUSES.has(status.toLowerCase())) {
+      return "sent";
+    }
+  }
+
+  const dateCandidates = [
+    data.payoutSentAt,
+    data.lastPayoutAt,
+    data.paidOutAt,
+    data.payoutCompletedAt,
+    data.payoutDate,
+    payouts?.sentAt,
+    payouts?.paidAt,
+    payout?.sentAt,
+    payout?.paidAt
+  ];
+  if (dateCandidates.some(hasValidDate)) {
     return "sent";
   }
+
+  const flagCandidates = [
+    data.payoutSent,
+    data.isPaidOut,
+    payouts?.sent,
+    payouts?.paid,
+    payout?.sent,
+    payout?.paid
+  ];
+  if (flagCandidates.some(isTrueFlag)) {
+    return "sent";
+  }
+
   return "pending";
 }
 
@@ -335,6 +394,12 @@ export function useDashboardTailgates(userId?: string) {
   const attendingCount = tailgates.filter(
     (tailgate) => tailgate.relationship === "attending"
   ).length;
+  const paidOutCount = tailgates.filter(
+    (tailgate) =>
+      tailgate.relationship === "hosting" &&
+      tailgate.visibilityType === "open_paid" &&
+      tailgate.payoutStatus === "sent"
+  ).length;
 
   return {
     tailgates,
@@ -347,7 +412,8 @@ export function useDashboardTailgates(userId?: string) {
       past: pastTailgates.length,
       total: tailgates.length,
       hosting: hostingCount,
-      attending: attendingCount
+      attending: attendingCount,
+      paidOut: paidOutCount
     }
   };
 }

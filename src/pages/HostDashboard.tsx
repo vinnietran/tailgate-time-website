@@ -73,6 +73,7 @@ export default function HostDashboard() {
               <span className="stat-pill">{counts.upcoming} Upcoming</span>
               <span className="stat-pill">{counts.past} Past</span>
               <span className="stat-pill">{counts.hosting} Hosting</span>
+              <span className="stat-pill">{counts.paidOut} Paid Out</span>
               <span className="stat-pill">{counts.attending} Attending</span>
             </div>
           </div>

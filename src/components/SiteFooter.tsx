@@ -7,7 +7,6 @@ export default function SiteFooter() {
       <div className="site-footer-links">
         <Link to="/">Home</Link>
         <Link to="/discover">Discover</Link>
-        <a href="/landing.html">Marketing</a>
         <a href="/contact.html">Contact</a>
         <a href="/privacy-policy.html">Privacy</a>
         <a href="/terms.html">Terms</a>
@@ -16,4 +15,3 @@ export default function SiteFooter() {
     </footer>
   );
 }
-
