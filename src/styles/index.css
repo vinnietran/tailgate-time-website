@@ -2751,6 +2751,94 @@ a {
   gap: 10px;
 }
 
+.tailgate-details-rsvp-block {
+  margin-top: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.tailgate-details-rsvp-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tailgate-details-rsvp-status-going {
+  color: #b7ffef;
+  border-color: rgba(127, 255, 214, 0.45);
+  background: rgba(127, 255, 214, 0.14);
+}
+
+.tailgate-details-rsvp-status-not-going {
+  color: #ffd4d0;
+  border-color: rgba(255, 159, 159, 0.48);
+  background: rgba(255, 159, 159, 0.14);
+}
+
+.tailgate-details-rsvp-status-pending {
+  color: #ffe7a2;
+  border-color: rgba(242, 201, 76, 0.52);
+  background: rgba(242, 201, 76, 0.14);
+}
+
+.tailgate-details-rsvp-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tailgate-details-rsvp-option {
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(33, 53, 85, 0.9);
+  color: rgba(247, 248, 251, 0.92);
+  border-radius: 12px;
+  padding: 11px 12px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.tailgate-details-rsvp-option:hover {
+  border-color: rgba(255, 255, 255, 0.44);
+  color: rgba(255, 255, 255, 0.98);
+}
+
+.tailgate-details-rsvp-option:focus-visible {
+  outline: none;
+  border-color: rgba(242, 201, 76, 0.88);
+  box-shadow: 0 0 0 2px rgba(242, 201, 76, 0.25);
+}
+
+.tailgate-details-rsvp-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.tailgate-details-rsvp-option.is-active.is-going {
+  border-color: rgba(127, 255, 214, 0.58);
+  background: rgba(127, 255, 214, 0.18);
+  color: #c7fff1;
+}
+
+.tailgate-details-rsvp-option.is-active.is-not-going {
+  border-color: rgba(255, 159, 159, 0.62);
+  background: rgba(255, 159, 159, 0.18);
+  color: #ffe0dd;
+}
+
 .tailgate-details-ticket-row {
   display: flex;
   align-items: center;
@@ -2841,6 +2929,12 @@ a {
   margin: 4px 0 0;
   color: var(--muted-strong);
   font-size: 0.88rem;
+}
+
+.tailgate-details-refund-purchase-meta {
+  margin: 4px 0 0;
+  color: rgba(232, 238, 250, 0.82);
+  font-size: 0.84rem;
 }
 
 .tailgate-details-refund-host-note {
@@ -3019,6 +3113,12 @@ a {
   min-height: 320px;
   border: none;
   border-radius: var(--radius-sm);
+}
+
+.tailgate-details-map-note {
+  margin: 0 0 8px;
+  color: var(--muted-strong);
+  font-size: 0.88rem;
 }
 
 .tailgate-details-map-placeholder {
@@ -4114,6 +4214,58 @@ a {
   padding: 18px;
   display: grid;
   gap: 12px;
+}
+
+.app-dialog-overlay {
+  z-index: 220;
+}
+
+.app-dialog {
+  width: min(460px, 94vw);
+  background: linear-gradient(160deg, rgba(21, 38, 66, 0.98), rgba(17, 31, 56, 0.98));
+  color: var(--white);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom-color: rgba(242, 201, 76, 0.56);
+  box-shadow: 0 18px 45px rgba(13, 23, 42, 0.55);
+}
+
+.app-dialog .create-wizard-modal-header h3 {
+  color: var(--white);
+  font-size: 1.25rem;
+}
+
+.app-dialog-copy {
+  margin: 0;
+  color: var(--muted-strong);
+  line-height: 1.45;
+}
+
+.app-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.app-dialog .secondary-button {
+  border-color: rgba(255, 255, 255, 0.22);
+  color: var(--muted-strong);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.app-dialog .secondary-button:hover {
+  border-color: rgba(255, 255, 255, 0.36);
+  color: var(--white);
+}
+
+.primary-button.app-dialog-danger {
+  background: linear-gradient(135deg, #f2756a, #f49a80);
+  color: #1a0f13;
+  box-shadow: 0 10px 24px rgba(242, 117, 106, 0.34);
+}
+
+.primary-button.app-dialog-danger:hover {
+  box-shadow: 0 14px 28px rgba(242, 117, 106, 0.4);
 }
 
 .create-wizard-modal .create-wizard-input {
@@ -5392,6 +5544,10 @@ a {
 
   .tailgate-details-info-grid,
   .tailgate-details-inline-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tailgate-details-rsvp-options {
     grid-template-columns: 1fr;
   }
 

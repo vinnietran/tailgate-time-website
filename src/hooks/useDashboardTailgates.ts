@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { collection, onSnapshot } from "firebase/firestore";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { TailgateEvent } from "../types";
 import { mockTailgates } from "../data/mockTailgates";
@@ -131,12 +131,89 @@ const PAYOUT_SENT_STATUSES = new Set([
   "success"
 ]);
 
+const ATTENDING_EVENT_STATUSES = new Set([
+  "attending",
+  "going",
+  "host",
+  "hosted",
+  "confirmed",
+  "checked_in",
+  "pending",
+  "invited",
+  "undecided",
+  "requested",
+  "awaiting_response"
+]);
+
+const NON_ATTENDING_EVENT_STATUSES = new Set([
+  "not_attending",
+  "not attending",
+  "not_going",
+  "not going",
+  "declined",
+  "removed"
+]);
+
+const PAID_TICKET_STATUSES = new Set([
+  "valid",
+  "checked_in",
+  "confirmed",
+  "paid",
+  "purchase_succeeded",
+  "refunded",
+  "refund_processed",
+  "refund_succeeded"
+]);
+
+const NON_PAID_TICKET_STATUSES = new Set([
+  "created",
+  "pending",
+  "processing",
+  "failed",
+  "canceled",
+  "cancelled",
+  "expired",
+  "abandoned",
+  "voided",
+  "requires_payment_method",
+  "requires_action"
+]);
+
+const SETTLED_PAYMENT_STATUSES = new Set([
+  "paid",
+  "succeeded",
+  "complete",
+  "completed",
+  "captured"
+]);
+
+const DASHBOARD_TICKET_LOOKUPS = [
+  { collectionName: "tickets", userField: "attendeeUserId", sourceKey: "tickets:attendeeUserId" },
+  { collectionName: "tickets", userField: "userId", sourceKey: "tickets:userId" },
+  { collectionName: "tickets", userField: "guestUserId", sourceKey: "tickets:guestUserId" },
+  { collectionName: "tickets", userField: "purchaserUserId", sourceKey: "tickets:purchaserUserId" },
+  {
+    collectionName: "tailgateTickets",
+    userField: "userId",
+    sourceKey: "tailgateTickets:userId"
+  },
+  {
+    collectionName: "tailgateTickets",
+    userField: "attendeeUserId",
+    sourceKey: "tailgateTickets:attendeeUserId"
+  }
+] as const;
+
 function isTrueFlag(value: unknown) {
   if (value === true) return true;
   if (value === 1) return true;
   if (typeof value !== "string") return false;
   const raw = value.trim().toLowerCase();
   return raw === "true" || raw === "1" || raw === "yes";
+}
+
+function normalizeToken(value: unknown) {
+  return firstString(value)?.toLowerCase() ?? "";
 }
 
 function hasValidDate(value: unknown) {
@@ -259,15 +336,10 @@ function resolveRelationship(
     if (!record) return false;
     const attendeeUid = firstString(record.userId, record.uid, record.id);
     if (attendeeUid !== userId) return false;
-    const status = firstString(record.status)?.toLowerCase() ?? "";
-    return (
-      status === "attending" ||
-      status === "going" ||
-      status === "host" ||
-      status === "hosted" ||
-      status === "confirmed" ||
-      status === "checked_in"
-    );
+    const status = normalizeToken(record.status);
+    if (!status) return true;
+    if (NON_ATTENDING_EVENT_STATUSES.has(status)) return false;
+    return ATTENDING_EVENT_STATUSES.has(status);
   });
   if (attendingMatch) return "attending";
 
@@ -276,7 +348,10 @@ function resolveRelationship(
     data.attendeeUserIds,
     data.attendeesUserIds,
     data.goingUserIds,
-    data.rsvpUserIds
+    data.rsvpUserIds,
+    data.invitedUserIds,
+    data.pendingUserIds,
+    data.rsvpPendingUserIds
   ];
   const fallbackMatch = fallbackAttendingFields.some(
     (value) => Array.isArray(value) && value.some((entry) => entry === userId)
@@ -313,6 +388,48 @@ function sortDashboardPast(items: DashboardTailgate[]) {
   });
 }
 
+function resolveTicketTailgateId(data: Record<string, unknown>) {
+  const event = asRecord(data.event);
+  const tailgate = asRecord(data.tailgate);
+  return firstString(
+    data.tailgateId,
+    data.eventId,
+    data.tailgateEventId,
+    event?.tailgateId,
+    event?.id,
+    tailgate?.tailgateId,
+    tailgate?.id
+  );
+}
+
+function isPaidTicketRecord(data: Record<string, unknown>) {
+  const status = normalizeToken(data.status);
+  if (status && NON_PAID_TICKET_STATUSES.has(status)) return false;
+  if (status && PAID_TICKET_STATUSES.has(status)) return true;
+
+  const paymentStatus = normalizeToken(
+    data.paymentStatus ?? data.checkoutStatus ?? data.purchaseStatus ?? data.chargeStatus
+  );
+  if (paymentStatus && SETTLED_PAYMENT_STATUSES.has(paymentStatus)) return true;
+  if (paymentStatus && NON_PAID_TICKET_STATUSES.has(paymentStatus)) return false;
+
+  const isPaidFlag = [data.isPaid, data.paid, data.paymentComplete, data.purchaseComplete].some(
+    isTrueFlag
+  );
+  if (isPaidFlag) return true;
+
+  const paidCentsCandidates = [
+    data.totalPaidCents,
+    data.amountPaidCents,
+    data.totalAmountCents,
+    data.chargeAmountCents
+  ];
+  return paidCentsCandidates.some((value) => {
+    const cents = coerceNumber(value);
+    return typeof cents === "number" && cents > 0;
+  });
+}
+
 export function useDashboardTailgates(userId?: string) {
   const [tailgates, setTailgates] = useState<DashboardTailgate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -342,32 +459,56 @@ export function useDashboardTailgates(userId?: string) {
     setLoading(true);
     setError(null);
 
-    const unsubscribe = onSnapshot(
+    const eventsById = new Map<string, Record<string, unknown>>();
+    const ticketTailgateIdsBySource = new Map<string, Set<string>>();
+    const readyTicketSources = new Set<string>();
+    let hasEventSnapshot = false;
+
+    const applySnapshotState = () => {
+      if (!hasEventSnapshot) return;
+
+      const ticketTailgateIds = new Set<string>();
+      ticketTailgateIdsBySource.forEach((ids) => {
+        ids.forEach((tailgateId) => ticketTailgateIds.add(tailgateId));
+      });
+
+      const nextTailgates: DashboardTailgate[] = Array.from(eventsById.entries())
+        .map(([eventId, data]) => {
+          const relationship = resolveRelationship(data, userId);
+          const hasPaidTicket = ticketTailgateIds.has(eventId);
+          const effectiveRelationship = relationship ?? (hasPaidTicket ? "attending" : null);
+          if (!effectiveRelationship) return null;
+
+          return {
+            ...normalizeTailgate(eventId, data),
+            relationship: effectiveRelationship
+          } as DashboardTailgate;
+        })
+        .filter((event): event is DashboardTailgate => Boolean(event));
+
+      const sorted = sortTailgates(nextTailgates);
+      setTailgates(sorted);
+      if (readyTicketSources.size >= DASHBOARD_TICKET_LOOKUPS.length) {
+        setLoading(false);
+      }
+      setError(null);
+      debugAuthLog("dashboard:tailgates-loaded", {
+        uid: userId,
+        total: sorted.length,
+        hosting: sorted.filter((event) => event.relationship === "hosting").length,
+        attending: sorted.filter((event) => event.relationship === "attending").length
+      });
+    };
+
+    const unsubscribeEvents = onSnapshot(
       collection(db, "tailgateEvents"),
       (snapshot) => {
-        const nextTailgates: DashboardTailgate[] = snapshot.docs
-          .map((snapshotDoc) => {
-            const data = snapshotDoc.data() as Record<string, unknown>;
-            const relationship = resolveRelationship(data, userId);
-            if (!relationship) return null;
-
-            return {
-              ...normalizeTailgate(snapshotDoc.id, data),
-              relationship
-            } as DashboardTailgate;
-          })
-          .filter((event): event is DashboardTailgate => Boolean(event));
-
-        const sorted = sortTailgates(nextTailgates);
-        setTailgates(sorted);
-        setLoading(false);
-        setError(null);
-        debugAuthLog("dashboard:tailgates-loaded", {
-          uid: userId,
-          total: sorted.length,
-          hosting: sorted.filter((event) => event.relationship === "hosting").length,
-          attending: sorted.filter((event) => event.relationship === "attending").length
+        eventsById.clear();
+        snapshot.docs.forEach((snapshotDoc) => {
+          eventsById.set(snapshotDoc.id, snapshotDoc.data() as Record<string, unknown>);
         });
+        hasEventSnapshot = true;
+        applySnapshotState();
       },
       (snapshotError) => {
         console.error("Failed to load dashboard tailgates", snapshotError);
@@ -380,7 +521,37 @@ export function useDashboardTailgates(userId?: string) {
       }
     );
 
-    return () => unsubscribe();
+    const ticketUnsubscribes = DASHBOARD_TICKET_LOOKUPS.map((lookup) =>
+      onSnapshot(
+        query(collection(db, lookup.collectionName), where(lookup.userField, "==", userId)),
+        (snapshot) => {
+          const ids = new Set<string>();
+          snapshot.docs.forEach((snapshotDoc) => {
+            const data = snapshotDoc.data() as Record<string, unknown>;
+            if (!isPaidTicketRecord(data)) return;
+            const tailgateId = resolveTicketTailgateId(data);
+            if (tailgateId) ids.add(tailgateId);
+          });
+          ticketTailgateIdsBySource.set(lookup.sourceKey, ids);
+          readyTicketSources.add(lookup.sourceKey);
+          applySnapshotState();
+        },
+        (ticketError) => {
+          console.error(
+            `Failed to load dashboard ticket relationships from ${lookup.collectionName}.${lookup.userField}`,
+            ticketError
+          );
+          ticketTailgateIdsBySource.set(lookup.sourceKey, new Set<string>());
+          readyTicketSources.add(lookup.sourceKey);
+          applySnapshotState();
+        }
+      )
+    );
+
+    return () => {
+      unsubscribeEvents();
+      ticketUnsubscribes.forEach((unsubscribe) => unsubscribe());
+    };
   }, [userId]);
 
   const now = new Date();

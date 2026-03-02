@@ -14,6 +14,7 @@ import { getBlob, getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { useNavigate, useParams } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import { useAuth } from "../hooks/useAuth";
+import { useDialog } from "../hooks/useDialog";
 import { db, storage } from "../lib/firebase";
 import { formatDateTime } from "../utils/format";
 
@@ -207,6 +208,7 @@ export default function EventFeed() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { confirm } = useDialog();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const activeComposerPreviewUrlsRef = useRef<string[]>([]);
   const attemptedImageResolutionRef = useRef<Set<string>>(new Set());
@@ -605,7 +607,13 @@ export default function EventFeed() {
 
   const handleDeletePost = async (postId: string) => {
     if (!id || !db) return;
-    const confirmed = window.confirm("Delete this post?");
+    const confirmed = await confirm({
+      title: "Delete this post?",
+      message: "This post will be permanently removed from the event feed.",
+      confirmLabel: "Delete",
+      cancelLabel: "Keep post",
+      tone: "danger"
+    });
     if (!confirmed) return;
 
     setDeletingPostId(postId);

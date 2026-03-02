@@ -5,6 +5,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   onSnapshot,
   orderBy,
   query,
@@ -17,6 +18,7 @@ import { getBlob, getDownloadURL, ref } from "firebase/storage";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import { useAuth } from "../hooks/useAuth";
+import { useDialog } from "../hooks/useDialog";
 import { useCreateRefundRequest } from "../hooks/useCreateRefundRequest";
 import {
   app as firebaseApp,
@@ -41,6 +43,7 @@ const DAY_IN_MS = 24 * 60 * 60 * 1000;
 type AttendeeFilterKey = "All" | "Going" | "Pending" | "Not Going";
 type AttendeeStatus = "Host" | "Attending" | "Pending" | "Not Attending";
 type TicketCheckState = "loading" | "confirmed" | "missing";
+type GuestRsvpChoice = "Attending" | "Not Attending";
 type TimelineStep = {
   id: string;
   title: string;
@@ -133,6 +136,8 @@ type RefundRequestStatus = "pending" | "approved" | "denied" | null;
 type GuestRefundTicket = {
   ticketId: string;
   ticketCode: string;
+  purchaseReference: string;
+  purchaseNumber?: string;
   quantity: number;
   amountCents?: number;
   ticketStatus: string;
@@ -141,6 +146,20 @@ type GuestRefundTicket = {
   guestReason?: string;
   hostDecisionReason?: string;
   isConfirmedTicket: boolean;
+  isRefunded: boolean;
+  isEligibleForRequest: boolean;
+  createdAtMs: number;
+};
+
+type GuestRefundPurchase = {
+  purchaseReference: string;
+  purchaseNumber?: string;
+  representativeTicketId: string;
+  quantity: number;
+  amountCents?: number;
+  refundRequestStatus: RefundRequestStatus;
+  refundRequestId?: string;
+  hostDecisionReason?: string;
   isRefunded: boolean;
   isEligibleForRequest: boolean;
   createdAtMs: number;
@@ -233,6 +252,7 @@ const normalizedStatusMap: Record<string, AttendeeStatus> = {
   "not going": "Not Attending",
   declined: "Not Attending"
 };
+const coordinateRegex = /^-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?$/;
 
 function normalizeTicketLifecycleStatus(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
@@ -257,6 +277,13 @@ function isPaidTicketStatus(status: string): boolean {
     status === "paid" ||
     status === "purchase_succeeded"
   );
+}
+
+function formatPurchaseReference(reference: string) {
+  const trimmed = reference.trim();
+  if (!trimmed) return "unknown";
+  if (trimmed.length <= 12) return trimmed;
+  return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
 }
 
 function normalizeRefundRequestStatus(value: unknown): RefundRequestStatus {
@@ -318,6 +345,13 @@ function uniqueStrings(values: string[]) {
     unique.push(value);
   });
   return unique;
+}
+
+function createInviteIdentifier() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function coerceNumber(value: unknown): number | undefined {
@@ -479,6 +513,13 @@ function normalizeStatus(value: unknown): AttendeeStatus {
   return normalized ?? "Pending";
 }
 
+function isCoordinateString(value?: string | null): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  return coordinateRegex.test(value.trim());
+}
+
 function normalizeAttendees(
   rawAttendees: unknown,
   hostId: string,
@@ -589,17 +630,13 @@ function resolveLocationCoords(
 
 function buildMapEmbedUrl(
   coords: { lat: number; lng: number },
-  mapsApiKey: string,
-  locationLabel?: string
+  mapsApiKey: string
 ): string | null {
   if (!mapsApiKey) return null;
   const query = `${coords.lat},${coords.lng}`;
   const url = new URL("https://www.google.com/maps/embed/v1/place");
   url.searchParams.set("key", mapsApiKey);
   url.searchParams.set("q", query);
-  if (locationLabel?.trim()) {
-    url.searchParams.set("q", `${query} (${locationLabel.trim()})`);
-  }
   url.searchParams.set("zoom", "14");
   return url.toString();
 }
@@ -841,6 +878,7 @@ export default function TailgateDetails() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { confirm, alert: showDialogAlert } = useDialog();
   const attendeeSectionRef = useRef<HTMLElement | null>(null);
   const timelineSectionRef = useRef<HTMLElement | null>(null);
   const eventSnapshotSectionRef = useRef<HTMLElement | null>(null);
@@ -852,6 +890,10 @@ export default function TailgateDetails() {
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<TailgateDetail | null>(null);
   const [attendeeFilter, setAttendeeFilter] = useState<AttendeeFilterKey>("All");
+  const [rsvpSaving, setRsvpSaving] = useState(false);
+  const [rsvpPendingChoice, setRsvpPendingChoice] = useState<GuestRsvpChoice | null>(null);
+  const [rsvpError, setRsvpError] = useState<string | null>(null);
+  const [rsvpSuccess, setRsvpSuccess] = useState<string | null>(null);
   const [pinning, setPinning] = useState(false);
   const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
   const [ticketQuantity, setTicketQuantity] = useState(1);
@@ -859,7 +901,8 @@ export default function TailgateDetails() {
   const [hasConfirmedTicket, setHasConfirmedTicket] = useState(false);
   const [confirmedTicketCount, setConfirmedTicketCount] = useState(0);
   const [guestRefundTickets, setGuestRefundTickets] = useState<GuestRefundTicket[]>([]);
-  const [guestRefundModalTicketId, setGuestRefundModalTicketId] = useState<string | null>(null);
+  const [guestRefundModalPurchaseReference, setGuestRefundModalPurchaseReference] =
+    useState<string | null>(null);
   const [guestRefundReason, setGuestRefundReason] = useState("");
   const [guestRefundFeedback, setGuestRefundFeedback] = useState<{
     tone: "success" | "error";
@@ -1314,6 +1357,10 @@ export default function TailgateDetails() {
     if (!detail || !user?.uid) return false;
     return detail.hostId === user.uid || detail.coHostIds.includes(user.uid);
   }, [detail, user?.uid]);
+  const isEventHost = useMemo(() => {
+    if (!detail || !user?.uid) return false;
+    return detail.hostId === user.uid;
+  }, [detail, user?.uid]);
   const eventStartForCancellation = detail?.startDateTime ?? detail?.eventTargetTime ?? null;
   const hasEventStarted =
     eventStartForCancellation instanceof Date &&
@@ -1371,6 +1418,9 @@ export default function TailgateDetails() {
       phone: "",
       email: ""
     });
+    setRsvpPendingChoice(null);
+    setRsvpError(null);
+    setRsvpSuccess(null);
     setGuestInviteError(null);
     setGuestInviteSuccess(null);
   }, [detail?.id]);
@@ -1380,6 +1430,12 @@ export default function TailgateDetails() {
     const timer = setTimeout(() => setGuestInviteSuccess(null), 3000);
     return () => clearTimeout(timer);
   }, [guestInviteSuccess]);
+
+  useEffect(() => {
+    if (!rsvpSuccess) return;
+    const timer = setTimeout(() => setRsvpSuccess(null), 3500);
+    return () => clearTimeout(timer);
+  }, [rsvpSuccess]);
 
   useEffect(() => {
     setIsHostBroadcastComposerOpen(false);
@@ -1401,7 +1457,7 @@ export default function TailgateDetails() {
     setTicketQuantity(1);
     setCheckoutError(null);
     setGuestRefundTickets([]);
-    setGuestRefundModalTicketId(null);
+    setGuestRefundModalPurchaseReference(null);
     setGuestRefundReason("");
     setGuestRefundFeedback(null);
     clearCreateRefundRequestError();
@@ -1490,6 +1546,19 @@ export default function TailgateDetails() {
 
             const refundRecord = asRecord(data.refund);
             const refundRequestRecord = asRecord(data.refundRequest);
+            const purchaseRecord = asRecord(data.purchase);
+            const purchaseReference =
+              firstString(
+                data.purchaseId,
+                data.ticketPurchaseId,
+                data.ticketPurchaseRef,
+                data.purchaseRef,
+                data.orderId,
+                data.checkoutSessionId,
+                data.paymentIntentId,
+                purchaseRecord?.id,
+                purchaseRecord?.purchaseId
+              ) ?? docSnap.id;
             const refundRequestStatus = normalizeRefundRequestStatus(
               firstString(
                 data.refundRequestStatus,
@@ -1516,6 +1585,14 @@ export default function TailgateDetails() {
             const nextTicket: GuestRefundTicket = {
               ticketId: docSnap.id,
               ticketCode: firstString(data.ticketCode) ?? "—",
+              purchaseReference,
+              purchaseNumber: firstString(
+                data.purchaseNumber,
+                data.orderNumber,
+                data.receiptNumber,
+                purchaseRecord?.purchaseNumber,
+                purchaseRecord?.orderNumber
+              ),
               quantity,
               amountCents,
               ticketStatus,
@@ -1670,7 +1747,30 @@ export default function TailgateDetails() {
     };
   }, [detail, isHostUser]);
 
-  const locationLabel = detail?.locationSummary ?? "Location not set";
+  const locationRawRecord = asRecord(detail?.locationRaw);
+  const locationPinRecord = asRecord(locationRawRecord?.pin);
+  const exactPinLat = coerceNumber(locationPinRecord?.lat);
+  const exactPinLng = coerceNumber(locationPinRecord?.lng);
+  const hasExactPin = typeof exactPinLat === "number" && typeof exactPinLng === "number";
+  const resolvedLocationText =
+    detail?.locationSummary ?? resolveLocationString(detail?.locationRaw);
+  const displayLocationLabel =
+    resolvedLocationText && !isCoordinateString(resolvedLocationText)
+      ? resolvedLocationText
+      : undefined;
+  const exactPinCoords = hasExactPin ? { lat: exactPinLat, lng: exactPinLng } : null;
+  const locationCoords = exactPinCoords ?? detail?.locationCoords ?? null;
+  const droppedPinLabel = locationCoords
+    ? "Pin dropped by host. View exact location on map."
+    : null;
+  const locationLabel =
+    droppedPinLabel ??
+    displayLocationLabel ??
+    (locationCoords ? "Pin dropped in map" : "Location not set");
+  const locationDirectionQuery = locationCoords
+    ? `${locationCoords.lat},${locationCoords.lng}`
+    : resolvedLocationText ?? "";
+  const canOpenMaps = locationDirectionQuery.trim().length > 0;
   const coverImageUrls = rawCoverImageUrls;
   const safeCoverIndex =
     coverImageUrls.length > 0
@@ -1705,9 +1805,8 @@ export default function TailgateDetails() {
     Boolean(activeCoverImageUrl) &&
     !activeCoverImageLoaded &&
     (!hasActiveCoverImageLoadError || isRecoveringActiveCoverImage);
-  const locationCoords = detail?.locationCoords ?? null;
   const mapUrl = locationCoords
-    ? buildMapEmbedUrl(locationCoords, MAPS_API_KEY, locationLabel)
+    ? buildMapEmbedUrl(locationCoords, MAPS_API_KEY)
     : null;
   const checkoutResult = useMemo(() => {
     const params = new URLSearchParams(location.search);
@@ -1744,6 +1843,32 @@ export default function TailgateDetails() {
       return true;
     });
   }, [attendeeFilter, detail]);
+  const userAttendee = useMemo(() => {
+    if (!detail || !user?.uid) return null;
+    return detail.attendees.find((attendee) => attendee.userId === user.uid) ?? null;
+  }, [detail, user?.uid]);
+  const userRsvpStatus: AttendeeStatus = userAttendee?.status ?? "Pending";
+  const rsvpStatusMeta = useMemo(() => {
+    if (userRsvpStatus === "Attending") {
+      return {
+        label: "Going",
+        description: "You are in. The host sees you as attending.",
+        className: "tailgate-details-rsvp-status-going"
+      };
+    }
+    if (userRsvpStatus === "Not Attending") {
+      return {
+        label: "Not Going",
+        description: "You are marked as not attending.",
+        className: "tailgate-details-rsvp-status-not-going"
+      };
+    }
+    return {
+      label: "Pending",
+      description: "Choose an option so the host can plan accurately.",
+      className: "tailgate-details-rsvp-status-pending"
+    };
+  }, [userRsvpStatus]);
 
   const expectationChips = useMemo(() => {
     if (!detail?.expectations) return [];
@@ -1783,14 +1908,83 @@ export default function TailgateDetails() {
     detail?.visibilityType === "open_paid" &&
     !isHostUser &&
     status !== "cancelled";
-  const selectedGuestRefundTicket = useMemo(
+  const guestRefundPurchases = useMemo(() => {
+    const grouped = new Map<string, GuestRefundTicket[]>();
+    guestRefundTickets.forEach((ticket) => {
+      const group = grouped.get(ticket.purchaseReference) ?? [];
+      group.push(ticket);
+      grouped.set(ticket.purchaseReference, group);
+    });
+
+    return Array.from(grouped.entries())
+      .map(([purchaseReference, ticketsInPurchase]) => {
+        const representativeTicket =
+          ticketsInPurchase.find((ticket) => ticket.isEligibleForRequest) ?? ticketsInPurchase[0];
+        const quantity = ticketsInPurchase.reduce((sum, ticket) => sum + ticket.quantity, 0);
+        const hasCompleteAmount = ticketsInPurchase.every(
+          (ticket) => typeof ticket.amountCents === "number"
+        );
+        const amountCents = hasCompleteAmount
+          ? ticketsInPurchase.reduce(
+              (sum, ticket) => sum + (typeof ticket.amountCents === "number" ? ticket.amountCents : 0),
+              0
+            )
+          : undefined;
+        const hasPending = ticketsInPurchase.some(
+          (ticket) => ticket.refundRequestStatus === "pending"
+        );
+        const hasApproved = ticketsInPurchase.some(
+          (ticket) => ticket.refundRequestStatus === "approved" || ticket.isRefunded
+        );
+        const hasDenied = ticketsInPurchase.some(
+          (ticket) => ticket.refundRequestStatus === "denied"
+        );
+        const refundRequestStatus: RefundRequestStatus = hasPending
+          ? "pending"
+          : hasApproved
+          ? "approved"
+          : hasDenied
+          ? "denied"
+          : null;
+        const isEligibleForRequest =
+          !hasPending &&
+          !hasApproved &&
+          ticketsInPurchase.some((ticket) => ticket.isEligibleForRequest);
+        const createdAtMs = ticketsInPurchase.reduce(
+          (latest, ticket) => Math.max(latest, ticket.createdAtMs),
+          0
+        );
+
+        return {
+          purchaseReference,
+          purchaseNumber: representativeTicket.purchaseNumber,
+          representativeTicketId: representativeTicket.ticketId,
+          quantity,
+          amountCents,
+          refundRequestStatus,
+          refundRequestId:
+            representativeTicket.refundRequestId ??
+            ticketsInPurchase.find((ticket) => ticket.refundRequestId)?.refundRequestId,
+          hostDecisionReason:
+            ticketsInPurchase.find((ticket) => ticket.hostDecisionReason?.trim())?.hostDecisionReason,
+          isRefunded: hasApproved,
+          isEligibleForRequest,
+          createdAtMs
+        } as GuestRefundPurchase;
+      })
+      .sort((left, right) => right.createdAtMs - left.createdAtMs);
+  }, [guestRefundTickets]);
+  const selectedGuestRefundPurchase = useMemo(
     () =>
-      guestRefundModalTicketId
-        ? guestRefundTickets.find((ticket) => ticket.ticketId === guestRefundModalTicketId) ?? null
+      guestRefundModalPurchaseReference
+        ? guestRefundPurchases.find(
+            (purchase) => purchase.purchaseReference === guestRefundModalPurchaseReference
+          ) ?? null
         : null,
-    [guestRefundModalTicketId, guestRefundTickets]
+    [guestRefundModalPurchaseReference, guestRefundPurchases]
   );
-  const canShowGuestRefundSection = showTicketPurchase && Boolean(user) && guestRefundTickets.length > 0;
+  const canShowGuestRefundSection =
+    showTicketPurchase && Boolean(user) && guestRefundPurchases.length > 0;
   const canPurchaseTickets =
     showTicketPurchase &&
     Boolean(user) &&
@@ -1840,10 +2034,13 @@ export default function TailgateDetails() {
     : "Schedule is hidden from attendees.";
   const canEditCancelledEvent = status !== "cancelled";
   const canOpenCheckIn = detail?.visibilityType === "open_paid" && status !== "cancelled";
+  const showGuestRsvpSection =
+    detail?.visibilityType === "private" && !isHostUser && status !== "cancelled";
   const canShowWhosComingSection = detail?.visibilityType === "private";
   const canManageGuestInvites = isHostUser && detail?.visibilityType === "private";
   const hostBroadcastCharacterCount = hostBroadcastMessage.length;
   const canSendHostBroadcast =
+    isEventHost &&
     hostBroadcastMessage.trim().length > 0 &&
     hostBroadcastCharacterCount <= MAX_HOST_BROADCAST_MESSAGE_LENGTH &&
     !hostBroadcastSending &&
@@ -2138,12 +2335,117 @@ export default function TailgateDetails() {
     }
   };
 
+  const updateGuestRsvp = async (nextStatus: GuestRsvpChoice) => {
+    if (!detail || !id || !db || !user?.uid || isHostUser || rsvpSaving) return;
+    if (userRsvpStatus === nextStatus) return;
+
+    const eventRef = doc(db, "tailgateEvents", id);
+    setRsvpSaving(true);
+    setRsvpPendingChoice(nextStatus);
+    setRsvpError(null);
+    setRsvpSuccess(null);
+
+    try {
+      const snapshot = await getDoc(eventRef);
+      if (!snapshot.exists()) {
+        setRsvpError("Tailgate not found.");
+        return;
+      }
+
+      const eventData = snapshot.data() as Record<string, unknown>;
+      const attendeesRaw = Array.isArray(eventData.attendees)
+        ? [...eventData.attendees]
+        : [];
+      const attendeeIndex = attendeesRaw.findIndex((entry) => {
+        const attendeeRecord = asRecord(entry);
+        if (!attendeeRecord) return false;
+        const attendeeUserId = firstString(
+          attendeeRecord.userId,
+          attendeeRecord.uid,
+          attendeeRecord.id
+        );
+        return attendeeUserId === user.uid;
+      });
+
+      const fallbackName = firstString(user.displayName, user.email) ?? "Guest";
+
+      if (attendeeIndex >= 0) {
+        const existing = asRecord(attendeesRaw[attendeeIndex]) ?? {};
+        attendeesRaw[attendeeIndex] = {
+          ...existing,
+          id: firstString(existing.id, user.uid) ?? user.uid,
+          userId:
+            firstString(existing.userId, existing.uid, existing.id, user.uid) ??
+            user.uid,
+          name:
+            firstString(
+              existing.name,
+              existing.displayName,
+              user.displayName,
+              user.email
+            ) ?? fallbackName,
+          displayName:
+            firstString(
+              existing.displayName,
+              existing.name,
+              user.displayName,
+              user.email
+            ) ?? fallbackName,
+          status: nextStatus
+        };
+      } else {
+        attendeesRaw.push({
+          id: user.uid,
+          userId: user.uid,
+          name: fallbackName,
+          displayName: fallbackName,
+          status: nextStatus
+        });
+      }
+
+      await updateDoc(eventRef, { attendees: attendeesRaw });
+      setDetail((previous) => {
+        if (!previous) return previous;
+        return {
+          ...previous,
+          attendees: normalizeAttendees(
+            attendeesRaw,
+            previous.hostId,
+            previous.hostName
+          )
+        };
+      });
+      setRsvpSuccess(nextStatus === "Attending" ? "RSVP updated to Going." : "RSVP updated to Not Going.");
+    } catch (rsvpUpdateError) {
+      console.error("Failed to update RSVP", rsvpUpdateError);
+      setRsvpError("Unable to update RSVP right now.");
+    } finally {
+      setRsvpSaving(false);
+      setRsvpPendingChoice(null);
+    }
+  };
+
+  const confirmGuestRsvpUpdate = (nextStatus: GuestRsvpChoice) => {
+    if (!user || rsvpSaving || userRsvpStatus === nextStatus) return;
+    const nextLabel = nextStatus === "Attending" ? "Going" : "Not Going";
+    void (async () => {
+      const shouldContinue = await confirm({
+        title: "Change RSVP?",
+        message: `Are you sure you want to change your RSVP to ${nextLabel}?`,
+        confirmLabel: `Yes, ${nextLabel}`,
+        cancelLabel: "Keep current",
+        tone: nextStatus === "Not Attending" ? "danger" : "default"
+      });
+      if (!shouldContinue) return;
+      await updateGuestRsvp(nextStatus);
+    })();
+  };
+
   const openMaps = () => {
-    if (!detail) return;
-    const query = locationCoords
-      ? `${locationCoords.lat},${locationCoords.lng}`
-      : locationLabel;
-    const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+    if (!canOpenMaps) return;
+    const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+      locationDirectionQuery
+    )}`;
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
@@ -2271,8 +2573,8 @@ export default function TailgateDetails() {
     }
   };
 
-  const openGuestRefundModal = (ticketId: string) => {
-    setGuestRefundModalTicketId(ticketId);
+  const openGuestRefundModal = (purchaseReference: string) => {
+    setGuestRefundModalPurchaseReference(purchaseReference);
     setGuestRefundReason("");
     setGuestRefundFeedback(null);
     clearCreateRefundRequestError();
@@ -2280,25 +2582,25 @@ export default function TailgateDetails() {
 
   const closeGuestRefundModal = () => {
     if (createRefundRequestLoading) return;
-    setGuestRefundModalTicketId(null);
+    setGuestRefundModalPurchaseReference(null);
     setGuestRefundReason("");
     clearCreateRefundRequestError();
   };
 
   const submitGuestRefundRequest = async () => {
-    if (!selectedGuestRefundTicket || createRefundRequestLoading) {
+    if (!selectedGuestRefundPurchase || createRefundRequestLoading) {
       return;
     }
 
     try {
       const result = await createRefundRequest({
-        ticketId: selectedGuestRefundTicket.ticketId,
+        ticketId: selectedGuestRefundPurchase.representativeTicketId,
         guestReason: guestRefundReason.trim() || undefined
       });
 
       setGuestRefundTickets((previous) =>
         previous.map((ticket) =>
-          ticket.ticketId === selectedGuestRefundTicket.ticketId
+          ticket.purchaseReference === selectedGuestRefundPurchase.purchaseReference
             ? {
                 ...ticket,
                 refundRequestStatus: "pending",
@@ -2314,7 +2616,7 @@ export default function TailgateDetails() {
         tone: "success",
         text: "Refund requested • Waiting for host decision."
       });
-      setGuestRefundModalTicketId(null);
+      setGuestRefundModalPurchaseReference(null);
       setGuestRefundReason("");
       clearCreateRefundRequestError();
     } catch (requestError) {
@@ -2329,7 +2631,10 @@ export default function TailgateDetails() {
   const dropLocationPin = () => {
     if (!detail || !id || !db) return;
     if (!navigator.geolocation) {
-      window.alert("Geolocation is not supported in this browser.");
+      void showDialogAlert({
+        title: "Location unavailable",
+        message: "Geolocation is not supported in this browser."
+      });
       return;
     }
 
@@ -2355,14 +2660,20 @@ export default function TailgateDetails() {
           });
         } catch (updateError) {
           console.error("Failed to pin location", updateError);
-          window.alert("Unable to save location pin. Try again.");
+          await showDialogAlert({
+            title: "Pin failed",
+            message: "Unable to save location pin. Try again."
+          });
         } finally {
           setPinning(false);
         }
       },
       (geoError) => {
         console.error("Failed to get current location", geoError);
-        window.alert("Unable to access your location.");
+        void showDialogAlert({
+          title: "Location access denied",
+          message: "Unable to access your location."
+        });
         setPinning(false);
       },
       { enableHighAccuracy: true, timeout: 12000 }
@@ -2545,7 +2856,13 @@ export default function TailgateDetails() {
 
   const removeTimelineStep = async (stepId: string) => {
     if (!db || !id) return;
-    const confirmed = window.confirm("Delete this timeline step?");
+    const confirmed = await confirm({
+      title: "Delete timeline step?",
+      message: "This timeline step will be permanently removed.",
+      confirmLabel: "Delete",
+      cancelLabel: "Keep step",
+      tone: "danger"
+    });
     if (!confirmed) return;
 
     try {
@@ -2639,7 +2956,8 @@ export default function TailgateDetails() {
     }
 
     const invitePayload: Record<string, unknown> = {
-      id: `invite-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      id: createInviteIdentifier(),
+      token: createInviteIdentifier(),
       name,
       status: "Pending",
       invitedAt: new Date().toISOString()
@@ -2694,7 +3012,7 @@ export default function TailgateDetails() {
 
   const sendHostBroadcastMessage = async () => {
     if (!detail) return;
-    if (!isHostUser) {
+    if (!isEventHost) {
       setHostBroadcastFeedback({
         tone: "error",
         text: "Only the host can message attendees."
@@ -2754,15 +3072,16 @@ export default function TailgateDetails() {
       if (attemptedTotal === 0) {
         setHostBroadcastFeedback({
           tone: "info",
-          text: "No eligible attendees to text for this event."
+          text: "No attendee phone numbers were eligible for SMS."
         });
+        setHostBroadcastMessage("");
         return;
       }
 
       if (sentTotal > 0 && failedCount > 0) {
         setHostBroadcastFeedback({
           tone: "success",
-          text: `Sent ${sentTotal} of ${attemptedTotal} attendees.`
+          text: `Sent ${sentTotal} of ${attemptedTotal} attendee texts.`
         });
         setHostBroadcastMessage("");
         return;
@@ -2771,7 +3090,7 @@ export default function TailgateDetails() {
       if (sentTotal > 0) {
         setHostBroadcastFeedback({
           tone: "success",
-          text: `Sent to ${sentTotal} attendee${sentTotal === 1 ? "" : "s"}.`
+          text: `Message sent to ${sentTotal} attendee${sentTotal === 1 ? "" : "s"}.`
         });
         setHostBroadcastMessage("");
         return;
@@ -2796,11 +3115,12 @@ export default function TailgateDetails() {
         combinedError.includes("permission-denied") ||
         combinedError.includes("unauthenticated") ||
         combinedError.includes("not_authorized") ||
-        combinedError.includes("not-host")
+        combinedError.includes("not-host") ||
+        combinedError.includes("only the event host")
       ) {
         setHostBroadcastFeedback({
           tone: "error",
-          text: "Only the event host can message attendees."
+          text: "Only the host can message attendees."
         });
       } else if (
         combinedError.includes("invalid-argument") ||
@@ -2809,12 +3129,12 @@ export default function TailgateDetails() {
       ) {
         setHostBroadcastFeedback({
           tone: "error",
-          text: "Enter a valid message (max 320 chars) and try again."
+          text: "Please check your message and try again."
         });
       } else {
         setHostBroadcastFeedback({
           tone: "error",
-          text: "Unable to send attendee text right now. Please try again."
+          text: "Unable to send attendee text right now."
         });
       }
     } finally {
@@ -2865,7 +3185,7 @@ export default function TailgateDetails() {
       </div>
     ) : null;
 
-  const guestRefundModal = selectedGuestRefundTicket ? (
+  const guestRefundModal = selectedGuestRefundPurchase ? (
     <div className="create-wizard-modal-overlay" role="dialog" aria-modal="true">
       <div className="create-wizard-modal create-wizard-refund-modal">
         <div className="create-wizard-modal-header">
@@ -2880,8 +3200,13 @@ export default function TailgateDetails() {
           </button>
         </div>
         <p className="meta-muted">
-          Ticket {selectedGuestRefundTicket.ticketCode} · Qty {selectedGuestRefundTicket.quantity}
+          Purchase{" "}
+          {selectedGuestRefundPurchase.purchaseNumber?.trim()
+            ? selectedGuestRefundPurchase.purchaseNumber
+            : formatPurchaseReference(selectedGuestRefundPurchase.purchaseReference)}{" "}
+          · Qty {selectedGuestRefundPurchase.quantity}
         </p>
+        <p className="meta-muted">Refunds are issued for the full purchase amount only.</p>
         <label className="input-group">
           <span className="input-label">Reason (optional)</span>
           <textarea
@@ -3028,15 +3353,17 @@ export default function TailgateDetails() {
                   <strong>Open event feed</strong>
                   <small>Post updates and share photos with attendees</small>
                 </button>
-                <button
-                  className={`tailgate-details-action-card${
-                    isHostBroadcastComposerOpen ? " is-primary" : ""
-                  }`}
-                  onClick={openHostBroadcastComposer}
-                >
-                  <strong>Message attendees</strong>
-                  <small>Send a one-time SMS update to your attendees</small>
-                </button>
+                {isEventHost ? (
+                  <button
+                    className={`tailgate-details-action-card${
+                      isHostBroadcastComposerOpen ? " is-primary" : ""
+                    }`}
+                    onClick={openHostBroadcastComposer}
+                  >
+                    <strong>Message attendees</strong>
+                    <small>Send a one-time SMS update to your attendees</small>
+                  </button>
+                ) : null}
                 <button
                   className="tailgate-details-action-card"
                   onClick={dropLocationPin}
@@ -3046,7 +3373,7 @@ export default function TailgateDetails() {
                   <small>Share exact meetup point from your current location</small>
                 </button>
               </div>
-              {isHostBroadcastComposerOpen ? (
+              {isEventHost && isHostBroadcastComposerOpen ? (
                 <div className="tailgate-details-host-broadcast">
                   <label className="input-group" htmlFor="host-broadcast-message">
                     <span className="input-label">Message</span>
@@ -3079,7 +3406,7 @@ export default function TailgateDetails() {
                         onClick={() => void sendHostBroadcastMessage()}
                         disabled={!canSendHostBroadcast}
                       >
-                        {hostBroadcastSending ? "Sending..." : "Send message"}
+                        {hostBroadcastSending ? "Sending..." : "Send text"}
                       </button>
                     </div>
                   </div>
@@ -3244,9 +3571,11 @@ export default function TailgateDetails() {
               <strong>Location:</strong> {locationLabel}
             </p>
             <div className="tailgate-details-hero-actions">
-              <button className="primary-button" onClick={openMaps}>
-                Open maps
-              </button>
+              {canOpenMaps ? (
+                <button className="primary-button" onClick={openMaps}>
+                  Open maps
+                </button>
+              ) : null}
               <button
                 className="secondary-button"
                 onClick={() => navigate(`/tailgates/${detail.id}/feed`)}
@@ -3497,7 +3826,11 @@ export default function TailgateDetails() {
               <div className="tailgate-details-info-card">
                 <p>Where</p>
                 <strong>{locationLabel}</strong>
-                <button className="link-button" onClick={openMaps}>Open in maps</button>
+                {canOpenMaps ? (
+                  <button className="link-button" onClick={openMaps}>
+                    Open in maps
+                  </button>
+                ) : null}
               </div>
               <div className="tailgate-details-info-card">
                 <p>Type</p>
@@ -3509,6 +3842,63 @@ export default function TailgateDetails() {
                 )}
               </div>
             </div>
+            {showGuestRsvpSection ? (
+              <div className="tailgate-details-rsvp-block">
+                <div className="tailgate-details-ticket-row">
+                  <p className="tailgate-details-ticket-title">Your RSVP</p>
+                  <span className={`tailgate-details-rsvp-status ${rsvpStatusMeta.className}`}>
+                    {rsvpStatusMeta.label}
+                  </span>
+                </div>
+                <p className="tailgate-details-ticket-copy">{rsvpStatusMeta.description}</p>
+                {user ? (
+                  <div className="tailgate-details-rsvp-options">
+                    <button
+                      type="button"
+                      className={`tailgate-details-rsvp-option${
+                        userRsvpStatus === "Attending" ? " is-active is-going" : ""
+                      }`}
+                      onClick={() => confirmGuestRsvpUpdate("Attending")}
+                      disabled={rsvpSaving}
+                    >
+                      {rsvpSaving && rsvpPendingChoice === "Attending" ? "Updating..." : "Going"}
+                    </button>
+                    <button
+                      type="button"
+                      className={`tailgate-details-rsvp-option${
+                        userRsvpStatus === "Not Attending"
+                          ? " is-active is-not-going"
+                          : ""
+                      }`}
+                      onClick={() => confirmGuestRsvpUpdate("Not Attending")}
+                      disabled={rsvpSaving}
+                    >
+                      {rsvpSaving && rsvpPendingChoice === "Not Attending"
+                        ? "Updating..."
+                        : "Not Going"}
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() =>
+                      navigate(
+                        `/login?mode=login&redirect=${encodeURIComponent(
+                          `/tailgates/${encodeURIComponent(detail.id)}`
+                        )}`
+                      )
+                    }
+                  >
+                    Sign in to RSVP
+                  </button>
+                )}
+                {rsvpError ? <p className="tailgate-details-ticket-error">{rsvpError}</p> : null}
+                {rsvpSuccess ? (
+                  <p className="tailgate-details-inline-editor-success">{rsvpSuccess}</p>
+                ) : null}
+              </div>
+            ) : null}
             {showTicketPurchase ? (
               <div className="tailgate-details-ticket-block">
                 <div className="tailgate-details-ticket-row">
@@ -3579,64 +3969,86 @@ export default function TailgateDetails() {
                     <div className="tailgate-details-ticket-row">
                       <p className="tailgate-details-ticket-title">Refunds</p>
                     </div>
+                    <p className="tailgate-details-refund-status-copy">
+                      Refund requests apply to the full purchase. Partial refunds are unavailable.
+                    </p>
                     <div className="tailgate-details-refund-list">
-                      {guestRefundTickets.map((ticket) => {
+                      {guestRefundPurchases.map((purchase) => {
                         const refundStatusLabel =
-                          ticket.refundRequestStatus === "pending"
+                          purchase.refundRequestStatus === "pending"
                             ? "Pending"
-                            : ticket.refundRequestStatus === "approved"
+                            : purchase.refundRequestStatus === "approved"
                             ? "Approved"
-                            : ticket.refundRequestStatus === "denied"
+                            : purchase.refundRequestStatus === "denied"
                             ? "Denied"
-                            : ticket.isRefunded
+                            : purchase.isRefunded
                             ? "Approved"
                             : "Confirmed";
                         const refundStatusChipClass =
-                          ticket.refundRequestStatus === "pending"
+                          purchase.refundRequestStatus === "pending"
                             ? "chip-upcoming"
-                            : ticket.refundRequestStatus === "denied"
+                            : purchase.refundRequestStatus === "denied"
                             ? "chip-cancelled"
-                            : ticket.refundRequestStatus === "approved" || ticket.isRefunded
+                            : purchase.refundRequestStatus === "approved" || purchase.isRefunded
                             ? "chip-live"
                             : "chip-outline";
+                        const purchaseLabel = purchase.purchaseNumber?.trim()
+                          ? purchase.purchaseNumber
+                          : formatPurchaseReference(purchase.purchaseReference);
+                        const purchaseAmountLabel =
+                          typeof purchase.amountCents === "number"
+                            ? formatCurrencyFromCents(purchase.amountCents)
+                            : "Amount unavailable";
+                        const purchaseDateLabel =
+                          purchase.createdAtMs > 0
+                            ? formatDateTime(new Date(purchase.createdAtMs))
+                            : "Date unavailable";
 
                         return (
-                          <div className="tailgate-details-refund-row" key={ticket.ticketId}>
+                          <div
+                            className="tailgate-details-refund-row"
+                            key={`${purchase.purchaseReference}:${purchase.representativeTicketId}`}
+                          >
                             <div>
                               <p className="tailgate-details-attendee-name">
-                                Ticket {ticket.ticketCode} · Qty {ticket.quantity}
+                                Purchase {purchaseLabel} · Qty {purchase.quantity}
                               </p>
-                              {ticket.refundRequestStatus === "pending" ? (
+                              <p className="tailgate-details-refund-purchase-meta">
+                                {purchaseAmountLabel} · {purchaseDateLabel}
+                              </p>
+                              {purchase.refundRequestStatus === "pending" ? (
                                 <p className="tailgate-details-refund-status-copy">
                                   Refund requested • Waiting for host decision.
                                 </p>
-                              ) : ticket.refundRequestStatus === "approved" || ticket.isRefunded ? (
+                              ) : purchase.refundRequestStatus === "approved" || purchase.isRefunded ? (
                                 <p className="tailgate-details-refund-status-copy">Refund approved.</p>
-                              ) : ticket.refundRequestStatus === "denied" ? (
+                              ) : purchase.refundRequestStatus === "denied" ? (
                                 <p className="tailgate-details-ticket-error">
                                   Refund denied.
                                 </p>
                               ) : (
                                 <p className="tailgate-details-refund-status-copy">
-                                  Ticket confirmed.
+                                  Purchase confirmed.
                                 </p>
                               )}
-                              {ticket.hostDecisionReason?.trim() ? (
+                              {purchase.hostDecisionReason?.trim() ? (
                                 <p className="tailgate-details-refund-host-note">
-                                  Host note: {ticket.hostDecisionReason}
+                                  Host note: {purchase.hostDecisionReason}
                                 </p>
                               ) : null}
                             </div>
                             <div className="tailgate-details-refund-row-actions">
                               <span className={`chip ${refundStatusChipClass}`}>{refundStatusLabel}</span>
-                              {ticket.isEligibleForRequest ? (
+                              {purchase.isEligibleForRequest ? (
                                 <button
                                   type="button"
                                   className="secondary-button"
                                   disabled={createRefundRequestLoading}
-                                  onClick={() => openGuestRefundModal(ticket.ticketId)}
+                                  onClick={() =>
+                                    openGuestRefundModal(purchase.purchaseReference)
+                                  }
                                 >
-                                  Request refund
+                                  Request purchase refund
                                 </button>
                               ) : null}
                             </div>
@@ -3923,9 +4335,20 @@ export default function TailgateDetails() {
             <div className="section-header">
               <div>
                 <h2>Meet-up Spot</h2>
-                <p className="section-subtitle">{locationLabel}</p>
+                <p className="section-subtitle">
+                  {droppedPinLabel ??
+                    displayLocationLabel ??
+                    (locationCoords ? "Pin dropped in map" : "Location coming soon.")}
+                </p>
               </div>
             </div>
+            {locationCoords ? (
+              <p className="tailgate-details-map-note">
+                {hasExactPin
+                  ? "Exact in-lot pin shared by host."
+                  : "Showing general meetup area. Host can drop the exact in-lot pin later."}
+              </p>
+            ) : null}
             {mapUrl ? (
               <iframe className="tailgate-details-map" src={mapUrl} title="Tailgate map preview" />
             ) : (
@@ -3935,6 +4358,11 @@ export default function TailgateDetails() {
                   : "Set MAPS_API_KEY to preview Google Maps for this tailgate."}
               </div>
             )}
+            {canOpenMaps ? (
+              <button type="button" className="secondary-button" onClick={openMaps}>
+                Open in maps
+              </button>
+            ) : null}
           </article>
 
           {canShowWhosComingSection ? (

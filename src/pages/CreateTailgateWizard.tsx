@@ -1196,7 +1196,8 @@ export default function CreateTailgateWizard() {
       expectations,
       attendees: guestInvitesEnabled
         ? guests.map((guest) => ({
-            id: guest.id,
+            id: createLocalId(),
+            token: createLocalId(),
             name: guest.name,
             phone: guest.phone,
             status: "Pending"

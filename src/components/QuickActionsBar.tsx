@@ -1,6 +1,6 @@
 import React from "react";
 import { Link } from "react-router-dom";
-import { IconCheckin, IconMessage, IconPayout, IconSpark } from "./Icons";
+import { IconCheckin, IconPayout, IconSpark } from "./Icons";
 
 const actions = [
   {
@@ -14,12 +14,6 @@ const actions = [
     description: "Open today's check-in tools",
     to: "/checkin",
     icon: <IconCheckin />
-  },
-  {
-    label: "Send Messages",
-    description: "Message RSVP'd guests",
-    to: "/messages",
-    icon: <IconMessage />
   },
   {
     label: "Create Tailgate",
