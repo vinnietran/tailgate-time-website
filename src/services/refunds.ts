@@ -23,7 +23,6 @@ export type DenyRefundRequestInput = {
 export type ProcessTicketRefundInput = {
   ticketId: string;
   refundRequestId?: string;
-  refundAmountCents?: number;
   hostDecisionReason?: string;
 };
 
@@ -480,9 +479,6 @@ export async function processTicketRefund(
     ticketId: input.ticketId
   };
   if (input.refundRequestId) payload.refundRequestId = input.refundRequestId;
-  if (typeof input.refundAmountCents === "number") {
-    payload.refundAmountCents = input.refundAmountCents;
-  }
   if (input.hostDecisionReason?.trim()) {
     payload.hostDecisionReason = input.hostDecisionReason.trim();
     payload.reason = input.hostDecisionReason.trim();

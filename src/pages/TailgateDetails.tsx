@@ -39,6 +39,19 @@ const MAPS_API_KEY = (
 const MAX_TICKET_QUANTITY = 8;
 const MAX_HOST_BROADCAST_MESSAGE_LENGTH = 320;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const MAX_QUIZ_QUESTIONS = 10;
+const EMPTY_QUIZ_QUESTION_FALLBACK: QuizQuestion = {
+  id: "q1",
+  questionText: "",
+  choices: [
+    { id: "a", text: "" },
+    { id: "b", text: "" },
+    { id: "c", text: "" },
+    { id: "d", text: "" }
+  ],
+  correctChoiceId: null,
+  type: "multiple"
+};
 
 type AttendeeFilterKey = "All" | "Going" | "Pending" | "Not Going";
 type AttendeeStatus = "Host" | "Attending" | "Pending" | "Not Attending";
@@ -50,6 +63,22 @@ type TimelineStep = {
   description?: string;
   timestampStart: Date;
   timestampEnd?: Date | null;
+};
+type QuizChoice = {
+  id: string;
+  text: string;
+};
+type QuizQuestion = {
+  id: string;
+  questionText: string;
+  choices: QuizChoice[];
+  correctChoiceId: string | null;
+  type: "multiple" | "truefalse";
+};
+type QuizQuestionError = {
+  questionText?: string;
+  choices?: Record<string, string>;
+  correctChoiceId?: string;
 };
 type ExpectationKey =
   | "foodProvided"
@@ -394,6 +423,82 @@ function parseDurationPart(value: string) {
   const parsed = Number(value.replace(/\D/g, ""));
   if (!Number.isFinite(parsed)) return 0;
   return Math.max(0, Math.floor(parsed));
+}
+
+function nextQuizQuestionId(existing: QuizQuestion[]): string {
+  const used = new Set(existing.map((question) => question.id));
+  let i = 1;
+  while (used.has(`q${i}`)) i += 1;
+  return `q${i}`;
+}
+
+function createEmptyQuizQuestion(existing: QuizQuestion[]): QuizQuestion {
+  return {
+    id: nextQuizQuestionId(existing),
+    questionText: "",
+    choices: [
+      { id: "a", text: "" },
+      { id: "b", text: "" },
+      { id: "c", text: "" },
+      { id: "d", text: "" }
+    ],
+    correctChoiceId: null,
+    type: "multiple"
+  };
+}
+
+function normalizeQuizQuestions(raw: unknown): QuizQuestion[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((value, index) => {
+      const record = asRecord(value);
+      if (!record) return null;
+      const id = firstString(record.id) ?? `q${index + 1}`;
+      const questionText = firstString(record.questionText) ?? "";
+      const type = firstString(record.type) === "truefalse" ? "truefalse" : "multiple";
+      const rawChoices = Array.isArray(record.choices) ? record.choices : [];
+      const choices = rawChoices
+        .map((choiceValue, choiceIndex) => {
+          if (typeof choiceValue === "string") {
+            return {
+              id: String.fromCharCode(97 + choiceIndex),
+              text: choiceValue
+            } as QuizChoice;
+          }
+          const choiceRecord = asRecord(choiceValue);
+          if (!choiceRecord) return null;
+          const choiceId =
+            firstString(choiceRecord.id) ?? String.fromCharCode(97 + choiceIndex);
+          const choiceText = firstString(choiceRecord.text) ?? "";
+          return { id: choiceId, text: choiceText } as QuizChoice;
+        })
+        .filter((choice): choice is QuizChoice => Boolean(choice));
+
+      const normalizedChoices =
+        choices.length > 0
+          ? choices
+          : type === "truefalse"
+          ? [
+              { id: "true", text: "True" },
+              { id: "false", text: "False" }
+            ]
+          : [
+              { id: "a", text: "" },
+              { id: "b", text: "" },
+              { id: "c", text: "" },
+              { id: "d", text: "" }
+            ];
+      const correctChoiceId = firstString(record.correctChoiceId) ?? null;
+
+      return {
+        id,
+        questionText,
+        choices: normalizedChoices,
+        correctChoiceId,
+        type
+      } as QuizQuestion;
+    })
+    .filter((question): question is QuizQuestion => Boolean(question));
 }
 
 function toPhoneDigits(value: string) {
@@ -881,6 +986,7 @@ export default function TailgateDetails() {
   const { confirm, alert: showDialogAlert } = useDialog();
   const attendeeSectionRef = useRef<HTMLElement | null>(null);
   const timelineSectionRef = useRef<HTMLElement | null>(null);
+  const quizSectionRef = useRef<HTMLElement | null>(null);
   const eventSnapshotSectionRef = useRef<HTMLElement | null>(null);
   const attemptedCoverImageResolutionRef = useRef<Set<string>>(new Set());
   const attemptedCoverBlobFallbackRef = useRef<Set<string>>(new Set());
@@ -925,6 +1031,19 @@ export default function TailgateDetails() {
   const [timelineSaving, setTimelineSaving] = useState(false);
   const [publishingTimeline, setPublishingTimeline] = useState(false);
   const [enablingTimeline, setEnablingTimeline] = useState(false);
+  const [quizLoading, setQuizLoading] = useState(true);
+  const [quizSaving, setQuizSaving] = useState(false);
+  const [quizError, setQuizError] = useState<string | null>(null);
+  const [quizSuccess, setQuizSuccess] = useState<string | null>(null);
+  const [quizDocId, setQuizDocId] = useState<string | null>(null);
+  const [quizTitle, setQuizTitle] = useState("");
+  const [quizTitleError, setQuizTitleError] = useState("");
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([
+    createEmptyQuizQuestion([])
+  ]);
+  const [currentQuizQuestionIndex, setCurrentQuizQuestionIndex] = useState(0);
+  const [quizErrors, setQuizErrors] = useState<Record<number, QuizQuestionError>>({});
+  const [quizValidationMessage, setQuizValidationMessage] = useState<string | null>(null);
   const [eventStartInput, setEventStartInput] = useState("09:00");
   const [activeCoverIndex, setActiveCoverIndex] = useState(0);
   const [resolvedCoverImageUrlsByRaw, setResolvedCoverImageUrlsByRaw] = useState<
@@ -1333,6 +1452,89 @@ export default function TailgateDetails() {
 
     return () => unsubscribe();
   }, [id]);
+
+  useEffect(() => {
+    if (!id) {
+      setQuizLoading(false);
+      setQuizError("Missing tailgate id.");
+      return;
+    }
+
+    if (!detail || detail.visibilityType !== "private") {
+      setQuizLoading(false);
+      setQuizError(null);
+      setQuizDocId(null);
+      setQuizTitle("");
+      setQuizTitleError("");
+      setQuizQuestions([createEmptyQuizQuestion([])]);
+      setCurrentQuizQuestionIndex(0);
+      setQuizErrors({});
+      setQuizValidationMessage(null);
+      return;
+    }
+
+    if (!db) {
+      setQuizLoading(false);
+      setQuizError("Quiz is unavailable in this environment.");
+      return;
+    }
+
+    setQuizLoading(true);
+    setQuizError(null);
+    const quizzesCollection = collection(db, "tailgateEvents", id, "quizzes");
+    const unsubscribe = onSnapshot(
+      quizzesCollection,
+      (snapshot) => {
+        if (snapshot.empty) {
+          setQuizDocId(null);
+          setQuizTitle("");
+          setQuizTitleError("");
+          setQuizQuestions([createEmptyQuizQuestion([])]);
+          setCurrentQuizQuestionIndex(0);
+          setQuizErrors({});
+          setQuizValidationMessage(null);
+          setQuizLoading(false);
+          return;
+        }
+
+        const sortedDocs = [...snapshot.docs].sort((left, right) => {
+          const leftData = left.data() as Record<string, unknown>;
+          const rightData = right.data() as Record<string, unknown>;
+          const leftDate =
+            normalizeDate(leftData.updatedAt) ??
+            normalizeDate(leftData.createdAt) ??
+            new Date(0);
+          const rightDate =
+            normalizeDate(rightData.updatedAt) ??
+            normalizeDate(rightData.createdAt) ??
+            new Date(0);
+          return rightDate.getTime() - leftDate.getTime();
+        });
+        const selectedSnapshot = sortedDocs[0];
+        const selectedData = selectedSnapshot.data() as Record<string, unknown>;
+        const normalizedQuestions = normalizeQuizQuestions(selectedData.questions);
+
+        setQuizDocId(selectedSnapshot.id);
+        setQuizTitle(firstString(selectedData.title) ?? "");
+        setQuizTitleError("");
+        setQuizQuestions(
+          normalizedQuestions.length > 0 ? normalizedQuestions : [createEmptyQuizQuestion([])]
+        );
+        setCurrentQuizQuestionIndex(0);
+        setQuizErrors({});
+        setQuizValidationMessage(null);
+        setQuizError(null);
+        setQuizLoading(false);
+      },
+      (snapshotError) => {
+        console.error("Failed to load quiz", snapshotError);
+        setQuizLoading(false);
+        setQuizError("Unable to load quiz.");
+      }
+    );
+
+    return () => unsubscribe();
+  }, [id, detail?.visibilityType]);
 
   useEffect(() => {
     const baseEventTime = detail?.eventTargetTime ?? detail?.startDateTime;
@@ -2038,6 +2240,13 @@ export default function TailgateDetails() {
     detail?.visibilityType === "private" && !isHostUser && status !== "cancelled";
   const canShowWhosComingSection = detail?.visibilityType === "private";
   const canManageGuestInvites = isHostUser && detail?.visibilityType === "private";
+  const canManageQuiz = isHostUser && detail?.visibilityType === "private";
+  const currentQuizQuestion =
+    quizQuestions[currentQuizQuestionIndex] ?? EMPTY_QUIZ_QUESTION_FALLBACK;
+  const currentQuizErrors = quizErrors[currentQuizQuestionIndex] ?? {};
+  const existingQuizQuestionCount = quizQuestions.filter(
+    (question) => question.questionText.trim() !== ""
+  ).length;
   const hostBroadcastCharacterCount = hostBroadcastMessage.length;
   const canSendHostBroadcast =
     isEventHost &&
@@ -2735,6 +2944,336 @@ export default function TailgateDetails() {
     timelineSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  const scrollToQuiz = () => {
+    quizSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const updateQuizQuestionText = (text: string) => {
+    setQuizQuestions((previous) => {
+      const next = [...previous];
+      const target = next[currentQuizQuestionIndex];
+      if (!target) return previous;
+      next[currentQuizQuestionIndex] = {
+        ...target,
+        questionText: text
+      };
+      return next;
+    });
+
+    setQuizErrors((previous) => {
+      const next = { ...previous };
+      const current = next[currentQuizQuestionIndex];
+      if (!current?.questionText || !text.trim()) return previous;
+      const updated: QuizQuestionError = { ...current };
+      delete updated.questionText;
+      if (!updated.choices && !updated.correctChoiceId) {
+        delete next[currentQuizQuestionIndex];
+      } else {
+        next[currentQuizQuestionIndex] = updated;
+      }
+      return next;
+    });
+    setQuizValidationMessage(null);
+    setQuizError(null);
+    setQuizSuccess(null);
+  };
+
+  const updateQuizChoiceText = (choiceId: string, text: string) => {
+    setQuizQuestions((previous) => {
+      const next = [...previous];
+      const target = next[currentQuizQuestionIndex];
+      if (!target) return previous;
+      next[currentQuizQuestionIndex] = {
+        ...target,
+        choices: target.choices.map((choice) =>
+          choice.id === choiceId
+            ? {
+                ...choice,
+                text
+              }
+            : choice
+        )
+      };
+      return next;
+    });
+
+    setQuizErrors((previous) => {
+      const next = { ...previous };
+      const current = next[currentQuizQuestionIndex];
+      const choiceErrors = current?.choices;
+      if (!choiceErrors?.[choiceId] || !text.trim()) return previous;
+      const updatedChoiceErrors = { ...choiceErrors };
+      delete updatedChoiceErrors[choiceId];
+      const updated: QuizQuestionError = {
+        ...current,
+        choices: Object.keys(updatedChoiceErrors).length > 0 ? updatedChoiceErrors : undefined
+      };
+      if (!updated.questionText && !updated.correctChoiceId && !updated.choices) {
+        delete next[currentQuizQuestionIndex];
+      } else {
+        next[currentQuizQuestionIndex] = updated;
+      }
+      return next;
+    });
+    setQuizValidationMessage(null);
+    setQuizError(null);
+    setQuizSuccess(null);
+  };
+
+  const setQuizCorrectChoice = (choiceId: string) => {
+    setQuizQuestions((previous) => {
+      const next = [...previous];
+      const target = next[currentQuizQuestionIndex];
+      if (!target) return previous;
+      next[currentQuizQuestionIndex] = {
+        ...target,
+        correctChoiceId: choiceId
+      };
+      return next;
+    });
+
+    setQuizErrors((previous) => {
+      const next = { ...previous };
+      const current = next[currentQuizQuestionIndex];
+      if (!current?.correctChoiceId) return previous;
+      const updated: QuizQuestionError = { ...current };
+      delete updated.correctChoiceId;
+      if (!updated.questionText && !updated.choices) {
+        delete next[currentQuizQuestionIndex];
+      } else {
+        next[currentQuizQuestionIndex] = updated;
+      }
+      return next;
+    });
+    setQuizValidationMessage(null);
+    setQuizError(null);
+    setQuizSuccess(null);
+  };
+
+  const isQuizQuestionComplete = (question: QuizQuestion): boolean => {
+    if (!question.questionText.trim()) return false;
+    if (question.choices.some((choice) => !choice.text.trim())) return false;
+    if (!question.correctChoiceId) return false;
+    return true;
+  };
+
+  const setQuizQuestionType = (type: "multiple" | "truefalse") => {
+    setQuizQuestions((previous) => {
+      const next = [...previous];
+      const target = next[currentQuizQuestionIndex];
+      if (!target) return previous;
+      next[currentQuizQuestionIndex] = {
+        ...target,
+        type,
+        choices:
+          type === "truefalse"
+            ? [
+                { id: "true", text: "True" },
+                { id: "false", text: "False" }
+              ]
+            : [
+                { id: "a", text: "" },
+                { id: "b", text: "" },
+                { id: "c", text: "" },
+                { id: "d", text: "" }
+              ],
+        correctChoiceId: type === "truefalse" ? "true" : null
+      };
+      return next;
+    });
+    setQuizErrors((previous) => {
+      const next = { ...previous };
+      delete next[currentQuizQuestionIndex];
+      return next;
+    });
+    setQuizValidationMessage(null);
+    setQuizError(null);
+    setQuizSuccess(null);
+  };
+
+  const handleAddQuizQuestion = () => {
+    if (quizQuestions.length >= MAX_QUIZ_QUESTIONS) {
+      setQuizValidationMessage(`Maximum of ${MAX_QUIZ_QUESTIONS} questions allowed.`);
+      return;
+    }
+    const newQuestion = createEmptyQuizQuestion(quizQuestions);
+    setQuizQuestions((previous) => [...previous, newQuestion]);
+    setCurrentQuizQuestionIndex(quizQuestions.length);
+    setQuizValidationMessage(null);
+    setQuizError(null);
+    setQuizSuccess(null);
+  };
+
+  const handleDeleteCurrentQuizQuestion = () => {
+    if (quizQuestions.length === 1) {
+      setQuizQuestions([createEmptyQuizQuestion([])]);
+      setCurrentQuizQuestionIndex(0);
+      setQuizErrors({});
+      setQuizValidationMessage(null);
+      setQuizError(null);
+      return;
+    }
+
+    const deleteIndex = currentQuizQuestionIndex;
+    const nextQuestions = quizQuestions.filter((_, index) => index !== deleteIndex);
+    setQuizQuestions(nextQuestions);
+    setQuizErrors((previous) => {
+      const next: Record<number, QuizQuestionError> = {};
+      Object.entries(previous).forEach(([indexKey, value]) => {
+        const index = Number(indexKey);
+        if (index < deleteIndex) {
+          next[index] = value;
+        } else if (index > deleteIndex) {
+          next[index - 1] = value;
+        }
+      });
+      return next;
+    });
+    setCurrentQuizQuestionIndex(
+      deleteIndex >= nextQuestions.length ? nextQuestions.length - 1 : deleteIndex
+    );
+    setQuizValidationMessage(null);
+    setQuizError(null);
+    setQuizSuccess(null);
+  };
+
+  const validateQuizDraft = (): boolean => {
+    let valid = true;
+    const nextErrors: Record<number, QuizQuestionError> = {};
+    const normalizedTitle = quizTitle.trim();
+    setQuizValidationMessage(null);
+    setQuizError(null);
+
+    if (!normalizedTitle) {
+      setQuizTitleError("Quiz name is required.");
+      valid = false;
+    } else {
+      setQuizTitleError("");
+    }
+
+    const filledQuestions = quizQuestions.filter(
+      (question) => question.questionText.trim() !== ""
+    );
+
+    if (filledQuestions.length === 0) {
+      setQuizValidationMessage("Please add at least one question.");
+      setQuizErrors({});
+      return false;
+    }
+
+    if (filledQuestions.length > MAX_QUIZ_QUESTIONS) {
+      setQuizValidationMessage(`Maximum of ${MAX_QUIZ_QUESTIONS} questions allowed.`);
+      setQuizErrors({});
+      return false;
+    }
+
+    filledQuestions.forEach((question, questionOrder) => {
+      const questionIndex = quizQuestions.findIndex((value) => value.id === question.id);
+      if (questionIndex < 0) return;
+
+      if (!question.questionText.trim()) {
+        nextErrors[questionIndex] = {
+          ...(nextErrors[questionIndex] ?? {}),
+          questionText: `Question ${questionOrder + 1} text is required.`
+        };
+        valid = false;
+      }
+
+      const choiceErrors: Record<string, string> = {};
+      question.choices.forEach((choice) => {
+        if (!choice.text.trim()) {
+          choiceErrors[choice.id] = `Choice ${choice.id.toUpperCase()} is required.`;
+          valid = false;
+        }
+      });
+      if (Object.keys(choiceErrors).length > 0) {
+        nextErrors[questionIndex] = {
+          ...(nextErrors[questionIndex] ?? {}),
+          choices: choiceErrors
+        };
+      }
+
+      if (!question.correctChoiceId) {
+        nextErrors[questionIndex] = {
+          ...(nextErrors[questionIndex] ?? {}),
+          correctChoiceId: `Please select a correct answer for question ${questionOrder + 1}.`
+        };
+        valid = false;
+      }
+    });
+
+    setQuizErrors(nextErrors);
+    return valid;
+  };
+
+  const saveQuiz = async () => {
+    if (!db || !id || !detail) {
+      setQuizError("Quiz is unavailable right now.");
+      return;
+    }
+    if (!user?.uid) {
+      setQuizError("Sign in to save quiz changes.");
+      return;
+    }
+    if (!canManageQuiz) {
+      setQuizError("Quiz management is available for hosts of invite-only events.");
+      return;
+    }
+    if (!validateQuizDraft()) {
+      setQuizError("Complete quiz details before saving.");
+      return;
+    }
+
+    const normalizedQuestions = quizQuestions
+      .filter((question) => question.questionText.trim() !== "")
+      .map((question) => ({
+        id: question.id,
+        questionText: question.questionText.trim(),
+        choices: question.choices.map((choice) => ({
+          id: choice.id,
+          text: choice.text.trim()
+        })),
+        correctChoiceId: question.correctChoiceId,
+        type: question.type
+      }));
+
+    const payload = {
+      eventId: id,
+      title: quizTitle.trim(),
+      questions: normalizedQuestions,
+      createdBy: user.uid,
+      updatedAt: new Date()
+    };
+
+    setQuizSaving(true);
+    setQuizError(null);
+    setQuizSuccess(null);
+    try {
+      if (quizDocId) {
+        await updateDoc(doc(db, "tailgateEvents", id, "quizzes", quizDocId), payload);
+      } else {
+        await addDoc(collection(db, "tailgateEvents", id, "quizzes"), {
+          ...payload,
+          createdAt: new Date()
+        });
+      }
+
+      await updateDoc(doc(db, "tailgateEvents", id), {
+        quiz: {
+          title: quizTitle.trim(),
+          questions: normalizedQuestions
+        },
+        updatedAt: new Date()
+      });
+      setQuizSuccess(quizDocId ? "Quiz updated." : "Quiz saved.");
+    } catch (saveError) {
+      console.error("Failed to save quiz", saveError);
+      setQuizError("Unable to save quiz.");
+    } finally {
+      setQuizSaving(false);
+    }
+  };
+
   const resetTimelineDraft = () => {
     setEditingTimelineId(null);
     setTimelineDraft({
@@ -3332,6 +3871,16 @@ export default function TailgateDetails() {
                       : "Optional add-on. Turn this on to build your run of show."}
                   </small>
                 </button>
+                {detail.visibilityType === "private" ? (
+                  <button className="tailgate-details-action-card" onClick={scrollToQuiz}>
+                    <strong>{quizDocId ? "Edit quiz" : "Add quiz"}</strong>
+                    <small>
+                      {quizDocId
+                        ? "Update your trivia questions any time before kickoff"
+                        : "Create trivia for this invite-only tailgate"}
+                    </small>
+                  </button>
+                ) : null}
                 {detail.visibilityType === "open_paid" ? (
                   <button
                     className="tailgate-details-action-card"
@@ -4328,6 +4877,227 @@ export default function TailgateDetails() {
                   </p>
                 )}
               </div>
+            </article>
+          ) : null}
+
+          {canManageQuiz ? (
+            <article className="tailgate-details-card" ref={quizSectionRef}>
+              <div className="section-header">
+                <div>
+                  <h2>Quiz</h2>
+                  <p className="section-subtitle">
+                    Build or edit trivia for this invite-only tailgate.
+                  </p>
+                </div>
+              </div>
+              {quizLoading ? (
+                <p className="meta-muted">Loading quiz...</p>
+              ) : (
+                <div className="tailgate-quiz-host-tools">
+                  <label className="input-group">
+                    <span className="input-label">Quiz name</span>
+                    <input
+                      className="text-input"
+                      value={quizTitle}
+                      onChange={(event) => {
+                        setQuizTitle(event.target.value);
+                        if (quizTitleError && event.target.value.trim()) {
+                          setQuizTitleError("");
+                        }
+                        setQuizValidationMessage(null);
+                        setQuizError(null);
+                        setQuizSuccess(null);
+                      }}
+                      placeholder="Ex: Steelers Pregame Trivia"
+                    />
+                  </label>
+                  {quizTitleError ? (
+                    <p className="tailgate-details-ticket-error">{quizTitleError}</p>
+                  ) : null}
+                  {quizValidationMessage ? (
+                    <p className="tailgate-details-ticket-error">{quizValidationMessage}</p>
+                  ) : null}
+                  {quizError ? (
+                    <p className="tailgate-details-ticket-error">{quizError}</p>
+                  ) : null}
+                  {quizSuccess ? (
+                    <p className="tailgate-details-inline-editor-success">{quizSuccess}</p>
+                  ) : null}
+
+                  <div className="create-wizard-quiz-chip-row">
+                    {quizQuestions.map((question, index) => {
+                      const active = currentQuizQuestionIndex === index;
+                      const hasError = Boolean(quizErrors[index]);
+                      const complete = isQuizQuestionComplete(question);
+                      return (
+                        <button
+                          key={question.id}
+                          type="button"
+                          className={`create-wizard-quiz-chip ${active ? "active" : ""} ${
+                            hasError ? "error" : ""
+                          }`}
+                          onClick={() => setCurrentQuizQuestionIndex(index)}
+                        >
+                          <span>Q{index + 1}</span>
+                          {hasError ? (
+                            <span className="create-wizard-quiz-chip-status">!</span>
+                          ) : null}
+                          {!hasError && complete ? (
+                            <span className="create-wizard-quiz-chip-status">✓</span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="tailgate-quiz-editor">
+                    <div className="tailgate-quiz-editor-actions">
+                      {quizQuestions.length > 1 ? (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={handleDeleteCurrentQuizQuestion}
+                          disabled={quizSaving}
+                        >
+                          Delete question
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleAddQuizQuestion}
+                        disabled={quizQuestions.length >= MAX_QUIZ_QUESTIONS || quizSaving}
+                      >
+                        Add question
+                      </button>
+                    </div>
+
+                    <div className="create-wizard-quiz-type-toggle">
+                      <button
+                        type="button"
+                        className={`secondary-button ${
+                          currentQuizQuestion.type === "multiple" ? "active" : ""
+                        }`}
+                        onClick={() => setQuizQuestionType("multiple")}
+                        disabled={quizSaving}
+                      >
+                        Multiple Choice
+                      </button>
+                      <button
+                        type="button"
+                        className={`secondary-button ${
+                          currentQuizQuestion.type === "truefalse" ? "active" : ""
+                        }`}
+                        onClick={() => setQuizQuestionType("truefalse")}
+                        disabled={quizSaving}
+                      >
+                        True / False
+                      </button>
+                    </div>
+
+                    <label className="input-group">
+                      <span className="input-label">Question text</span>
+                      <textarea
+                        className="text-input tailgate-timeline-description-input"
+                        value={currentQuizQuestion.questionText}
+                        onChange={(event) => updateQuizQuestionText(event.target.value)}
+                        placeholder="Ask something fun..."
+                        disabled={quizSaving}
+                      />
+                    </label>
+                    {currentQuizErrors.questionText ? (
+                      <p className="tailgate-details-ticket-error">
+                        {currentQuizErrors.questionText}
+                      </p>
+                    ) : null}
+
+                    <p className="input-label create-wizard-choice-label">Choices</p>
+                    <div className="create-wizard-choice-grid">
+                      {currentQuizQuestion.choices.map((choice) => (
+                        <div
+                          key={choice.id}
+                          className="create-wizard-choice-row create-wizard-quiz-choice-row"
+                        >
+                          <button
+                            type="button"
+                            className={`create-wizard-choice-radio ${
+                              currentQuizQuestion.correctChoiceId === choice.id ? "active" : ""
+                            }`}
+                            onClick={() => setQuizCorrectChoice(choice.id)}
+                            disabled={quizSaving}
+                          >
+                            {currentQuizQuestion.type === "truefalse"
+                              ? choice.text.charAt(0).toUpperCase()
+                              : choice.id.toUpperCase()}
+                          </button>
+                          <input
+                            className="text-input create-wizard-input"
+                            value={choice.text}
+                            onChange={(event) =>
+                              updateQuizChoiceText(choice.id, event.target.value)
+                            }
+                            placeholder={`Choice ${choice.id.toUpperCase()}`}
+                            disabled={
+                              currentQuizQuestion.type === "truefalse" || quizSaving
+                            }
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    {currentQuizErrors.correctChoiceId ? (
+                      <p className="tailgate-details-ticket-error">
+                        {currentQuizErrors.correctChoiceId}
+                      </p>
+                    ) : null}
+                    {currentQuizErrors.choices
+                      ? Object.entries(currentQuizErrors.choices).map(([choiceId, message]) => (
+                          <p
+                            key={`${choiceId}-${message}`}
+                            className="tailgate-details-ticket-error"
+                          >
+                            {message}
+                          </p>
+                        ))
+                      : null}
+
+                    <div className="create-wizard-quiz-preview">
+                      <p className="input-label">Preview</p>
+                      <p className="create-wizard-quiz-preview-question">
+                        {currentQuizQuestion.questionText.trim()
+                          ? currentQuizQuestion.questionText
+                          : "Start typing your question to see the preview."}
+                      </p>
+                      <div className="create-wizard-quiz-preview-choices">
+                        {currentQuizQuestion.choices.map((choice) => (
+                          <div
+                            key={`preview-${choice.id}`}
+                            className={`create-wizard-quiz-preview-choice ${
+                              currentQuizQuestion.correctChoiceId === choice.id ? "correct" : ""
+                            }`}
+                          >
+                            {choice.text || "Choice text"}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="tailgate-quiz-editor-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => void saveQuiz()}
+                      disabled={quizSaving}
+                    >
+                      {quizSaving ? "Saving..." : quizDocId ? "Update quiz" : "Save quiz"}
+                    </button>
+                    <span className="meta-muted">
+                      {existingQuizQuestionCount} question
+                      {existingQuizQuestionCount === 1 ? "" : "s"} ready
+                    </span>
+                  </div>
+                </div>
+              )}
             </article>
           ) : null}
 

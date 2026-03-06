@@ -1,6 +1,7 @@
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { IconFacebook, IconInstagram } from "./Icons";
 import tailgateTimeLogo from "../../ttnobg.png";
 
 export function PublicTopNav() {
@@ -23,7 +24,30 @@ export function PublicTopNav() {
           <Link to="/discover" className={pathname.startsWith("/discover") ? "active" : ""}>
             Discover
           </Link>
+          <Link to="/user-guide" className={pathname.startsWith("/user-guide") ? "active" : ""}>
+            User Guide
+          </Link>
           <a href="/contact.html">Contact</a>
+          <a
+            href="https://www.instagram.com/tailgatetime/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="public-nav-social-link"
+            aria-label="TailgateTime on Instagram"
+            title="Instagram"
+          >
+            <IconInstagram size={16} />
+          </a>
+          <a
+            href="https://www.facebook.com/tailgatetime/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="public-nav-social-link"
+            aria-label="TailgateTime on Facebook"
+            title="Facebook"
+          >
+            <IconFacebook size={16} />
+          </a>
         </nav>
         <div className="public-auth-actions">
           {user ? (

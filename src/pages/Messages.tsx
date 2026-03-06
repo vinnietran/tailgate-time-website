@@ -158,6 +158,10 @@ export default function Messages() {
     () => groupNotificationsByDate(notifications),
     [notifications]
   );
+  const unreadIds = useMemo(
+    () => notifications.filter((item) => !item.read).map((item) => item.id),
+    [notifications]
+  );
 
   const toggleSelectionMode = useCallback(() => {
     setIsSelectionMode((current) => !current);
@@ -176,6 +180,10 @@ export default function Messages() {
     setSelectedIds(notifications.map((item) => item.id));
   }, [notifications]);
 
+  const selectAllUnread = useCallback(() => {
+    setSelectedIds(unreadIds);
+  }, [unreadIds]);
+
   const markSelectedAsRead = useCallback(async () => {
     if (!db || !user || selectedIds.length === 0) return;
     await Promise.all(
@@ -186,6 +194,17 @@ export default function Messages() {
     setSelectedIds([]);
     setIsSelectionMode(false);
   }, [selectedIds, user]);
+
+  const markAllAsRead = useCallback(async () => {
+    if (!db || !user || unreadIds.length === 0) return;
+    await Promise.all(
+      unreadIds.map((id) =>
+        updateDoc(doc(db, "users", user.uid, "notifications", id), { read: true })
+      )
+    );
+    setSelectedIds([]);
+    setIsSelectionMode(false);
+  }, [unreadIds, user]);
 
   const deleteSelected = useCallback(async () => {
     if (!db || !user || selectedIds.length === 0) return;
@@ -250,13 +269,31 @@ export default function Messages() {
           <>
             <div className="notifications-actions">
               {!isSelectionMode ? (
-                <button type="button" className="secondary-button" onClick={toggleSelectionMode}>
-                  Select
-                </button>
+                <>
+                  <button type="button" className="secondary-button" onClick={toggleSelectionMode}>
+                    Select
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => void markAllAsRead()}
+                    disabled={unreadIds.length === 0}
+                  >
+                    Mark all as read ({unreadIds.length})
+                  </button>
+                </>
               ) : (
                 <>
                   <button type="button" className="secondary-button" onClick={selectAll}>
                     Select all
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={selectAllUnread}
+                    disabled={unreadIds.length === 0}
+                  >
+                    Select unread ({unreadIds.length})
                   </button>
                   <button
                     type="button"

@@ -5,6 +5,8 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import HostDashboard from "./pages/HostDashboard";
 import CreateTailgateWizard from "./pages/CreateTailgateWizard";
 import AccountPayouts from "./pages/AccountPayouts";
+import AccountPayoutHistory from "./pages/AccountPayoutHistory";
+import AccountRefundRequests from "./pages/AccountRefundRequests";
 import Login from "./pages/Login";
 import TailgateDetails from "./pages/TailgateDetails";
 import TailgateEdit from "./pages/TailgateEdit";
@@ -14,6 +16,7 @@ import Messages from "./pages/Messages";
 import DiscoverTailgates from "./pages/DiscoverTailgates";
 import Home from "./pages/Home";
 import EventFeed from "./pages/EventFeed";
+import UserGuide from "./pages/UserGuide";
 import { DialogProvider } from "./hooks/useDialog";
 
 export default function App() {
@@ -45,6 +48,22 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <AccountPayouts />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/account/payout-history"
+            element={
+              <ProtectedRoute>
+                <AccountPayoutHistory />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/account/refund-requests"
+            element={
+              <ProtectedRoute>
+                <AccountRefundRequests />
               </ProtectedRoute>
             }
           />
@@ -92,6 +111,7 @@ export default function App() {
             path="/discover"
             element={<DiscoverTailgates />}
           />
+          <Route path="/user-guide" element={<UserGuide />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </DialogProvider>

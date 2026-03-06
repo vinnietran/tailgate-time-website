@@ -5,13 +5,23 @@ import {
   IconChevronLeft,
   IconCompass,
   IconDashboard,
+  IconFacebook,
+  IconInstagram,
   IconSpark,
   IconWallet
 } from "./Icons";
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "tt.sidebar.collapsed";
 
-const navItems = [
+type SidebarNavItem =
+  {
+    to: string;
+    label: string;
+    meta: string;
+    icon: React.ReactNode;
+  };
+
+const navItems: SidebarNavItem[] = [
   {
     to: "/dashboard",
     label: "My Tailgates",
@@ -90,6 +100,28 @@ export default function Sidebar() {
             </NavLink>
           ))}
         </nav>
+        <div className="sidebar-social-links" aria-label="Social links">
+          <a
+            href="https://www.instagram.com/tailgatetime/"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="TailgateTime on Instagram"
+            title="Instagram"
+            className="sidebar-social-link"
+          >
+            <IconInstagram size={18} />
+          </a>
+          <a
+            href="https://www.facebook.com/tailgatetime/"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="TailgateTime on Facebook"
+            title="Facebook"
+            className="sidebar-social-link"
+          >
+            <IconFacebook size={18} />
+          </a>
+        </div>
       </div>
       <div className="sidebar-bottom">
         <button

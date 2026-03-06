@@ -36,6 +36,37 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function coerceCount(value: unknown): number | null {
+  const parsed = coerceNumber(value);
+  if (typeof parsed !== "number") return null;
+  return Math.max(0, Math.round(parsed));
+}
+
+function attendeeUserIdFromRecord(attendee: Record<string, unknown>) {
+  return firstString(
+    attendee.userId,
+    attendee.uid,
+    attendee.id,
+    attendee.attendeeUserId,
+    attendee.linkedUserId
+  );
+}
+
+function anonymousPlusGuestCount(attendee: Record<string, unknown>) {
+  const raw =
+    coerceCount(attendee.plusGuestsAnonymousCount) ??
+    coerceCount(attendee.additionalGuestCount) ??
+    coerceCount(attendee.plusGuestsNoContactCount) ??
+    coerceCount(attendee.plusGuestCount) ??
+    coerceCount(attendee.plusGuestsCount) ??
+    0;
+  return Math.max(0, Math.floor(raw));
+}
+
+function asArrayLength(value: unknown): number | null {
+  return Array.isArray(value) ? value.length : null;
+}
+
 function normalizeDate(value: unknown) {
   if (!value) return new Date(0);
   if (value instanceof Date) return value;
@@ -216,6 +247,23 @@ function normalizeToken(value: unknown) {
   return firstString(value)?.toLowerCase() ?? "";
 }
 
+function attendeeStatus(value: unknown): "host" | "attending" | "pending" | "not_attending" {
+  const raw = normalizeToken(value);
+  if (!raw) return "attending";
+  if (raw === "host" || raw === "hosting" || raw === "hosted") return "host";
+  if (
+    raw === "not_attending" ||
+    raw === "not attending" ||
+    raw === "not_going" ||
+    raw === "not going" ||
+    raw === "declined"
+  ) {
+    return "not_attending";
+  }
+  if (raw === "pending" || raw === "invited" || raw === "undecided") return "pending";
+  return "attending";
+}
+
 function hasValidDate(value: unknown) {
   return normalizeDate(value).getTime() > 0;
 }
@@ -268,6 +316,57 @@ function derivePayoutStatus(data: Record<string, unknown>): TailgateEvent["payou
 }
 
 function normalizeTailgate(id: string, data: Record<string, unknown>): TailgateEvent {
+  const hostUserId = String(
+    data.hostUserId ?? data.hostId ?? data.ownerId ?? data.createdByUid ?? ""
+  );
+
+  let attendeeConfirmedCount = 0;
+  let attendeePendingCount = 0;
+  if (Array.isArray(data.attendees)) {
+    data.attendees.forEach((entry) => {
+      const attendee = asRecord(entry);
+      if (!attendee) return;
+      const resolvedStatus = attendeeStatus(attendee.status);
+      const attendeeUserId = attendeeUserIdFromRecord(attendee);
+      if (resolvedStatus === "host") return;
+      if (attendeeUserId && attendeeUserId === hostUserId) return;
+      if (resolvedStatus === "not_attending") return;
+      const headcount = 1 + anonymousPlusGuestCount(attendee);
+      if (resolvedStatus === "pending") {
+        attendeePendingCount += headcount;
+        return;
+      }
+      attendeeConfirmedCount += headcount;
+    });
+  }
+
+  const arrayConfirmedCount =
+    asArrayLength(data.attendeeIds) ??
+    asArrayLength(data.attendeeUserIds) ??
+    asArrayLength(data.attendeesUserIds) ??
+    asArrayLength(data.goingUserIds) ??
+    asArrayLength(data.rsvpUserIds) ??
+    0;
+  const arrayPendingCount =
+    asArrayLength(data.pendingUserIds) ??
+    asArrayLength(data.rsvpPendingUserIds) ??
+    asArrayLength(data.invitedUserIds) ??
+    0;
+
+  const derivedConfirmedCount = Math.max(attendeeConfirmedCount, arrayConfirmedCount);
+  const derivedPendingCount = Math.max(attendeePendingCount, arrayPendingCount);
+  const explicitConfirmedCount =
+    coerceCount(data.rsvpsConfirmed) ??
+    coerceCount(data.confirmedCount) ??
+    coerceCount(data.rsvpConfirmedCount) ??
+    coerceCount(data.attendeeCount);
+  const explicitPendingCount =
+    coerceCount(data.rsvpsPending) ??
+    coerceCount(data.pendingCount) ??
+    coerceCount(data.rsvpPendingCount);
+
+  const rsvpsConfirmed = Math.max(explicitConfirmedCount ?? 0, derivedConfirmedCount);
+  const rsvpsPending = Math.max(explicitPendingCount ?? 0, derivedPendingCount);
   const capacity =
     coerceNumber(data.capacity) ??
     coerceNumber(data.maxGuests) ??
@@ -278,25 +377,12 @@ function normalizeTailgate(id: string, data: Record<string, unknown>): TailgateE
     coerceNumber(data.soldCount) ??
     coerceNumber(data.ticketsPurchased) ??
     coerceNumber(data.paidAttendees) ??
-    coerceNumber(data.rsvpsConfirmed) ??
-    0;
-  const rsvpsConfirmed =
-    coerceNumber(data.rsvpsConfirmed) ??
-    coerceNumber(data.confirmedCount) ??
-    coerceNumber(data.rsvpConfirmedCount) ??
-    coerceNumber(data.attendeeCount) ??
-    0;
-  const rsvpsPending =
-    coerceNumber(data.rsvpsPending) ??
-    coerceNumber(data.pendingCount) ??
-    coerceNumber(data.rsvpPendingCount) ??
+    rsvpsConfirmed ??
     0;
 
   return {
     id,
-    hostUserId: String(
-      data.hostUserId ?? data.hostId ?? data.ownerId ?? data.createdByUid ?? ""
-    ),
+    hostUserId,
     name: firstString(data.name, data.eventName, data.title) ?? "Untitled Tailgate",
     visibilityType: deriveVisibilityType(data),
     startDateTime: pickDate(data),
