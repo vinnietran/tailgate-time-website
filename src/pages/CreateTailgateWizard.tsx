@@ -9,6 +9,13 @@ import { useAuth } from "../hooks/useAuth";
 import { usePlacesAutocomplete } from "../hooks/usePlacesAutocomplete";
 import { db, functions as firebaseFunctions, storage } from "../lib/firebase";
 import { VisibilityType } from "../types";
+import {
+  EARLY_ADOPTER_MIN_TICKETS_SOLD,
+  EARLY_ADOPTER_PLATFORM_FEE_PERCENT,
+  resolveHostPlatformFeeSummary,
+  STANDARD_PLATFORM_FEE_PERCENT
+} from "../utils/platformFees";
+import { estimateHostPayout } from "../utils/tailgate";
 
 type WizardStep = {
   key: "type" | "details" | "location" | "invite" | "review";
@@ -206,7 +213,7 @@ const seededContacts: Guest[] = [
   { id: "c-kate", name: "Kate Bell", phone: "(555) 564-8583" }
 ];
 
-const minTicketPriceCents = 2000;
+const minTicketPriceCents = 2500;
 const CONNECT_RETURN_URL =
   import.meta.env.VITE_CONNECT_RETURN_URL ?? "https://tailgate-time.com/connect-return";
 const CONNECT_REFRESH_URL =
@@ -219,6 +226,7 @@ const MAPS_API_KEY = (
 const MAX_COVER_IMAGES = 5;
 const MAX_COVER_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
 const MAX_QUIZ_QUESTIONS = 10;
+const PROMO_CUTOFF_DISPLAY = "10/1/2026";
 const emptyQuizQuestionFallback: QuizQuestion = {
   id: "q1",
   questionText: "",
@@ -251,6 +259,13 @@ function parsePriceToCents(value: string) {
   return Math.round(parsed * 100);
 }
 
+function formatUsdFromCents(valueCents: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD"
+  }).format(valueCents / 100);
+}
+
 function parseCapacity(value: string) {
   if (!value.trim()) return null;
   const parsed = Number(value.trim());
@@ -264,6 +279,13 @@ function parseTicketSalesCutoffDays(value: string) {
   if (!Number.isFinite(parsed)) return null;
   if (parsed < 0 || parsed > 365) return null;
   return Math.floor(parsed);
+}
+
+function parseGuestPlusLimit(value: string) {
+  if (!value.trim()) return null;
+  const parsed = Number(value.trim());
+  if (!Number.isFinite(parsed) || parsed < 1) return null;
+  return Math.min(Math.floor(parsed), 12);
 }
 
 function createLocalId() {
@@ -511,6 +533,13 @@ function buildLocationPayload(
   return payload;
 }
 
+function requiresDiscoverableLocation(visibilityType: VisibilityType) {
+  return visibilityType === "open_free" || visibilityType === "open_paid";
+}
+
+const OPEN_TAILGATE_LOCATION_ERROR =
+  "Open tailgates need a location that can be placed on the map so they appear in Discover.";
+
 function buildMapEmbedUrl(
   coords: LatLng,
   mapsApiKey: string,
@@ -556,7 +585,11 @@ export default function CreateTailgateWizard() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [payoutReady, setPayoutReady] = useState(false);
   const [connectStatus, setConnectStatus] = useState<StripeConnectStatus>("not_started");
+  const [hostPlatformFeePercent, setHostPlatformFeePercent] = useState(
+    STANDARD_PLATFORM_FEE_PERCENT
+  );
   const [payoutModalOpen, setPayoutModalOpen] = useState(false);
+  const [paidFeeModalOpen, setPaidFeeModalOpen] = useState(false);
   const [payoutSetupLoading, setPayoutSetupLoading] = useState(false);
   const [payoutSetupError, setPayoutSetupError] = useState<string | null>(null);
 
@@ -573,13 +606,14 @@ export default function CreateTailgateWizard() {
   const [locationInputFocused, setLocationInputFocused] = useState(false);
 
   const [visibilityType, setVisibilityType] = useState<VisibilityType>("private");
-  const [allowGuestDetails, setAllowGuestDetails] = useState(false);
   const [priceInput, setPriceInput] = useState("");
   const [capacityInput, setCapacityInput] = useState("");
   const [ticketSalesCutoffDaysInput, setTicketSalesCutoffDaysInput] = useState("0");
   const [expectations, setExpectations] = useState<Expectations>(expectationsDefaults);
 
   const [guests, setGuests] = useState<Guest[]>([]);
+  const [allowGuestPlusOnInvite, setAllowGuestPlusOnInvite] = useState(false);
+  const [maxAdditionalGuestsPerInvite, setMaxAdditionalGuestsPerInvite] = useState("2");
   const [contactSearch, setContactSearch] = useState("");
   const [contactModalOpen, setContactModalOpen] = useState(false);
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
@@ -612,6 +646,9 @@ export default function CreateTailgateWizard() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const guestInvitesEnabled = visibilityType === "private";
   const quizCreationAllowed = visibilityType === "private";
+  const ticketPriceCents = useMemo(() => parsePriceToCents(priceInput), [priceInput]);
+  const ticketCapacity = useMemo(() => parseCapacity(capacityInput), [capacityInput]);
+  const hostPlatformFeeRate = hostPlatformFeePercent / 100;
 
   const filteredContacts = useMemo(() => {
     const query = contactSearch.trim().toLowerCase();
@@ -623,9 +660,8 @@ export default function CreateTailgateWizard() {
 
   const pricingInvalid = useMemo(() => {
     if (visibilityType !== "open_paid") return false;
-    const cents = parsePriceToCents(priceInput);
-    return !cents || cents < minTicketPriceCents;
-  }, [priceInput, visibilityType]);
+    return !ticketPriceCents || ticketPriceCents < minTicketPriceCents;
+  }, [ticketPriceCents, visibilityType]);
 
   const capacityInvalid = useMemo(() => {
     if (visibilityType !== "open_paid") return false;
@@ -652,6 +688,38 @@ export default function CreateTailgateWizard() {
   const currentQuizQuestion =
     quizQuestions[currentQuizQuestionIndex] ?? emptyQuizQuestionFallback;
   const currentQuizErrors = quizErrors[currentQuizQuestionIndex] ?? {};
+  const paidTicketEstimate = useMemo(() => {
+    if (visibilityType !== "open_paid") return null;
+    if (!ticketPriceCents || ticketPriceCents < minTicketPriceCents) return null;
+
+    const estimate = estimateHostPayout({
+      ticketsSold: 1,
+      ticketPriceCents,
+      platformFeeRate: hostPlatformFeeRate,
+      stripeFeePercent: 0,
+      stripeFeeFixed: 0
+    });
+    const totalFee = Math.round(estimate.platformFee);
+    const selloutEstimate =
+      ticketCapacity && ticketCapacity > 0
+        ? estimateHostPayout({
+            ticketsSold: ticketCapacity,
+            ticketPriceCents,
+            platformFeeRate: hostPlatformFeeRate,
+            stripeFeePercent: 0,
+            stripeFeeFixed: 0
+          })
+        : null;
+    const selloutGross = selloutEstimate ? Math.round(selloutEstimate.gross) : null;
+    const selloutTotalFee = selloutEstimate ? Math.round(selloutEstimate.platformFee) : null;
+
+    return {
+      totalFee,
+      payout: Math.round(estimate.payout),
+      selloutGross,
+      selloutTotalFee
+    };
+  }, [hostPlatformFeeRate, ticketCapacity, ticketPriceCents, visibilityType]);
   const filledQuizQuestions = quizQuestions.filter(
     (question) => question.questionText.trim() !== ""
   );
@@ -670,6 +738,7 @@ export default function CreateTailgateWizard() {
     if (!user?.uid || !db) {
       setPayoutReady(false);
       setConnectStatus("not_started");
+      setHostPlatformFeePercent(STANDARD_PLATFORM_FEE_PERCENT);
       return false;
     }
 
@@ -677,13 +746,16 @@ export default function CreateTailgateWizard() {
       const userSnap = await getDoc(doc(db, "users", user.uid));
       const data = userSnap.exists() ? (userSnap.data() as Record<string, unknown>) : null;
       const ready = isPayoutReady(data);
+      const feeSummary = resolveHostPlatformFeeSummary(data);
       setPayoutReady(ready);
       setConnectStatus(resolveStripeConnectStatus(data));
+      setHostPlatformFeePercent(feeSummary.feePercent);
       return ready;
     } catch (error) {
       console.error("Failed to refresh Stripe payout status", error);
       setPayoutReady(false);
       setConnectStatus("not_started");
+      setHostPlatformFeePercent(STANDARD_PLATFORM_FEE_PERCENT);
       return false;
     }
   }, [user?.uid]);
@@ -751,24 +823,51 @@ export default function CreateTailgateWizard() {
       if (!response.ok) return null;
       const payload = (await response.json()) as {
         status?: string;
-        results?: Array<{ geometry?: { location?: { lat?: number; lng?: number } } }>;
+        results?: Array<{
+          formatted_address?: string;
+          place_id?: string;
+          address_components?: Array<Record<string, unknown>>;
+          geometry?: { location?: { lat?: number; lng?: number } };
+        }>;
       };
       if (payload.status !== "OK") return null;
       const first = payload.results?.[0];
       const lat = first?.geometry?.location?.lat;
       const lng = first?.geometry?.location?.lng;
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      const label = first?.formatted_address ?? query;
       const next = { lat, lng };
       setLocationCoords(next);
       setLocationRecord((prev) =>
         prev
           ? {
               ...prev,
+              formatted: prev.formatted ?? label,
+              formattedAddress: prev.formattedAddress ?? label,
+              address: prev.address ?? label,
+              text: prev.text ?? label,
+              description: prev.description ?? label,
+              name: prev.name ?? label,
+              placeId: prev.placeId ?? first?.place_id,
+              addressComponents: prev.addressComponents ?? first?.address_components,
               lat: next.lat,
               lng: next.lng
             }
-          : prev
+          : {
+              description: label,
+              formatted: label,
+              formattedAddress: label,
+              address: label,
+              text: label,
+              name: label,
+              placeId: first?.place_id,
+              addressComponents: first?.address_components,
+              lat: next.lat,
+              lng: next.lng
+            }
       );
+      setLocationSummary(label);
+      clearFieldError("locationSummary");
       clearLocationSuggestions();
       return next;
     } catch (error) {
@@ -843,6 +942,26 @@ export default function CreateTailgateWizard() {
     setQuizErrors({});
     setQuizValidationMessage(null);
     clearFieldError("quizEnabled");
+  };
+
+  const applyVisibilitySelection = (next: VisibilityType) => {
+    if (next !== "private") {
+      setGuests([]);
+      setSelectedContactIds([]);
+      setContactModalOpen(false);
+      setManualGuestName("");
+      setManualGuestPhone("");
+      clearFieldError("manualGuestName");
+      clearFieldError("manualGuestPhone");
+      clearFieldError("guestPlusLimit");
+      setQuizEnabled(false);
+      clearQuizValidation();
+    }
+    if (next !== "open_paid") {
+      setTicketSalesCutoffDaysInput("0");
+      clearFieldError("ticketSalesCutoffDaysInput");
+    }
+    setVisibilityType(next);
   };
 
   const updateQuizQuestionText = (text: string) => {
@@ -1163,22 +1282,16 @@ export default function CreateTailgateWizard() {
       setPayoutModalOpen(true);
       return;
     }
-    if (next !== "private") {
-      setGuests([]);
-      setSelectedContactIds([]);
-      setContactModalOpen(false);
-      setManualGuestName("");
-      setManualGuestPhone("");
-      clearFieldError("manualGuestName");
-      clearFieldError("manualGuestPhone");
-      setQuizEnabled(false);
-      clearQuizValidation();
+    if (next === "open_paid" && visibilityType !== "open_paid") {
+      setPaidFeeModalOpen(true);
+      return;
     }
-    if (next !== "open_paid") {
-      setTicketSalesCutoffDaysInput("0");
-      clearFieldError("ticketSalesCutoffDaysInput");
-    }
-    setVisibilityType(next);
+    applyVisibilitySelection(next);
+  };
+
+  const acknowledgePaidFee = () => {
+    setPaidFeeModalOpen(false);
+    applyVisibilitySelection("open_paid");
   };
 
   const handlePayoutSetup = async () => {
@@ -1224,7 +1337,7 @@ export default function CreateTailgateWizard() {
       if (visibilityType === "open_paid") {
         const cents = parsePriceToCents(priceInput);
         if (!cents || cents < minTicketPriceCents) {
-          nextErrors.priceInput = "Minimum price is $20.00";
+          nextErrors.priceInput = "Minimum price is $25.00";
         }
         if (capacityInput.trim() && parseCapacity(capacityInput) === null) {
           nextErrors.capacityInput = "Capacity must be at least 1.";
@@ -1254,6 +1367,12 @@ export default function CreateTailgateWizard() {
     }
 
     if (index === 3) {
+      if (visibilityType === "private" && allowGuestPlusOnInvite) {
+        const parsedLimit = parseGuestPlusLimit(maxAdditionalGuestsPerInvite);
+        if (!parsedLimit) {
+          nextErrors.guestPlusLimit = "Enter at least 1 additional guest.";
+        }
+      }
       clearFieldError("quizEnabled");
       if (quizEnabled) {
         if (!quizCreationAllowed) {
@@ -1277,7 +1396,14 @@ export default function CreateTailgateWizard() {
     if (!validateStep(stepIndex)) return;
 
     if (stepIndex === 2 && !locationCoords) {
-      await resolveAddressToCoords();
+      const resolvedCoords = await resolveAddressToCoords();
+      if (requiresDiscoverableLocation(visibilityType) && !resolvedCoords) {
+        setErrors((prev) => ({
+          ...prev,
+          locationSummary: OPEN_TAILGATE_LOCATION_ERROR
+        }));
+        return;
+      }
     }
 
     setStepIndex((current) => Math.min(current + 1, wizardSteps.length - 1));
@@ -1458,9 +1584,17 @@ export default function CreateTailgateWizard() {
     if (!resolvedCoords && locationSummary.trim()) {
       resolvedCoords = await resolveAddressToCoords();
     }
+    if (requiresDiscoverableLocation(visibilityType) && !resolvedCoords) {
+      setErrors((prev) => ({
+        ...prev,
+        locationSummary: OPEN_TAILGATE_LOCATION_ERROR
+      }));
+      setSaving(false);
+      return;
+    }
 
-    const priceCents = parsePriceToCents(priceInput);
-    const capacity = parseCapacity(capacityInput);
+    const priceCents = ticketPriceCents;
+    const capacity = ticketCapacity;
     const trimmedLocation = locationSummary.trim();
     const locationPayload = buildLocationPayload(locationRecord, trimmedLocation, resolvedCoords);
     const normalizedLocationSummary = resolveLocationLabel(locationPayload) || trimmedLocation;
@@ -1511,7 +1645,6 @@ export default function CreateTailgateWizard() {
       description: eventDescription.trim(),
       visibilityType,
       hasEventFeed: true,
-      allowGuestDetails,
       startDateTime,
       endDateTime,
       dateTime: startDateTime,
@@ -1537,8 +1670,20 @@ export default function CreateTailgateWizard() {
       timelineEnabled,
       schedulePublished: false,
       status: "upcoming",
+      metadata: {
+        createdViaWebsite: true,
+        createdPlatform: "website"
+      },
       createdAt: new Date()
     };
+
+    if (visibilityType === "private") {
+      const parsedPlusLimit = parseGuestPlusLimit(maxAdditionalGuestsPerInvite);
+      payload.allowGuestPlusOnInvite = allowGuestPlusOnInvite;
+      payload.maxAdditionalGuestsPerInvite = allowGuestPlusOnInvite
+        ? parsedPlusLimit ?? 1
+        : 0;
+    }
 
     if (uploadedCoverImageUrls.length > 0) {
       const primaryCover = uploadedCoverImageUrls[0];
@@ -1864,6 +2009,11 @@ export default function CreateTailgateWizard() {
       {errors.locationSummary ? (
         <p className="create-wizard-error">{errors.locationSummary}</p>
       ) : null}
+      {requiresDiscoverableLocation(visibilityType) ? (
+        <p className="create-wizard-helper">
+          Open tailgates need a mapped location to appear in Discover on web and app.
+        </p>
+      ) : null}
 
       <div className="create-wizard-map-actions">
         <button
@@ -1925,7 +2075,7 @@ export default function CreateTailgateWizard() {
         ) : null}
         {visibilityType === "open_paid" ? (
           <p className="create-wizard-connect-status">
-            Stripe status: {connectStatus.replace("_", " ")}
+            Payout status: {connectStatus.replace("_", " ")}
           </p>
         ) : null}
 
@@ -1943,13 +2093,13 @@ export default function CreateTailgateWizard() {
                     setPriceInput(event.target.value.replace(/[^0-9.]/g, ""));
                     clearFieldError("priceInput");
                   }}
-                  placeholder="20.00"
+                  placeholder="25.00"
                   inputMode="decimal"
                 />
               </div>
               {errors.priceInput || pricingInvalid ? (
                 <p className="create-wizard-error">
-                  {errors.priceInput ?? "Minimum price is $20.00"}
+                  {errors.priceInput ?? "Minimum price is $25.00"}
                 </p>
               ) : null}
             </div>
@@ -1996,18 +2146,62 @@ export default function CreateTailgateWizard() {
             </div>
           ) : null}
 
-        <label className="create-wizard-switch-row">
-          <input
-            type="checkbox"
-            checked={allowGuestDetails}
-            onChange={(event) => setAllowGuestDetails(event.target.checked)}
-          />
-          <span>Collect guest details from each ticket purchase</span>
-        </label>
+        {visibilityType === "open_paid" ? renderPaidTicketSummaryCard() : null}
       </div>
 
     </section>
   );
+
+  function renderPaidTicketSummaryCard() {
+    return (
+      <div className="create-wizard-fee-card">
+        <div className="create-wizard-fee-header">
+          <div>
+            <h3>Platform fee: {hostPlatformFeePercent}%</h3>
+            <p>
+              TailgateTime's fee includes transaction processing, payout handling, and payment
+              support for each paid ticket.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="link-button create-wizard-fee-link"
+            onClick={() => setPaidFeeModalOpen(true)}
+          >
+            Fee details
+          </button>
+        </div>
+        {paidTicketEstimate ? (
+          <div className="create-wizard-fee-grid">
+            <div>
+              <span>Ticket price</span>
+              <strong>{formatUsdFromCents(ticketPriceCents ?? 0)}</strong>
+            </div>
+            <div>
+              <span>TailgateTime fee est.</span>
+              <strong>{formatUsdFromCents(paidTicketEstimate.totalFee)}</strong>
+            </div>
+            <div>
+              <span>Host gets est.</span>
+              <strong>{formatUsdFromCents(paidTicketEstimate.payout)}</strong>
+            </div>
+          </div>
+        ) : (
+          <p className="create-wizard-fee-empty">
+            Enter a valid ticket price to preview the fee breakdown.
+          </p>
+        )}
+        {paidTicketEstimate?.selloutGross && paidTicketEstimate.selloutTotalFee !== null ? (
+          <p className="create-wizard-fee-footnote">
+            At capacity, gross sales would be{" "}
+            <strong>{formatUsdFromCents(paidTicketEstimate.selloutGross)}</strong> and the
+            TailgateTime fee would be{" "}
+            <strong>{formatUsdFromCents(paidTicketEstimate.selloutTotalFee)}</strong>.
+          </p>
+        ) : null}
+      </div>
+    );
+  }
 
   const renderStepInvite = () => (
     <section className="create-wizard-stack">
@@ -2022,6 +2216,47 @@ export default function CreateTailgateWizard() {
             >
               Add Guests
             </button>
+          </div>
+
+          <div className="create-wizard-guest-plus-card">
+            <label className="create-wizard-switch-row create-wizard-switch-row-block">
+              <input
+                type="checkbox"
+                checked={allowGuestPlusOnInvite}
+                onChange={(event) => {
+                  setAllowGuestPlusOnInvite(event.target.checked);
+                  clearFieldError("guestPlusLimit");
+                }}
+              />
+              <span>
+                <strong>Allow guests to bring guests</strong>
+                <small>Let each invitee RSVP with additional people.</small>
+              </span>
+            </label>
+
+            {allowGuestPlusOnInvite ? (
+              <div className="create-wizard-guest-plus-limit">
+                <label className="input-label" htmlFor="guest-plus-limit">
+                  Max additional guests per invite
+                </label>
+                <input
+                  id="guest-plus-limit"
+                  className="text-input create-wizard-input"
+                  inputMode="numeric"
+                  value={maxAdditionalGuestsPerInvite}
+                  onChange={(event) => {
+                    setMaxAdditionalGuestsPerInvite(
+                      event.target.value.replace(/[^0-9]/g, "").slice(0, 2)
+                    );
+                    clearFieldError("guestPlusLimit");
+                  }}
+                  placeholder="2"
+                />
+                {errors.guestPlusLimit ? (
+                  <p className="create-wizard-error">{errors.guestPlusLimit}</p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="create-wizard-inline-grid">
@@ -2119,23 +2354,19 @@ export default function CreateTailgateWizard() {
           />
           <span>Include timeline</span>
         </label>
-        <label className="create-wizard-switch-row">
-          <input
-            type="checkbox"
-            checked={quizEnabled}
-            disabled={!quizCreationAllowed}
-            onChange={(event) => {
-              const checked = event.target.checked;
-              setQuizEnabled(checked);
-              clearQuizValidation();
-            }}
-          />
-          <span>Include quiz</span>
-        </label>
-        {!quizCreationAllowed ? (
-          <p className="create-wizard-radio-warning">
-            Quiz creation is available for invite-only tailgates.
-          </p>
+        {quizCreationAllowed ? (
+          <label className="create-wizard-switch-row">
+            <input
+              type="checkbox"
+              checked={quizEnabled}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                setQuizEnabled(checked);
+                clearQuizValidation();
+              }}
+            />
+            <span>Include quiz</span>
+          </label>
         ) : null}
         {errors.quizEnabled ? <p className="create-wizard-error">{errors.quizEnabled}</p> : null}
       </div>
@@ -2500,9 +2731,17 @@ export default function CreateTailgateWizard() {
     const enabledExpectations = expectationOptions
       .filter((option) => expectations[option.key])
       .map((option) => option.label);
+    const guestPlusSummary =
+      visibilityType === "private"
+        ? allowGuestPlusOnInvite
+          ? `Enabled | Up to ${parseGuestPlusLimit(maxAdditionalGuestsPerInvite) ?? 1} additional guest${
+              (parseGuestPlusLimit(maxAdditionalGuestsPerInvite) ?? 1) === 1 ? "" : "s"
+            } per invite`
+          : "Disabled"
+        : "Not applicable";
     const ticketSummary =
       visibilityType === "open_paid"
-        ? `Paid | $${(parsePriceToCents(priceInput) ?? 0) / 100}${
+        ? `Paid | $${((ticketPriceCents ?? 0) / 100).toFixed(2)} | Fee ${hostPlatformFeePercent}%${
             capacityInput.trim() ? ` | Cap ${capacityInput}` : ""
           } | Sales stop ${parseTicketSalesCutoffDays(ticketSalesCutoffDaysInput) ?? 0}d before`
         : visibilityType === "open_free"
@@ -2568,22 +2807,30 @@ export default function CreateTailgateWizard() {
                 </dd>
               </div>
             ) : null}
+            {guestInvitesEnabled ? (
+              <div>
+                <dt>Guest Plus</dt>
+                <dd>{guestPlusSummary}</dd>
+              </div>
+            ) : null}
             <div>
               <dt>Expectations</dt>
               <dd>
                 {enabledExpectations.length > 0 ? enabledExpectations.join(", ") : "None selected"}
               </dd>
             </div>
-            <div>
-              <dt>Quiz</dt>
-              <dd>
-                {quizEnabled
-                  ? quizTitle.trim()
-                    ? `${quizTitle.trim()} (${filledQuizQuestions.length} questions)`
-                    : `${filledQuizQuestions.length} questions`
-                  : "Not added"}
-              </dd>
-            </div>
+            {quizCreationAllowed ? (
+              <div>
+                <dt>Quiz</dt>
+                <dd>
+                  {quizEnabled
+                    ? quizTitle.trim()
+                      ? `${quizTitle.trim()} (${filledQuizQuestions.length} questions)`
+                      : `${filledQuizQuestions.length} questions`
+                    : "Not added"}
+                </dd>
+              </div>
+            ) : null}
             <div>
               <dt>Timeline Steps</dt>
               <dd>{timelineEnabled ? timelineSteps.length : "Not added"}</dd>
@@ -2598,6 +2845,8 @@ export default function CreateTailgateWizard() {
             </div>
           </dl>
         </div>
+
+        {visibilityType === "open_paid" ? renderPaidTicketSummaryCard() : null}
 
         <div className="create-wizard-card create-wizard-map-card">
           <div className="create-wizard-card-header">
@@ -2732,6 +2981,71 @@ export default function CreateTailgateWizard() {
         </div>
       ) : null}
 
+      {paidFeeModalOpen ? (
+        <div className="create-wizard-modal-overlay" role="dialog" aria-modal="true">
+          <div className="create-wizard-modal create-wizard-payout-modal">
+            <div className="create-wizard-modal-header">
+              <h3>Paid tailgates include a platform fee</h3>
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => setPaidFeeModalOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+            <p className="create-wizard-payout-copy">
+              TailgateTime charges a {STANDARD_PLATFORM_FEE_PERCENT}% platform fee on ticket sales
+              for paid events.
+            </p>
+            <p className="create-wizard-payout-status">
+              Your current fee for paid tailgates is {hostPlatformFeePercent}%.
+            </p>
+            <p className="create-wizard-payout-copy">
+              That TailgateTime fee includes transaction processing, payout handling, and payment
+              support, so there are no separate processing charges shown to hosts here.
+            </p>
+            <p className="create-wizard-payout-copy">
+              Early-adopter promo: hosts who sell at least {EARLY_ADOPTER_MIN_TICKETS_SOLD} tickets
+              for a qualifying event before {PROMO_CUTOFF_DISPLAY} can unlock a reduced{" "}
+              {EARLY_ADOPTER_PLATFORM_FEE_PERCENT}% fee for one year from that event date.
+            </p>
+            {paidTicketEstimate ? (
+              <div className="create-wizard-fee-grid create-wizard-fee-grid-modal">
+                <div>
+                  <span>Ticket price</span>
+                  <strong>{formatUsdFromCents(ticketPriceCents ?? 0)}</strong>
+                </div>
+                <div>
+                  <span>TailgateTime fee est.</span>
+                  <strong>{formatUsdFromCents(paidTicketEstimate.totalFee)}</strong>
+                </div>
+                <div>
+                  <span>Host gets est.</span>
+                  <strong>{formatUsdFromCents(paidTicketEstimate.payout)}</strong>
+                </div>
+              </div>
+            ) : (
+              <p className="create-wizard-fee-empty">
+                Enter a ticket price after continuing to preview the full fee breakdown.
+              </p>
+            )}
+            <div className="create-wizard-payout-actions">
+              <button type="button" className="primary-button" onClick={acknowledgePaidFee}>
+                I understand, continue
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setPaidFeeModalOpen(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {payoutModalOpen ? (
         <div className="create-wizard-modal-overlay" role="dialog" aria-modal="true">
           <div className="create-wizard-modal create-wizard-payout-modal">
@@ -2747,7 +3061,7 @@ export default function CreateTailgateWizard() {
               </button>
             </div>
             <p className="create-wizard-payout-copy">
-              Connect your Stripe account so you can charge for entry and receive payouts.
+              Finish payout setup so you can charge for entry and receive payouts.
             </p>
             <p className="create-wizard-payout-status">
               Current status: {connectStatus.replace("_", " ")}
@@ -2762,7 +3076,7 @@ export default function CreateTailgateWizard() {
                 onClick={() => void handlePayoutSetup()}
                 disabled={payoutSetupLoading}
               >
-                {payoutSetupLoading ? "Opening Stripe..." : "Set up payouts"}
+                {payoutSetupLoading ? "Opening payout setup..." : "Set up payouts"}
               </button>
               <button
                 type="button"

@@ -9,6 +9,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   updateDoc,
   where
@@ -17,6 +18,7 @@ import { getFunctions, httpsCallable } from "firebase/functions";
 import { getBlob, getDownloadURL, ref } from "firebase/storage";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import AppShell from "../components/AppShell";
+import { PublicTopNav } from "../components/PublicTopNav";
 import { useAuth } from "../hooks/useAuth";
 import { useDialog } from "../hooks/useDialog";
 import { useCreateRefundRequest } from "../hooks/useCreateRefundRequest";
@@ -28,7 +30,12 @@ import {
 } from "../lib/firebase";
 import { mockTailgates } from "../data/mockTailgates";
 import { TailgateEvent, TailgateStatus, VisibilityType } from "../types";
-import { estimateHostPayout, getVisibilityLabel } from "../utils/tailgate";
+import {
+  buildEventSizeSummary,
+  estimateHostPayout,
+  getTailgateCrowdTag,
+  getVisibilityLabel
+} from "../utils/tailgate";
 import { formatCurrencyFromCents, formatDateTime } from "../utils/format";
 
 const MAPS_API_KEY = (
@@ -36,10 +43,22 @@ const MAPS_API_KEY = (
   import.meta.env.VITE_MAPS_API_KEY ??
   ""
 ).trim();
+const firebaseProjectId =
+  (
+    typeof import.meta.env.VITE_FIREBASE_PROJECT_ID === "string"
+      ? import.meta.env.VITE_FIREBASE_PROJECT_ID
+      : ""
+  ).trim() ||
+  ((firebaseApp?.options.projectId as string | undefined) ?? "").trim();
+const submitInviteRsvpPublicUrl = firebaseProjectId
+  ? `https://us-central1-${firebaseProjectId}.cloudfunctions.net/submitInviteRsvpPublic`
+  : "";
 const MAX_TICKET_QUANTITY = 8;
 const MAX_HOST_BROADCAST_MESSAGE_LENGTH = 320;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const MAX_QUIZ_QUESTIONS = 10;
+const DEFAULT_PLUS_LIMIT = 12;
+const MAX_OPEN_FREE_PARTY_SIZE = 25;
 const EMPTY_QUIZ_QUESTION_FALLBACK: QuizQuestion = {
   id: "q1",
   questionText: "",
@@ -57,6 +76,25 @@ type AttendeeFilterKey = "All" | "Going" | "Pending" | "Not Going";
 type AttendeeStatus = "Host" | "Attending" | "Pending" | "Not Attending";
 type TicketCheckState = "loading" | "confirmed" | "missing";
 type GuestRsvpChoice = "Attending" | "Not Attending";
+type InviteRsvpResponse = "yes" | "no";
+type PlusGuestDraft = {
+  id: string;
+  attendeeId?: string;
+  name: string;
+  phone: string;
+};
+type InviteRsvpPayload = {
+  eventId: string;
+  guestId?: string;
+  token?: string;
+  rsvpStatus: InviteRsvpResponse;
+  anonymousGuestCount: number;
+  additionalGuests: Array<{
+    attendeeId?: string;
+    name: string;
+    phone: string;
+  }>;
+};
 type TimelineStep = {
   id: string;
   title: string;
@@ -109,11 +147,17 @@ type ExpectationKey =
 
 type AttendeeRecord = {
   id: string;
+  token?: string;
   userId?: string;
   name: string;
   status: AttendeeStatus;
   phone?: string;
   email?: string;
+  plusGuestsAnonymousCount?: number | string;
+  additionalGuestCount?: number | string;
+  plusGuestsNoContactCount?: number | string;
+  isAdditionalGuestInvite?: boolean;
+  invitedByGuestId?: string;
 };
 
 type LocationPin = {
@@ -161,6 +205,14 @@ type CancelRefundProgress = {
 };
 
 type RefundRequestStatus = "pending" | "approved" | "denied" | null;
+type CheckoutPurchaseStatus =
+  | "checkout_created"
+  | "confirmed"
+  | "expired"
+  | "failed"
+  | "refunded"
+  | "cancelled"
+  | null;
 
 type GuestRefundTicket = {
   ticketId: string;
@@ -220,6 +272,8 @@ type TailgateDetail = {
   locationCoords?: { lat: number; lng: number } | null;
   attendees: AttendeeRecord[];
   visibilityType: VisibilityType;
+  allowGuestPlusOnInvite?: boolean;
+  maxAdditionalGuestsPerInvite?: number;
   capacity?: number;
   ticketPriceCents?: number;
   ticketSalesCloseAt?: Date | null;
@@ -425,6 +479,11 @@ function parseDurationPart(value: string) {
   return Math.max(0, Math.floor(parsed));
 }
 
+function clampOpenFreePartySize(value: number) {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(Math.floor(value), MAX_OPEN_FREE_PARTY_SIZE));
+}
+
 function nextQuizQuestionId(existing: QuizQuestion[]): string {
   const used = new Set(existing.map((question) => question.id));
   let i = 1;
@@ -514,6 +573,63 @@ function formatPhoneInput(value: string) {
   if (digits.length <= 3) return area;
   if (digits.length <= 6) return `(${area}) ${middle}`;
   return `(${area}) ${middle}-${last}`;
+}
+
+function sanitizeGuestCountInput(value: string) {
+  return value.replace(/\D/g, "").slice(0, 2);
+}
+
+function normalizeInviteRsvpChoice(status?: string | null): GuestRsvpChoice {
+  return normalizeStatus(status) === "Not Attending" ? "Not Attending" : "Attending";
+}
+
+function errorCodeValue(error: unknown): string {
+  const raw =
+    typeof (error as { code?: unknown })?.code === "string"
+      ? (error as { code: string }).code
+      : "";
+  return raw.toLowerCase();
+}
+
+function errorMessageValue(error: unknown): string {
+  return (
+    (typeof (error as { message?: unknown })?.message === "string"
+      ? (error as { message: string }).message
+      : "") || ""
+  ).toLowerCase();
+}
+
+function isUnauthenticatedError(error: unknown): boolean {
+  const code = errorCodeValue(error);
+  const message = errorMessageValue(error);
+  return code.includes("unauthenticated") || message.includes("unauthenticated");
+}
+
+async function submitInviteRsvpViaHttp(payload: InviteRsvpPayload): Promise<void> {
+  if (!submitInviteRsvpPublicUrl) {
+    throw new Error("Missing Firebase project configuration for RSVP endpoint.");
+  }
+
+  const response = await fetch(submitInviteRsvpPublicUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (response.ok) {
+    return;
+  }
+
+  const errorBody = (await response.json().catch(() => null)) as
+    | { code?: string; message?: string }
+    | null;
+  const error = new Error(
+    errorBody?.message || `HTTP ${response.status} saving RSVP failed.`
+  ) as Error & { code?: string };
+  error.code = errorBody?.code;
+  throw error;
 }
 
 function formatDurationCountdown(diffMs: number) {
@@ -618,6 +734,33 @@ function normalizeStatus(value: unknown): AttendeeStatus {
   return normalized ?? "Pending";
 }
 
+function resolveAnonymousPlusGuests(
+  attendee: Pick<
+    AttendeeRecord,
+    "plusGuestsAnonymousCount" | "additionalGuestCount" | "plusGuestsNoContactCount"
+  >
+): number {
+  const candidates = [
+    attendee.plusGuestsAnonymousCount,
+    attendee.additionalGuestCount,
+    attendee.plusGuestsNoContactCount
+  ];
+
+  for (const value of candidates) {
+    const numeric =
+      typeof value === "number"
+        ? value
+        : typeof value === "string"
+        ? Number(value)
+        : Number.NaN;
+    if (Number.isFinite(numeric)) {
+      return Math.max(0, Math.floor(numeric));
+    }
+  }
+
+  return 0;
+}
+
 function isCoordinateString(value?: string | null): boolean {
   if (typeof value !== "string") {
     return false;
@@ -644,28 +787,52 @@ function normalizeAttendees(
         record.contact,
         record.email
       ) ?? `Guest ${index + 1}`;
+      const isAdditionalGuestInvite = record.isAdditionalGuestInvite === true;
+      const hasContactInfo =
+        firstString(record.displayName, record.name, record.phone, record.email)?.length ?? 0;
 
       let status = normalizeStatus(record.status);
-      if (userId && userId === hostId) {
+      if (isAdditionalGuestInvite && hasContactInfo > 0 && status !== "Not Attending") {
+        status = "Attending";
+      }
+      if (userId && userId === hostId && !isAdditionalGuestInvite) {
         status = "Host";
       }
 
-      const id = userId ?? firstString(record.id) ?? `guest-${index}-${name}`;
+      const id =
+        firstString(record.id, record.token) ??
+        `${userId ?? "guest"}-${index}-${name}`;
       if (seen.has(id)) return null;
       seen.add(id);
 
       return {
         id,
+        token: firstString(record.token),
         userId,
         name,
         status,
         phone: firstString(record.phone),
-        email: firstString(record.email)
+        email: firstString(record.email),
+        plusGuestsAnonymousCount:
+          coerceNumber(record.plusGuestsAnonymousCount) ??
+          firstString(record.plusGuestsAnonymousCount),
+        additionalGuestCount:
+          coerceNumber(record.additionalGuestCount) ??
+          firstString(record.additionalGuestCount),
+        plusGuestsNoContactCount:
+          coerceNumber(record.plusGuestsNoContactCount) ??
+          firstString(record.plusGuestsNoContactCount),
+        isAdditionalGuestInvite,
+        invitedByGuestId: firstString(record.invitedByGuestId)
       };
     })
     .filter((attendee): attendee is AttendeeRecord => Boolean(attendee));
 
-  const hostExists = attendees.some((attendee) => attendee.userId === hostId);
+  const hostExists = attendees.some(
+    (attendee) =>
+      attendee.isAdditionalGuestInvite !== true &&
+      (attendee.userId === hostId || attendee.status === "Host")
+  );
   if (!hostExists && hostId) {
     attendees.unshift({
       id: `host-${hostId}`,
@@ -706,15 +873,10 @@ function resolveLocationCoords(
   const locationRecord = asRecord(locationRaw);
   const locationCoordsRecord = asRecord(locationCoordsRaw);
 
-  const pin = asRecord(locationRecord?.pin) as LocationPin | null;
   const lat =
-    coerceNumber(pin?.lat) ??
-    coerceNumber(locationRecord?.lat) ??
-    coerceNumber(locationCoordsRecord?.lat);
+    coerceNumber(locationCoordsRecord?.lat) ?? coerceNumber(locationRecord?.lat);
   const lng =
-    coerceNumber(pin?.lng) ??
-    coerceNumber(locationRecord?.lng) ??
-    coerceNumber(locationCoordsRecord?.lng);
+    coerceNumber(locationCoordsRecord?.lng) ?? coerceNumber(locationRecord?.lng);
 
   if (typeof lat === "number" && typeof lng === "number") {
     return { lat, lng };
@@ -730,6 +892,17 @@ function resolveLocationCoords(
     }
   }
 
+  return null;
+}
+
+function resolveExactPinCoords(locationRaw: unknown): { lat: number; lng: number } | null {
+  const locationRecord = asRecord(locationRaw);
+  const pin = asRecord(locationRecord?.pin) as LocationPin | null;
+  const lat = coerceNumber(pin?.lat);
+  const lng = coerceNumber(pin?.lng);
+  if (typeof lat === "number" && typeof lng === "number") {
+    return { lat, lng };
+  }
   return null;
 }
 
@@ -901,6 +1074,8 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     locationCoords: resolveLocationCoords(data.location, data.locationCoords),
     attendees: normalizeAttendees(data.attendees, hostId, hostName),
     visibilityType,
+    allowGuestPlusOnInvite: data.allowGuestPlusOnInvite === true,
+    maxAdditionalGuestsPerInvite: coerceNumber(data.maxAdditionalGuestsPerInvite),
     capacity: coerceNumber(data.capacity),
     ticketPriceCents: priceCents,
     ticketSalesCloseAt,
@@ -955,6 +1130,8 @@ function toDetailFromMock(event: TailgateEvent): TailgateDetail {
     locationCoords: null,
     attendees,
     visibilityType: event.visibilityType,
+    allowGuestPlusOnInvite: false,
+    maxAdditionalGuestsPerInvite: undefined,
     capacity: event.capacity,
     ticketPriceCents: event.ticketPriceCents,
     ticketSalesCloseAt: null,
@@ -1000,6 +1177,10 @@ export default function TailgateDetails() {
   const [rsvpPendingChoice, setRsvpPendingChoice] = useState<GuestRsvpChoice | null>(null);
   const [rsvpError, setRsvpError] = useState<string | null>(null);
   const [rsvpSuccess, setRsvpSuccess] = useState<string | null>(null);
+  const [rsvpDraftChoice, setRsvpDraftChoice] = useState<GuestRsvpChoice>("Attending");
+  const [inviteGuestCount, setInviteGuestCount] = useState("0");
+  const [invitePlusGuests, setInvitePlusGuests] = useState<PlusGuestDraft[]>([]);
+  const [openFreePartySize, setOpenFreePartySize] = useState(1);
   const [pinning, setPinning] = useState(false);
   const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
   const [ticketQuantity, setTicketQuantity] = useState(1);
@@ -1016,6 +1197,9 @@ export default function TailgateDetails() {
   } | null>(null);
   const [liveCheckedInCount, setLiveCheckedInCount] = useState<number | null>(null);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [checkoutPurchaseStatus, setCheckoutPurchaseStatus] =
+    useState<CheckoutPurchaseStatus>(null);
+  const [checkoutPurchaseLoading, setCheckoutPurchaseLoading] = useState(false);
   const [timelineSteps, setTimelineSteps] = useState<TimelineStep[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(true);
   const [timelineError, setTimelineError] = useState<string | null>(null);
@@ -1949,28 +2133,32 @@ export default function TailgateDetails() {
     };
   }, [detail, isHostUser]);
 
-  const locationRawRecord = asRecord(detail?.locationRaw);
-  const locationPinRecord = asRecord(locationRawRecord?.pin);
-  const exactPinLat = coerceNumber(locationPinRecord?.lat);
-  const exactPinLng = coerceNumber(locationPinRecord?.lng);
-  const hasExactPin = typeof exactPinLat === "number" && typeof exactPinLng === "number";
+  const exactPinCoords = resolveExactPinCoords(detail?.locationRaw);
+  const hasExactPin = Boolean(exactPinCoords);
   const resolvedLocationText =
     detail?.locationSummary ?? resolveLocationString(detail?.locationRaw);
   const displayLocationLabel =
     resolvedLocationText && !isCoordinateString(resolvedLocationText)
       ? resolvedLocationText
       : undefined;
-  const exactPinCoords = hasExactPin ? { lat: exactPinLat, lng: exactPinLng } : null;
-  const locationCoords = exactPinCoords ?? detail?.locationCoords ?? null;
-  const droppedPinLabel = locationCoords
-    ? "Pin dropped by host. View exact location on map."
-    : null;
+  const generalMeetupCoords = detail?.locationCoords ?? null;
+  const mapCoords = exactPinCoords ?? generalMeetupCoords;
   const locationLabel =
-    droppedPinLabel ??
     displayLocationLabel ??
-    (locationCoords ? "Pin dropped in map" : "Location not set");
-  const locationDirectionQuery = locationCoords
-    ? `${locationCoords.lat},${locationCoords.lng}`
+    (hasExactPin
+      ? "Pin dropped. Tap map below to navigate."
+      : mapCoords
+      ? "General meetup area selected."
+      : "Location not set");
+  const meetUpSubtitle =
+    displayLocationLabel ??
+    (hasExactPin
+      ? "Pin dropped. Tap map below to navigate."
+      : mapCoords
+      ? "General meetup area selected."
+      : "Location coming soon.");
+  const locationDirectionQuery = mapCoords
+    ? `${mapCoords.lat},${mapCoords.lng}`
     : resolvedLocationText ?? "";
   const canOpenMaps = locationDirectionQuery.trim().length > 0;
   const coverImageUrls = rawCoverImageUrls;
@@ -2007,49 +2195,154 @@ export default function TailgateDetails() {
     Boolean(activeCoverImageUrl) &&
     !activeCoverImageLoaded &&
     (!hasActiveCoverImageLoadError || isRecoveringActiveCoverImage);
-  const mapUrl = locationCoords
-    ? buildMapEmbedUrl(locationCoords, MAPS_API_KEY)
+  const mapUrl = mapCoords
+    ? buildMapEmbedUrl(mapCoords, MAPS_API_KEY)
     : null;
   const checkoutResult = useMemo(() => {
     const params = new URLSearchParams(location.search);
     const value = params.get("checkout");
     return value === "success" || value === "cancel" ? value : null;
   }, [location.search]);
+  const checkoutPurchaseId = useMemo(() => {
+    const routerParams = new URLSearchParams(location.search);
+    const routerValue = routerParams.get("purchaseId");
+    if (typeof routerValue === "string" && routerValue.trim().length > 0) {
+      return routerValue.trim();
+    }
+    const browserValue = new URLSearchParams(window.location.search).get("purchaseId");
+    return typeof browserValue === "string" && browserValue.trim().length > 0
+      ? browserValue.trim()
+      : null;
+  }, [location.search]);
   const isEmbeddedMapPanel = useMemo(() => {
     const params = new URLSearchParams(location.search);
     return params.get("embed") === "discover-map";
   }, [location.search]);
 
+  useEffect(() => {
+    if (checkoutResult !== "success" || !checkoutPurchaseId || !db) {
+      setCheckoutPurchaseStatus(null);
+      setCheckoutPurchaseLoading(false);
+      return;
+    }
+
+    setCheckoutPurchaseLoading(true);
+    const purchaseRef = doc(db, "ticketPurchases", checkoutPurchaseId);
+    const unsubscribe = onSnapshot(
+      purchaseRef,
+      (snapshot) => {
+        const nextStatus = snapshot.exists()
+          ? ((snapshot.data()?.status as CheckoutPurchaseStatus | undefined) ?? "checkout_created")
+          : "checkout_created";
+        setCheckoutPurchaseStatus(nextStatus);
+        setCheckoutPurchaseLoading(false);
+      },
+      (snapshotError) => {
+        console.error("Failed to watch checkout purchase status", snapshotError);
+        setCheckoutPurchaseStatus(null);
+        setCheckoutPurchaseLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [checkoutPurchaseId, checkoutResult]);
+
   const attendeeCounts = useMemo(() => {
     if (!detail) {
-      return { all: 0, going: 0, pending: 0, notGoing: 0, nonHost: 0 };
+      return {
+        all: 0,
+        going: 0,
+        pending: 0,
+        notGoing: 0,
+        nonHost: 0,
+        anonymousPlusGoing: 0,
+        totalHeadcount: 0,
+        goingHeadcount: 0
+      };
     }
     const all = detail.attendees;
     const nonHost = all.filter((attendee) => attendee.status !== "Host");
+    const going = nonHost.filter((attendee) => attendee.status === "Attending");
+    const anonymousPlusGoing = going.reduce(
+      (sum, attendee) => sum + resolveAnonymousPlusGuests(attendee),
+      0
+    );
     return {
       all: all.length,
       nonHost: nonHost.length,
-      going: nonHost.filter((attendee) => attendee.status === "Attending").length,
+      going: going.length,
       pending: nonHost.filter((attendee) => attendee.status === "Pending").length,
-      notGoing: nonHost.filter((attendee) => attendee.status === "Not Attending").length
+      notGoing: nonHost.filter((attendee) => attendee.status === "Not Attending").length,
+      anonymousPlusGoing,
+      totalHeadcount: nonHost.length + anonymousPlusGoing,
+      goingHeadcount: going.length + anonymousPlusGoing
     };
   }, [detail]);
 
   const filteredAttendees = useMemo(() => {
     if (!detail) return [];
     return detail.attendees.filter((attendee) => {
-      if (attendeeFilter === "All") return true;
+      if (attendeeFilter === "All") return attendee.status !== "Host";
       if (attendeeFilter === "Going") return attendee.status === "Attending";
       if (attendeeFilter === "Pending") return attendee.status === "Pending";
       if (attendeeFilter === "Not Going") return attendee.status === "Not Attending";
       return true;
     });
   }, [attendeeFilter, detail]);
-  const userAttendee = useMemo(() => {
-    if (!detail || !user?.uid) return null;
+  const inviteQueryGuestId = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    const value = params.get("guestId");
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  }, [location.search]);
+  const inviteQueryToken = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    const value = params.get("token");
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  }, [location.search]);
+  const rsvpAttendee = useMemo(() => {
+    if (!detail) return null;
+    if (inviteQueryGuestId) {
+      const inviteMatch =
+        detail.attendees.find((attendee) => attendee.id === inviteQueryGuestId) ?? null;
+      if (!inviteMatch) {
+        return null;
+      }
+      if (inviteQueryToken && inviteMatch.token !== inviteQueryToken) {
+        return null;
+      }
+      return inviteMatch;
+    }
+    if (!user?.uid) return null;
     return detail.attendees.find((attendee) => attendee.userId === user.uid) ?? null;
+  }, [detail, inviteQueryGuestId, inviteQueryToken, user?.uid]);
+  const openFreeCurrentAttendee = useMemo(() => {
+    if (!detail || detail.visibilityType !== "open_free" || !user?.uid) return null;
+    return (
+      detail.attendees.find(
+        (attendee) =>
+          attendee.userId === user.uid && attendee.isAdditionalGuestInvite !== true
+      ) ?? null
+    );
   }, [detail, user?.uid]);
-  const userRsvpStatus: AttendeeStatus = userAttendee?.status ?? "Pending";
+  const userRsvpStatus: AttendeeStatus = rsvpAttendee?.status ?? "Pending";
+  const plusGuestLimit = useMemo(() => {
+    const configured = detail?.maxAdditionalGuestsPerInvite ?? 0;
+    if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+      return Math.min(Math.floor(configured), DEFAULT_PLUS_LIMIT);
+    }
+    return DEFAULT_PLUS_LIMIT;
+  }, [detail?.maxAdditionalGuestsPerInvite]);
+  const plusGuestsEnabled =
+    detail?.visibilityType === "private" &&
+    detail?.allowGuestPlusOnInvite === true &&
+    rsvpDraftChoice === "Attending";
+  const canAddContactGuest = plusGuestsEnabled && invitePlusGuests.length < plusGuestLimit;
+  const canRespondToInviteViaLink = Boolean(rsvpAttendee && inviteQueryGuestId && inviteQueryToken);
+  const isOpenFreeUserGoing =
+    normalizeStatus(openFreeCurrentAttendee?.status) === "Attending";
+  const openFreeBringLabel =
+    openFreePartySize === 1 ? "Just me" : `${openFreePartySize} people total`;
+  const hostDisplayName = detail?.hostName?.trim() || "Host";
   const rsvpStatusMeta = useMemo(() => {
     if (userRsvpStatus === "Attending") {
       return {
@@ -2071,6 +2364,54 @@ export default function TailgateDetails() {
       className: "tailgate-details-rsvp-status-pending"
     };
   }, [userRsvpStatus]);
+
+  useEffect(() => {
+    setRsvpDraftChoice(normalizeInviteRsvpChoice(rsvpAttendee?.status));
+  }, [rsvpAttendee?.status]);
+
+  useEffect(() => {
+    if (!rsvpAttendee) {
+      setInviteGuestCount("0");
+      setInvitePlusGuests([]);
+      return;
+    }
+
+    const inviterGuestId = rsvpAttendee.id;
+    if (!inviterGuestId || !detail) {
+      setInvitePlusGuests([]);
+      setInviteGuestCount(String(resolveAnonymousPlusGuests(rsvpAttendee)));
+      return;
+    }
+
+    const existingPlusGuests = detail.attendees
+      .filter(
+        (attendee) =>
+          attendee.isAdditionalGuestInvite === true &&
+          attendee.invitedByGuestId === inviterGuestId
+      )
+      .map((attendee, index) => ({
+        id: `${attendee.id || "existing"}-${index}`,
+        attendeeId: attendee.id,
+        name: attendee.name.trim(),
+        phone: attendee.phone ?? ""
+      }));
+
+    const anonymousOnlyCount = resolveAnonymousPlusGuests(rsvpAttendee);
+    setInvitePlusGuests(existingPlusGuests);
+    setInviteGuestCount(String(anonymousOnlyCount + existingPlusGuests.length));
+  }, [detail, rsvpAttendee]);
+
+  useEffect(() => {
+    if (!detail || detail.visibilityType !== "open_free") {
+      setOpenFreePartySize(1);
+      return;
+    }
+    const attendeePartySize =
+      openFreeCurrentAttendee && normalizeStatus(openFreeCurrentAttendee.status) === "Attending"
+        ? 1 + resolveAnonymousPlusGuests(openFreeCurrentAttendee)
+        : 1;
+    setOpenFreePartySize(clampOpenFreePartySize(attendeePartySize));
+  }, [detail, openFreeCurrentAttendee]);
 
   const expectationChips = useMemo(() => {
     if (!detail?.expectations) return [];
@@ -2201,6 +2542,16 @@ export default function TailgateDetails() {
     typeof totalTicketCents === "number"
       ? formatCurrencyFromCents(totalTicketCents)
       : null;
+  const eventSizeBaseCount =
+    detail?.visibilityType === "open_paid" ? confirmedPaidCount : attendeeCounts.goingHeadcount;
+  const eventSizeTag = getTailgateCrowdTag(eventSizeBaseCount);
+  const eventSizeSummary = detail
+    ? buildEventSizeSummary({
+        visibilityType: detail.visibilityType,
+        confirmedCount: eventSizeBaseCount,
+        ticketPriceCents: detail.ticketPriceCents
+      })
+    : null;
   const purchaseCtaLabel = isSoldOut
     ? "Sold out"
     : hasConfirmedTicket
@@ -2238,6 +2589,8 @@ export default function TailgateDetails() {
   const canOpenCheckIn = detail?.visibilityType === "open_paid" && status !== "cancelled";
   const showGuestRsvpSection =
     detail?.visibilityType === "private" && !isHostUser && status !== "cancelled";
+  const showOpenFreeRsvpSection =
+    detail?.visibilityType === "open_free" && !isHostUser && status !== "cancelled";
   const canShowWhosComingSection = detail?.visibilityType === "private";
   const canManageGuestInvites = isHostUser && detail?.visibilityType === "private";
   const canManageQuiz = isHostUser && detail?.visibilityType === "private";
@@ -2545,8 +2898,20 @@ export default function TailgateDetails() {
   };
 
   const updateGuestRsvp = async (nextStatus: GuestRsvpChoice) => {
-    if (!detail || !id || !db || !user?.uid || isHostUser || rsvpSaving) return;
-    if (userRsvpStatus === nextStatus) return;
+    if (!detail || !id || !db || isHostUser || rsvpSaving) return;
+
+    const inviteAttendee = rsvpAttendee;
+    const useInviteRsvpFlow =
+      detail.visibilityType === "private" &&
+      Boolean(inviteAttendee?.id) &&
+      (Boolean(user?.uid) || Boolean(inviteAttendee?.token));
+    const canFallbackToDirectUpdate = Boolean(user?.uid);
+
+    if (!useInviteRsvpFlow && !canFallbackToDirectUpdate) {
+      setRsvpError("Sign in or open your invite link to RSVP.");
+      return;
+    }
+    if (userRsvpStatus === nextStatus && !useInviteRsvpFlow) return;
 
     const eventRef = doc(db, "tailgateEvents", id);
     setRsvpSaving(true);
@@ -2555,99 +2920,263 @@ export default function TailgateDetails() {
     setRsvpSuccess(null);
 
     try {
-      const snapshot = await getDoc(eventRef);
-      if (!snapshot.exists()) {
-        setRsvpError("Tailgate not found.");
-        return;
-      }
+      if (useInviteRsvpFlow && inviteAttendee) {
+        const incompleteGuest = invitePlusGuests.find((guest) => {
+          const phoneDigits = toPhoneDigits(guest.phone);
+          return phoneDigits.length > 0 && phoneDigits.length < 10;
+        });
+        if (incompleteGuest) {
+          setRsvpError("Enter a full 10-digit phone number for each guest contact.");
+          return;
+        }
 
-      const eventData = snapshot.data() as Record<string, unknown>;
-      const attendeesRaw = Array.isArray(eventData.attendees)
-        ? [...eventData.attendees]
-        : [];
-      const attendeeIndex = attendeesRaw.findIndex((entry) => {
-        const attendeeRecord = asRecord(entry);
-        if (!attendeeRecord) return false;
-        const attendeeUserId = firstString(
-          attendeeRecord.userId,
-          attendeeRecord.uid,
-          attendeeRecord.id
-        );
-        return attendeeUserId === user.uid;
-      });
-
-      const fallbackName = firstString(user.displayName, user.email) ?? "Guest";
-
-      if (attendeeIndex >= 0) {
-        const existing = asRecord(attendeesRaw[attendeeIndex]) ?? {};
-        attendeesRaw[attendeeIndex] = {
-          ...existing,
-          id: firstString(existing.id, user.uid) ?? user.uid,
-          userId:
-            firstString(existing.userId, existing.uid, existing.id, user.uid) ??
-            user.uid,
-          name:
-            firstString(
-              existing.name,
-              existing.displayName,
-              user.displayName,
-              user.email
-            ) ?? fallbackName,
-          displayName:
-            firstString(
-              existing.displayName,
-              existing.name,
-              user.displayName,
-              user.email
-            ) ?? fallbackName,
-          status: nextStatus
+        const totalGuestsRequested = Math.max(0, Number(inviteGuestCount || "0") || 0);
+        const payloadGuests = nextStatus === "Attending"
+          ? invitePlusGuests
+              .map((guest) => ({
+                attendeeId: guest.attendeeId,
+                name: guest.name.trim(),
+                phone: formatPhoneInput(guest.phone).trim()
+              }))
+              .filter((guest) => toPhoneDigits(guest.phone).length === 10)
+          : [];
+        const payload: InviteRsvpPayload = {
+          eventId: id,
+          guestId: inviteAttendee.id,
+          token: inviteAttendee.token,
+          rsvpStatus: nextStatus === "Attending" ? "yes" : "no",
+          anonymousGuestCount:
+            nextStatus === "Attending"
+              ? Math.max(totalGuestsRequested - payloadGuests.length, 0)
+              : 0,
+          additionalGuests: payloadGuests
         };
+
+        if (user?.uid) {
+          if (!firebaseFunctions) {
+            throw new Error("Firebase functions are unavailable.");
+          }
+          const submitInviteRsvp = httpsCallable(firebaseFunctions, "submitInviteRsvp");
+          try {
+            await submitInviteRsvp(payload);
+          } catch (callableError) {
+            if (inviteAttendee.id && inviteAttendee.token && isUnauthenticatedError(callableError)) {
+              await submitInviteRsvpViaHttp(payload);
+            } else {
+              throw callableError;
+            }
+          }
+        } else {
+          await submitInviteRsvpViaHttp(payload);
+        }
+
+        const refreshedSnapshot = await getDoc(eventRef);
+        if (!refreshedSnapshot.exists()) {
+          setRsvpError("Tailgate not found.");
+          return;
+        }
+        const refreshedData = refreshedSnapshot.data() as Record<string, unknown>;
+        setDetail((previous) => {
+          if (!previous) return previous;
+          return {
+            ...previous,
+            attendees: normalizeAttendees(
+              refreshedData.attendees,
+              previous.hostId,
+              previous.hostName
+            )
+          };
+        });
       } else {
-        attendeesRaw.push({
-          id: user.uid,
-          userId: user.uid,
-          name: fallbackName,
-          displayName: fallbackName,
-          status: nextStatus
+        const snapshot = await getDoc(eventRef);
+        if (!snapshot.exists()) {
+          setRsvpError("Tailgate not found.");
+          return;
+        }
+
+        const eventData = snapshot.data() as Record<string, unknown>;
+        const attendeesRaw = Array.isArray(eventData.attendees)
+          ? [...eventData.attendees]
+          : [];
+        const attendeeIndex = attendeesRaw.findIndex((entry) => {
+          const attendeeRecord = asRecord(entry);
+          if (!attendeeRecord) return false;
+          const attendeeUserId = firstString(
+            attendeeRecord.userId,
+            attendeeRecord.uid,
+            attendeeRecord.id
+          );
+          return attendeeUserId === user?.uid;
+        });
+
+        const fallbackName = firstString(user?.displayName, user?.email) ?? "Guest";
+
+        if (attendeeIndex >= 0) {
+          const existing = asRecord(attendeesRaw[attendeeIndex]) ?? {};
+          attendeesRaw[attendeeIndex] = {
+            ...existing,
+            id: firstString(existing.id, user?.uid) ?? user?.uid,
+            userId:
+              firstString(existing.userId, existing.uid, existing.id, user?.uid) ??
+              user?.uid,
+            name:
+              firstString(
+                existing.name,
+                existing.displayName,
+                user?.displayName,
+                user?.email
+              ) ?? fallbackName,
+            displayName:
+              firstString(
+                existing.displayName,
+                existing.name,
+                user?.displayName,
+                user?.email
+              ) ?? fallbackName,
+            status: nextStatus
+          };
+        } else if (user?.uid) {
+          attendeesRaw.push({
+            id: user.uid,
+            userId: user.uid,
+            name: fallbackName,
+            displayName: fallbackName,
+            status: nextStatus
+          });
+        }
+
+        await updateDoc(eventRef, { attendees: attendeesRaw });
+        setDetail((previous) => {
+          if (!previous) return previous;
+          return {
+            ...previous,
+            attendees: normalizeAttendees(
+              attendeesRaw,
+              previous.hostId,
+              previous.hostName
+            )
+          };
         });
       }
 
-      await updateDoc(eventRef, { attendees: attendeesRaw });
-      setDetail((previous) => {
-        if (!previous) return previous;
-        return {
-          ...previous,
-          attendees: normalizeAttendees(
-            attendeesRaw,
-            previous.hostId,
-            previous.hostName
-          )
-        };
-      });
+      setRsvpDraftChoice(nextStatus);
       setRsvpSuccess(nextStatus === "Attending" ? "RSVP updated to Going." : "RSVP updated to Not Going.");
     } catch (rsvpUpdateError) {
       console.error("Failed to update RSVP", rsvpUpdateError);
-      setRsvpError("Unable to update RSVP right now.");
+      const code = errorCodeValue(rsvpUpdateError);
+      if (code.includes("not-found")) {
+        setRsvpError("Invite not found.");
+      } else if (code.includes("permission-denied")) {
+        setRsvpError("This invite is not valid.");
+      } else if (code.includes("unauthenticated")) {
+        setRsvpError("Sign in or use your invite link to RSVP.");
+      } else {
+        setRsvpError("Unable to update RSVP right now.");
+      }
     } finally {
       setRsvpSaving(false);
       setRsvpPendingChoice(null);
     }
   };
 
-  const confirmGuestRsvpUpdate = (nextStatus: GuestRsvpChoice) => {
-    if (!user || rsvpSaving || userRsvpStatus === nextStatus) return;
-    const nextLabel = nextStatus === "Attending" ? "Going" : "Not Going";
-    void (async () => {
-      const shouldContinue = await confirm({
-        title: "Change RSVP?",
-        message: `Are you sure you want to change your RSVP to ${nextLabel}?`,
-        confirmLabel: `Yes, ${nextLabel}`,
-        cancelLabel: "Keep current",
-        tone: nextStatus === "Not Attending" ? "danger" : "default"
+  const handleOpenFreePartySizeChange = (value: string) => {
+    const digitsOnly = value.replace(/\D/g, "");
+    if (!digitsOnly) {
+      setOpenFreePartySize(1);
+      return;
+    }
+    setOpenFreePartySize(clampOpenFreePartySize(Number(digitsOnly)));
+  };
+
+  const adjustOpenFreePartySize = (delta: number) => {
+    setOpenFreePartySize((previous) => clampOpenFreePartySize(previous + delta));
+  };
+
+  const saveOpenFreeRsvp = async () => {
+    if (!detail || !id || !db || detail.visibilityType !== "open_free" || isHostUser) return;
+    if (!user?.uid) {
+      navigate(
+        `/login?mode=login&redirect=${encodeURIComponent(`${location.pathname}${location.search}`)}`
+      );
+      return;
+    }
+
+    const safePartySize = clampOpenFreePartySize(openFreePartySize);
+    const plusGuestCount = Math.max(0, safePartySize - 1);
+    const fallbackName = firstString(user.displayName, user.email) ?? "Tailgater";
+
+    setRsvpSaving(true);
+    setRsvpPendingChoice("Attending");
+    setRsvpError(null);
+    setRsvpSuccess(null);
+
+    try {
+      const eventRef = doc(db, "tailgateEvents", id);
+      await runTransaction(db, async (transaction) => {
+        const snapshot = await transaction.get(eventRef);
+        if (!snapshot.exists()) {
+          throw new Error("Tailgate not found.");
+        }
+        const eventData = snapshot.data() as Record<string, unknown>;
+        const attendeesRaw = Array.isArray(eventData.attendees) ? [...eventData.attendees] : [];
+        const attendeeIndex = attendeesRaw.findIndex((entry) => {
+          const attendeeRecord = asRecord(entry);
+          if (!attendeeRecord || attendeeRecord.isAdditionalGuestInvite === true) return false;
+          const attendeeUserId = firstString(
+            attendeeRecord.userId,
+            attendeeRecord.uid,
+            attendeeRecord.id
+          );
+          return attendeeUserId === user.uid;
+        });
+
+        const attendeeBase = {
+          userId: user.uid,
+          name: fallbackName,
+          displayName: fallbackName,
+          status: "Attending",
+          plusGuestsAnonymousCount: plusGuestCount,
+          additionalGuestCount: plusGuestCount,
+          plusGuestsNoContactCount: plusGuestCount
+        };
+
+        if (attendeeIndex >= 0) {
+          const existing = asRecord(attendeesRaw[attendeeIndex]) ?? {};
+          attendeesRaw[attendeeIndex] = {
+            ...existing,
+            ...attendeeBase
+          };
+        } else {
+          attendeesRaw.push(attendeeBase);
+        }
+
+        transaction.update(eventRef, { attendees: attendeesRaw });
       });
-      if (!shouldContinue) return;
-      await updateGuestRsvp(nextStatus);
-    })();
+
+      const refreshedSnapshot = await getDoc(doc(db, "tailgateEvents", id));
+      if (refreshedSnapshot.exists()) {
+        const refreshedData = refreshedSnapshot.data() as Record<string, unknown>;
+        setDetail((previous) => {
+          if (!previous) return previous;
+          return {
+            ...previous,
+            attendees: normalizeAttendees(
+              refreshedData.attendees,
+              previous.hostId,
+              previous.hostName
+            )
+          };
+        });
+      }
+
+      setRsvpSuccess(isOpenFreeUserGoing ? "Your group size was updated." : "You're on the list.");
+    } catch (error) {
+      console.error("Failed to save open free RSVP", error);
+      setRsvpError("Unable to save RSVP right now.");
+    } finally {
+      setRsvpSaving(false);
+      setRsvpPendingChoice(null);
+    }
   };
 
   const openMaps = () => {
@@ -2736,12 +3265,18 @@ export default function TailgateDetails() {
     }
 
     try {
-      const successUrl = `${window.location.origin}${window.location.pathname}#/tailgates/${encodeURIComponent(
-        detail.id
-      )}?checkout=success`;
-      const cancelUrl = `${window.location.origin}${window.location.pathname}#/tailgates/${encodeURIComponent(
-        detail.id
-      )}?checkout=cancel`;
+      const purchaseIdPlaceholder = "{purchaseId}";
+      const returnBaseUrl = `${window.location.origin}${window.location.pathname}`;
+      const successUrl = `${returnBaseUrl}?purchaseId=${encodeURIComponent(
+        purchaseIdPlaceholder
+      )}#/tailgates/${encodeURIComponent(detail.id)}?checkout=success&purchaseId=${encodeURIComponent(
+        purchaseIdPlaceholder
+      )}`;
+      const cancelUrl = `${returnBaseUrl}?purchaseId=${encodeURIComponent(
+        purchaseIdPlaceholder
+      )}#/tailgates/${encodeURIComponent(detail.id)}?checkout=cancel&purchaseId=${encodeURIComponent(
+        purchaseIdPlaceholder
+      )}`;
       const createSession = httpsCallable(
         firebaseFunctions,
         "createTailgateCheckoutSession"
@@ -2749,10 +3284,12 @@ export default function TailgateDetails() {
       const result = await createSession({
         tailgateId: detail.id,
         quantity: sanitizedQuantity,
+        channel: "web",
         successUrl,
         cancelUrl
       });
       const data = result.data as {
+        purchaseId?: string | null;
         checkoutUrl?: string | null;
       };
 
@@ -3795,8 +4332,31 @@ export default function TailgateDetails() {
       ) : (
         <section className="tailgate-details-stack">
           {checkoutResult === "success" ? (
-            <section className="tailgate-details-checkout-banner success">
-              Purchase successful. Open the TailgateTime app to view tickets.
+            <section
+              className={`tailgate-details-checkout-banner${
+                checkoutPurchaseStatus === "confirmed"
+                  ? " success"
+                  : checkoutPurchaseStatus === "failed" ||
+                    checkoutPurchaseStatus === "expired" ||
+                    checkoutPurchaseStatus === "cancelled" ||
+                    checkoutPurchaseStatus === "refunded"
+                  ? " cancel-feedback-error"
+                  : ""
+              }`}
+            >
+              {checkoutPurchaseStatus === "confirmed"
+                ? "Purchase confirmed. Your tickets are ready."
+                : checkoutPurchaseStatus === "failed"
+                ? "Payment failed before ticket confirmation. Please try again."
+                : checkoutPurchaseStatus === "expired"
+                ? "Checkout expired before payment completed."
+                : checkoutPurchaseStatus === "cancelled"
+                ? "This purchase was cancelled."
+                : checkoutPurchaseStatus === "refunded"
+                ? "This purchase was refunded."
+                : checkoutPurchaseLoading
+                ? "Processing payment and confirming your tickets..."
+                : "Payment received. Ticket confirmation may take a moment."}
             </section>
           ) : checkoutResult === "cancel" ? (
             <section className="tailgate-details-checkout-banner">
@@ -4119,6 +4679,10 @@ export default function TailgateDetails() {
             <p className="tailgate-details-meta">
               <strong>Location:</strong> {locationLabel}
             </p>
+            <div className="tailgate-details-hero-host">
+              <span className="tailgate-details-hero-host-label">Hosted by</span>
+              <strong>{hostDisplayName}</strong>
+            </div>
             <div className="tailgate-details-hero-actions">
               {canOpenMaps ? (
                 <button className="primary-button" onClick={openMaps}>
@@ -4180,11 +4744,11 @@ export default function TailgateDetails() {
                   <>
                     <div className="tailgate-details-metric-card">
                       <p>Invited</p>
-                      <strong>{attendeeCounts.nonHost}</strong>
+                      <strong>{attendeeCounts.totalHeadcount}</strong>
                     </div>
                     <div className="tailgate-details-metric-card">
                       <p>Going</p>
-                      <strong>{attendeeCounts.going}</strong>
+                      <strong>{attendeeCounts.goingHeadcount}</strong>
                     </div>
                     <div className="tailgate-details-metric-card">
                       <p>Pending</p>
@@ -4390,6 +4954,11 @@ export default function TailgateDetails() {
                   <span>{detail.capacity ? `${detail.capacity} max guests` : "No capacity limit"}</span>
                 )}
               </div>
+              <div className="tailgate-details-info-card">
+                <p>Event Size</p>
+                <strong>{eventSizeTag}</strong>
+                <span>{eventSizeSummary}</span>
+              </div>
             </div>
             {showGuestRsvpSection ? (
               <div className="tailgate-details-rsvp-block">
@@ -4400,33 +4969,157 @@ export default function TailgateDetails() {
                   </span>
                 </div>
                 <p className="tailgate-details-ticket-copy">{rsvpStatusMeta.description}</p>
-                {user ? (
-                  <div className="tailgate-details-rsvp-options">
+                {user || canRespondToInviteViaLink ? (
+                  <>
+                    <div className="tailgate-details-rsvp-options">
+                      <button
+                        type="button"
+                        className={`tailgate-details-rsvp-option${
+                          rsvpDraftChoice === "Attending" ? " is-active is-going" : ""
+                        }`}
+                        onClick={() => setRsvpDraftChoice("Attending")}
+                        disabled={rsvpSaving}
+                      >
+                        Going
+                      </button>
+                      <button
+                        type="button"
+                        className={`tailgate-details-rsvp-option${
+                          rsvpDraftChoice === "Not Attending"
+                            ? " is-active is-not-going"
+                            : ""
+                        }`}
+                        onClick={() => setRsvpDraftChoice("Not Attending")}
+                        disabled={rsvpSaving}
+                      >
+                        Not Going
+                      </button>
+                    </div>
+                    {detail.allowGuestPlusOnInvite !== true ? (
+                      <p className="tailgate-details-ticket-copy app-note">
+                        This invite does not include guest +1 permissions.
+                      </p>
+                    ) : null}
+                    {plusGuestsEnabled ? (
+                      <div className="tailgate-details-plus-guests">
+                        <div className="tailgate-details-ticket-row">
+                          <p className="tailgate-details-ticket-title">Guests you&rsquo;re bringing</p>
+                          <span className="tailgate-details-plus-limit">Limit: {plusGuestLimit}</span>
+                        </div>
+                        <p className="tailgate-details-ticket-copy">
+                          Enter your total guests. Guests with contact info count first, and the
+                          rest stay anonymous.
+                        </p>
+                        <label className="input-label" htmlFor="rsvp-guest-count">
+                          Total guests you are bringing
+                        </label>
+                        <input
+                          id="rsvp-guest-count"
+                          className="tailgate-details-plus-input"
+                          inputMode="numeric"
+                          value={inviteGuestCount}
+                          onChange={(event) =>
+                            setInviteGuestCount(sanitizeGuestCountInput(event.target.value))
+                          }
+                          placeholder="0"
+                          disabled={rsvpSaving}
+                        />
+                        <div className="tailgate-details-plus-list">
+                          {invitePlusGuests.map((guest, index) => (
+                            <div className="tailgate-details-plus-card" key={guest.id}>
+                              <div className="tailgate-details-ticket-row">
+                                <p className="tailgate-details-ticket-title">Guest #{index + 1}</p>
+                                <button
+                                  type="button"
+                                  className="ghost-button"
+                                  onClick={() =>
+                                    setInvitePlusGuests((previous) =>
+                                      previous.filter((entry) => entry.id !== guest.id)
+                                    )
+                                  }
+                                  disabled={rsvpSaving}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                              <div className="tailgate-details-plus-grid">
+                                <label>
+                                  <span className="input-label">Name</span>
+                                  <input
+                                    className="tailgate-details-plus-input"
+                                    value={guest.name}
+                                    onChange={(event) =>
+                                      setInvitePlusGuests((previous) =>
+                                        previous.map((entry) =>
+                                          entry.id === guest.id
+                                            ? { ...entry, name: event.target.value }
+                                            : entry
+                                        )
+                                      )
+                                    }
+                                    placeholder="Name (optional)"
+                                    disabled={rsvpSaving}
+                                  />
+                                </label>
+                                <label>
+                                  <span className="input-label">Phone</span>
+                                  <input
+                                    className="tailgate-details-plus-input"
+                                    inputMode="tel"
+                                    value={guest.phone}
+                                    onChange={(event) =>
+                                      setInvitePlusGuests((previous) =>
+                                        previous.map((entry) =>
+                                          entry.id === guest.id
+                                            ? {
+                                                ...entry,
+                                                phone: formatPhoneInput(event.target.value)
+                                              }
+                                            : entry
+                                        )
+                                      )
+                                    }
+                                    placeholder="Phone (required to link)"
+                                    disabled={rsvpSaving}
+                                  />
+                                </label>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <button
+                          type="button"
+                          className="secondary-button tailgate-details-plus-add"
+                          onClick={() =>
+                            setInvitePlusGuests((previous) => [
+                              ...previous,
+                              {
+                                id: `${Date.now()}-${previous.length}`,
+                                attendeeId: undefined,
+                                name: "",
+                                phone: ""
+                              }
+                            ])
+                          }
+                          disabled={!canAddContactGuest || rsvpSaving}
+                        >
+                          Add guest contact
+                        </button>
+                      </div>
+                    ) : null}
                     <button
                       type="button"
-                      className={`tailgate-details-rsvp-option${
-                        userRsvpStatus === "Attending" ? " is-active is-going" : ""
-                      }`}
-                      onClick={() => confirmGuestRsvpUpdate("Attending")}
+                      className="primary-button tailgate-details-rsvp-save"
+                      onClick={() => void updateGuestRsvp(rsvpDraftChoice)}
                       disabled={rsvpSaving}
                     >
-                      {rsvpSaving && rsvpPendingChoice === "Attending" ? "Updating..." : "Going"}
+                      {rsvpSaving
+                        ? rsvpPendingChoice === "Not Attending"
+                          ? "Saving not going..."
+                          : "Saving RSVP..."
+                        : "Save RSVP"}
                     </button>
-                    <button
-                      type="button"
-                      className={`tailgate-details-rsvp-option${
-                        userRsvpStatus === "Not Attending"
-                          ? " is-active is-not-going"
-                          : ""
-                      }`}
-                      onClick={() => confirmGuestRsvpUpdate("Not Attending")}
-                      disabled={rsvpSaving}
-                    >
-                      {rsvpSaving && rsvpPendingChoice === "Not Attending"
-                        ? "Updating..."
-                        : "Not Going"}
-                    </button>
-                  </div>
+                  </>
                 ) : (
                   <button
                     type="button"
@@ -4434,7 +5127,91 @@ export default function TailgateDetails() {
                     onClick={() =>
                       navigate(
                         `/login?mode=login&redirect=${encodeURIComponent(
-                          `/tailgates/${encodeURIComponent(detail.id)}`
+                          `${location.pathname}${location.search}`
+                        )}`
+                      )
+                    }
+                  >
+                    Sign in to RSVP
+                  </button>
+                )}
+                {rsvpError ? <p className="tailgate-details-ticket-error">{rsvpError}</p> : null}
+                {rsvpSuccess ? (
+                  <p className="tailgate-details-inline-editor-success">{rsvpSuccess}</p>
+                ) : null}
+              </div>
+            ) : null}
+            {showOpenFreeRsvpSection ? (
+              <div className="tailgate-details-rsvp-block">
+                <div className="tailgate-details-ticket-row">
+                  <p className="tailgate-details-ticket-title">Join this tailgate</p>
+                  <span
+                    className={`tailgate-details-rsvp-status ${
+                      isOpenFreeUserGoing
+                        ? "tailgate-details-rsvp-status-going"
+                        : "tailgate-details-rsvp-status-pending"
+                    }`}
+                  >
+                    {isOpenFreeUserGoing ? "You're in" : "Open RSVP"}
+                  </span>
+                </div>
+                <p className="tailgate-details-ticket-copy">
+                  Let the host know how many are coming with your group.
+                </p>
+                {user ? (
+                  <>
+                    <div className="tailgate-details-open-free-qty">
+                      <p className="input-label">How many are coming?</p>
+                      <div className="tailgate-details-open-free-qty-row">
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => adjustOpenFreePartySize(-1)}
+                          disabled={openFreePartySize <= 1 || rsvpSaving}
+                        >
+                          -
+                        </button>
+                        <input
+                          className="text-input tailgate-details-open-free-input"
+                          inputMode="numeric"
+                          value={String(openFreePartySize)}
+                          onChange={(event) => handleOpenFreePartySizeChange(event.target.value)}
+                          disabled={rsvpSaving}
+                        />
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => adjustOpenFreePartySize(1)}
+                          disabled={
+                            openFreePartySize >= MAX_OPEN_FREE_PARTY_SIZE || rsvpSaving
+                          }
+                        >
+                          +
+                        </button>
+                      </div>
+                      <p className="tailgate-details-ticket-total">{openFreeBringLabel}</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="primary-button tailgate-details-rsvp-save"
+                      onClick={() => void saveOpenFreeRsvp()}
+                      disabled={rsvpSaving}
+                    >
+                      {rsvpSaving
+                        ? "Saving..."
+                        : isOpenFreeUserGoing
+                        ? "Update my count"
+                        : "I'm coming"}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() =>
+                      navigate(
+                        `/login?mode=login&redirect=${encodeURIComponent(
+                          `${location.pathname}${location.search}`
                         )}`
                       )
                     }
@@ -5105,14 +5882,10 @@ export default function TailgateDetails() {
             <div className="section-header">
               <div>
                 <h2>Meet-up Spot</h2>
-                <p className="section-subtitle">
-                  {droppedPinLabel ??
-                    displayLocationLabel ??
-                    (locationCoords ? "Pin dropped in map" : "Location coming soon.")}
-                </p>
+                <p className="section-subtitle">{meetUpSubtitle}</p>
               </div>
             </div>
-            {locationCoords ? (
+            {mapCoords ? (
               <p className="tailgate-details-map-note">
                 {hasExactPin
                   ? "Exact in-lot pin shared by host."
@@ -5225,8 +5998,8 @@ export default function TailgateDetails() {
               ) : null}
               <div className="tailgate-details-filter-row">
                 {([
-                  { key: "All", label: `All (${attendeeCounts.nonHost})` },
-                  { key: "Going", label: `Going (${attendeeCounts.going})` },
+                  { key: "All", label: `All (${attendeeCounts.totalHeadcount})` },
+                  { key: "Going", label: `Going (${attendeeCounts.goingHeadcount})` },
                   { key: "Pending", label: `Pending (${attendeeCounts.pending})` },
                   { key: "Not Going", label: `Not Going (${attendeeCounts.notGoing})` }
                 ] as Array<{ key: AttendeeFilterKey; label: string }>).map((filter) => (
@@ -5245,7 +6018,14 @@ export default function TailgateDetails() {
                 {filteredAttendees.length > 0 ? (
                   filteredAttendees.map((attendee) => {
                     const meta = attendeeStatusMeta[attendee.status];
-                    const attendeeContact = [attendee.email, attendee.phone]
+                    const anonymousPlusCount = resolveAnonymousPlusGuests(attendee);
+                    const attendeeMeta = [
+                      attendee.email,
+                      attendee.phone,
+                      anonymousPlusCount > 0
+                        ? `+${anonymousPlusCount} guest${anonymousPlusCount === 1 ? "" : "s"}`
+                        : null
+                    ]
                       .map((value) => value?.trim())
                       .filter((value): value is string => Boolean(value))
                       .join(" · ");
@@ -5253,8 +6033,8 @@ export default function TailgateDetails() {
                       <div className="tailgate-details-attendee-row" key={attendee.id}>
                         <div>
                           <p className="tailgate-details-attendee-name">{attendee.name}</p>
-                          {attendeeContact ? (
-                            <p className="tailgate-details-attendee-meta">{attendeeContact}</p>
+                          {attendeeMeta ? (
+                            <p className="tailgate-details-attendee-meta">{attendeeMeta}</p>
                           ) : null}
                         </div>
                         <span className={`chip ${meta.className}`}>{meta.label}</span>
@@ -5277,6 +6057,19 @@ export default function TailgateDetails() {
         {guestRefundModal}
         {cancelTailgateModal}
       </main>
+    );
+  }
+
+  if (!user) {
+    return (
+      <>
+        <PublicTopNav />
+        <main className="tailgate-details-public-shell">
+          {pageContent}
+          {guestRefundModal}
+          {cancelTailgateModal}
+        </main>
+      </>
     );
   }
 

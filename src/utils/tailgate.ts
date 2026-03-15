@@ -1,4 +1,5 @@
 import { TailgateEvent, TailgateStatus, VisibilityType } from "../types";
+import { formatCurrencyFromCents } from "./format";
 
 export function getVisibilityLabel(type: VisibilityType) {
   switch (type) {
@@ -29,6 +30,33 @@ export function getEventStatus(event: TailgateEvent, now = new Date()): Tailgate
   }
 
   return "upcoming";
+}
+
+export function getTailgateCrowdTag(count: number): string {
+  const safeCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+
+  if (safeCount <= 4) {
+    return "Small • Tight Crew";
+  }
+  if (safeCount <= 19) {
+    return "Medium • Lot Buzz";
+  }
+  if (safeCount <= 49) {
+    return "Large • Full Tailgate";
+  }
+  return "XL • Packed House";
+}
+
+export function buildEventSizeSummary(input: {
+  visibilityType: VisibilityType;
+  confirmedCount: number;
+  ticketPriceCents?: number | null;
+}) {
+  const summary = `Event size: ${getTailgateCrowdTag(input.confirmedCount)}`;
+  if (input.visibilityType !== "open_paid" || typeof input.ticketPriceCents !== "number") {
+    return summary;
+  }
+  return `${summary} · ${formatCurrencyFromCents(input.ticketPriceCents)} per person`;
 }
 
 export function estimateHostPayout({

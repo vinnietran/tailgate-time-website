@@ -7,12 +7,14 @@ import CreateTailgateWizard from "./pages/CreateTailgateWizard";
 import AccountPayouts from "./pages/AccountPayouts";
 import AccountPayoutHistory from "./pages/AccountPayoutHistory";
 import AccountRefundRequests from "./pages/AccountRefundRequests";
+import ChangePassword from "./pages/ChangePassword";
 import Login from "./pages/Login";
 import TailgateDetails from "./pages/TailgateDetails";
 import TailgateEdit from "./pages/TailgateEdit";
 import TailgateCheckin from "./pages/TailgateCheckin";
 import CheckinHub from "./pages/CheckinHub";
 import Messages from "./pages/Messages";
+import NotificationPreferences from "./pages/NotificationPreferences";
 import DiscoverTailgates from "./pages/DiscoverTailgates";
 import Home from "./pages/Home";
 import EventFeed from "./pages/EventFeed";
@@ -64,6 +66,22 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <AccountRefundRequests />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/account/notifications"
+            element={
+              <ProtectedRoute>
+                <NotificationPreferences />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/account/change-password"
+            element={
+              <ProtectedRoute>
+                <ChangePassword />
               </ProtectedRoute>
             }
           />

@@ -29,7 +29,7 @@ export function PublicTopNav() {
           </Link>
           <a href="/contact.html">Contact</a>
           <a
-            href="https://www.instagram.com/tailgatetime/"
+            href="https://www.instagram.com/tailgatetime25/"
             target="_blank"
             rel="noopener noreferrer"
             className="public-nav-social-link"
@@ -39,7 +39,7 @@ export function PublicTopNav() {
             <IconInstagram size={16} />
           </a>
           <a
-            href="https://www.facebook.com/tailgatetime/"
+            href="https://www.facebook.com/profile.php?id=61577940414994"
             target="_blank"
             rel="noopener noreferrer"
             className="public-nav-social-link"

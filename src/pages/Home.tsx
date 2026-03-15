@@ -5,17 +5,13 @@ import {
   IconCompass,
   IconMessage,
   IconPayout,
-  IconSpark
+  IconSpark,
+  IconUser
 } from "../components/Icons";
 import { PublicTopNav } from "../components/PublicTopNav";
 import SiteFooter from "../components/SiteFooter";
 import { useAuth } from "../hooks/useAuth";
 import appStoreBadge from "../../screenshots/app-store-badge.svg";
-import createContactsShot from "../../screenshots/create_wizard_contacts.png";
-import createDetailsShot from "../../screenshots/create_wizard_details.png";
-import createLocationShot from "../../screenshots/create_wizard_location.png";
-import createQuizShot from "../../screenshots/create_wizard_quiz.png";
-import createReviewShot from "../../screenshots/create_wizard_review.png";
 import playStoreBadge from "../../screenshots/google-play-badge.png";
 
 const IOS_DOWNLOAD_URL =
@@ -41,46 +37,42 @@ const hostFeatures = [
   }
 ];
 
-const gameDaySteps = [
+const eventModes = [
   {
-    title: "1. Create Event",
-    description: "Set date, lot, and timing in seconds."
+    title: "Personal invites",
+    description:
+      "Create a private tailgate, send invites directly to friends and family, and keep the guest list under your control.",
+    badge: "Invite-only",
+    icon: <IconUser size={18} />
   },
   {
-    title: "2. Invite & Track",
-    description: "Send invites and watch RSVPs update in real time."
+    title: "Open free events",
+    description:
+      "Publish a public tailgate anyone can discover, join, and follow before kickoff without charging admission.",
+    badge: "Public + Free",
+    icon: <IconCompass size={18} />
   },
   {
-    title: "3. Game On",
-    description: "Use live feed, check-in, and updates during the event."
+    title: "Open paid events",
+    description:
+      "List a public paid event, sell spots through the app, and manage attendance and payouts in one place.",
+    badge: "Public + Paid",
+    icon: <IconPayout size={18} />
   }
 ];
 
-const appShots = [
+const gameDaySteps = [
   {
-    src: createDetailsShot,
-    alt: "Create event details screen",
-    caption: "Enter Tailgate Details"
+    title: "1. Choose your event type",
+    description: "Decide whether it is a personal invite, an open free tailgate, or an open paid event."
   },
   {
-    src: createLocationShot,
-    alt: "Select location screen",
-    caption: "Add Your Tailgate Location"
+    title: "2. Share or publish it",
+    description: "Send direct invites to your group or publish your event so fans can discover it."
   },
   {
-    src: createContactsShot,
-    alt: "Add contacts screen",
-    caption: "Add Your Guests"
-  },
-  {
-    src: createQuizShot,
-    alt: "Quiz setup screen",
-    caption: "Customize Your Quiz"
-  },
-  {
-    src: createReviewShot,
-    alt: "Review event screen",
-    caption: "Review & Create Event"
+    title: "3. Run game day",
+    description: "Track RSVPs, check in guests, message attendees, and manage paid access when needed."
   }
 ];
 
@@ -128,11 +120,18 @@ export default function Home() {
         <div className="homepage-hero">
           <div className="homepage-hero-copy">
             <p className="homepage-kicker">True Home Base</p>
-            <h1>Everything TailgateTime, from one homepage.</h1>
+            <h1>Host private invites, open free tailgates, or paid public events in one app.</h1>
             <p>
-              Download the app, explore your host tools, and jump into live game-day operations
-              without hunting through separate pages.
+              TailgateTime helps you organize personal guest lists, publish discoverable free
+              events, and run paid tailgates with check-in, messaging, and payouts built in.
             </p>
+            <div className="homepage-hero-tags" aria-label="TailgateTime event types">
+              {eventModes.map((mode) => (
+                <span key={mode.title} className="homepage-hero-tag">
+                  {mode.badge}
+                </span>
+              ))}
+            </div>
             <div className="homepage-cta-row">
               <a href={IOS_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer">
                 <img src={appStoreBadge} alt="Download on the App Store" />
@@ -141,34 +140,29 @@ export default function Home() {
                 <img src={playStoreBadge} alt="Get it on Google Play" />
               </a>
             </div>
-            <div className="homepage-quick-links">
-              <Link to="/discover">
-                <IconCompass size={16} />
-                <span>Discover Tailgates</span>
-              </Link>
-              <Link to="/tailgates/new">
-                <IconSpark size={16} />
-                <span>Create Tailgate</span>
-              </Link>
-            </div>
           </div>
+        </div>
+      </section>
 
-          <div className="homepage-hero-visual">
-            <article className="homepage-shot-card primary">
-              <img src={createLocationShot} alt="Tailgate location setup preview" />
-              <p>Lock in location and preview the map before game day.</p>
+      <section className="homepage-modes-shell">
+        <div className="homepage-section-header">
+          <h2>Built for every kind of tailgate you want to host</h2>
+          <p>
+            Use the same app whether you are inviting your own crew or opening the lot up to more
+            fans.
+          </p>
+        </div>
+        <div className="homepage-modes-grid">
+          {eventModes.map((mode) => (
+            <article key={mode.title} className="homepage-mode-card">
+              <div className="homepage-mode-topline">
+                <span className="homepage-feature-icon">{mode.icon}</span>
+                <span className="homepage-mode-badge">{mode.badge}</span>
+              </div>
+              <h3>{mode.title}</h3>
+              <p>{mode.description}</p>
             </article>
-            <div className="homepage-shot-stack">
-              <article className="homepage-shot-card">
-                <img src={createDetailsShot} alt="Tailgate details setup preview" />
-                <p>Build event details with the host wizard.</p>
-              </article>
-              <article className="homepage-shot-card">
-                <img src={createReviewShot} alt="Tailgate review setup preview" />
-                <p>Review your flow before publishing.</p>
-              </article>
-            </div>
-          </div>
+          ))}
         </div>
       </section>
 
@@ -176,10 +170,10 @@ export default function Home() {
         <div className="homepage-discover-card">
           <div className="homepage-discover-copy">
             <p className="homepage-kicker">Discover Tailgates</p>
-            <h2>Find the loudest lots before game day starts.</h2>
+            <h2>Join open tailgates before game day starts.</h2>
             <p>
-              Explore discoverable tailgates, compare options quickly, and lock in your plans with
-              one tap.
+              Browse public events, compare free and paid options, and lock in your plans with one
+              tap.
             </p>
             <div className="homepage-discover-actions">
               <Link to="/discover" className="primary-button">
@@ -207,7 +201,7 @@ export default function Home() {
       <section className="homepage-journey-shell">
         <div className="homepage-section-header">
           <h2>How TailgateTime Works</h2>
-          <p>Set up your event quickly, then run game day without the group-chat chaos.</p>
+          <p>Pick the right event format first, then run the whole day from the same place.</p>
         </div>
         <div className="homepage-journey-grid">
           {gameDaySteps.map((step) => (
@@ -219,25 +213,10 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="homepage-screens-shell">
-        <div className="homepage-section-header">
-          <h2>App Screenshots</h2>
-          <p>A quick look at the flow hosts use from setup to game day.</p>
-        </div>
-        <div className="homepage-screens-grid">
-          {appShots.map((shot) => (
-            <figure key={shot.caption} className="homepage-screen-card">
-              <img src={shot.src} alt={shot.alt} />
-              <figcaption>{shot.caption}</figcaption>
-            </figure>
-          ))}
-        </div>
-      </section>
-
       <section className="homepage-feature-shell">
         <div className="homepage-feature-header">
           <h2>Host tools that actually move fast</h2>
-          <p>Built for pre-game pressure, not generic event pages.</p>
+          <p>Built for invite-only hangouts, open community tailgates, and paid entry events.</p>
         </div>
         <div className="homepage-feature-grid">
           {hostFeatures.map((feature) => (
@@ -270,8 +249,8 @@ export default function Home() {
             <p className="homepage-kicker">Start Hosting</p>
             <h2>Create your host account and launch your next tailgate.</h2>
             <p>
-              Sign up to publish events, manage guest check-in, and handle payouts from one
-              dashboard.
+              Sign up to send personal invites, publish open free events, or run paid tailgates
+              from one dashboard.
             </p>
             <div className="homepage-signup-actions">
               <Link to="/login?mode=signup" className="public-auth-btn signup">

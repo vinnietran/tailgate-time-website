@@ -12,6 +12,7 @@ import { usePlacesAutocomplete } from "../hooks/usePlacesAutocomplete";
 import { db, storage as firebaseStorage } from "../lib/firebase";
 import { loadGoogleMapsSdk } from "../lib/googleMapsSdk";
 import { formatCurrencyFromCents } from "../utils/format";
+import { buildEventSizeSummary } from "../utils/tailgate";
 
 type ViewMode = "list" | "map";
 type MapPanelMode = "results" | "details";
@@ -33,6 +34,8 @@ type DiscoverTailgateRecord = {
   priceCents?: number;
   ticketSalesCloseAt?: Date | null;
   currency: string;
+  confirmedAttendanceCount: number;
+  eventSizeSummary: string;
 };
 
 type DiscoverTailgate = DiscoverTailgateRecord & {
@@ -90,6 +93,55 @@ function coerceNumber(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+function countAnonymousPlusGuests(
+  attendee: Record<string, unknown> | null
+): number {
+  if (!attendee) return 0;
+
+  const candidates = [
+    attendee.plusGuestsAnonymousCount,
+    attendee.additionalGuestCount,
+    attendee.plusGuestsNoContactCount,
+    attendee.anonymousGuestCount
+  ];
+
+  for (const value of candidates) {
+    const numeric = coerceNumber(value);
+    if (typeof numeric === "number") {
+      return Math.max(0, Math.floor(numeric));
+    }
+  }
+
+  return 0;
+}
+
+function normalizeDiscoverAttendeeStatus(value: unknown) {
+  const normalized = (firstString(value) ?? "").trim().toLowerCase();
+
+  if (
+    normalized === "attending" ||
+    normalized === "going" ||
+    normalized === "accepted" ||
+    normalized === "confirmed"
+  ) {
+    return "Attending";
+  }
+
+  if (
+    normalized === "not attending" ||
+    normalized === "declined" ||
+    normalized === "not going"
+  ) {
+    return "Not Attending";
+  }
+
+  if (normalized === "host") {
+    return "Host";
+  }
+
+  return "Pending";
 }
 
 function normalizeDate(value: unknown): Date | null {
@@ -300,6 +352,82 @@ function resolveTicketSalesCloseAt(
   return new Date(startDateTime.getTime() - Math.max(0, daysBefore) * DAY_IN_MS);
 }
 
+function countConfirmedDiscoverAttendees(
+  data: Record<string, unknown>,
+  hostId: string
+) {
+  const attendees = Array.isArray(data.attendees) ? data.attendees : [];
+  const seen = new Set<string>();
+
+  return attendees.reduce((sum, entry, index) => {
+    const attendee = asRecord(entry);
+    if (!attendee) return sum;
+
+    const attendeeId =
+      firstString(attendee.id, attendee.token) ??
+      `${firstString(attendee.userId, attendee.uid) ?? "guest"}-${index}`;
+    if (seen.has(attendeeId)) {
+      return sum;
+    }
+    seen.add(attendeeId);
+
+    const isAdditionalGuestInvite = attendee.isAdditionalGuestInvite === true;
+    const userId = firstString(attendee.userId, attendee.uid, attendee.id);
+    const hasContactInfo =
+      (firstString(attendee.displayName, attendee.name, attendee.phone, attendee.email)?.length ??
+        0) > 0;
+
+    let status = normalizeDiscoverAttendeeStatus(attendee.status);
+    if (isAdditionalGuestInvite && hasContactInfo && status !== "Not Attending") {
+      status = "Attending";
+    }
+    if (userId && userId === hostId && !isAdditionalGuestInvite) {
+      status = "Host";
+    }
+    if (status !== "Attending") {
+      return sum;
+    }
+
+    return sum + 1 + countAnonymousPlusGuests(attendee);
+  }, 0);
+}
+
+function resolveConfirmedAttendanceCount(
+  data: Record<string, unknown>,
+  visibilityType: "open_free" | "open_paid"
+) {
+  if (visibilityType === "open_paid") {
+    return Math.max(
+      0,
+      Math.floor(
+        coerceNumber(data.confirmedPaidCount) ??
+          coerceNumber(data.ticketsSold) ??
+          coerceNumber(data.rsvpsConfirmed) ??
+          0
+      )
+    );
+  }
+
+  const attendeeHeadcount = countConfirmedDiscoverAttendees(
+    data,
+    firstString(data.hostId, data.hostUserId, data.ownerId) ?? ""
+  );
+  if (attendeeHeadcount > 0) {
+    return attendeeHeadcount;
+  }
+
+  return Math.max(
+    0,
+    Math.floor(
+      coerceNumber(data.rsvpsConfirmed) ??
+        coerceNumber(data.confirmedCount) ??
+        coerceNumber(data.rsvpConfirmedCount) ??
+        coerceNumber(data.attendeeCount) ??
+        0
+    )
+  );
+}
+
 function toDiscoverTailgateRecord(
   id: string,
   data: Record<string, unknown>
@@ -321,6 +449,7 @@ function toDiscoverTailgateRecord(
     coerceNumber(data.priceCents) ??
     coerceNumber(data.ticketPrice);
   const ticketSalesCloseAt = resolveTicketSalesCloseAt(data, startDateTime);
+  const confirmedAttendanceCount = resolveConfirmedAttendanceCount(data, visibilityType);
 
   return {
     id,
@@ -333,7 +462,13 @@ function toDiscoverTailgateRecord(
     coords: resolveLocationCoords(data.location, data.locationCoords),
     priceCents,
     ticketSalesCloseAt,
-    currency: firstString(data.currency, data.ticketCurrency) ?? "USD"
+    currency: firstString(data.currency, data.ticketCurrency) ?? "USD",
+    confirmedAttendanceCount,
+    eventSizeSummary: buildEventSizeSummary({
+      visibilityType,
+      confirmedCount: confirmedAttendanceCount,
+      ticketPriceCents: priceCents
+    })
   };
 }
 
@@ -351,17 +486,29 @@ function fromMockTailgates(): DiscoverTailgateRecord[] {
       }
       return item.startDateTime.getTime() >= nowTime;
     })
-    .map((item, index) => ({
-      id: item.id,
-      eventName: item.name,
-      startDateTime: item.startDateTime,
-      visibilityType: item.visibilityType,
-      coverImageUrl: item.coverImageUrl ?? DEFAULT_TAILGATE_COVER_IMAGE,
-      locationSummary: item.locationSummary,
-      coords: MOCK_COORDS[index % MOCK_COORDS.length],
-      priceCents: item.ticketPriceCents,
-      currency: "USD"
-    }));
+    .map((item, index) => {
+      const confirmedAttendanceCount =
+        item.visibilityType === "open_paid"
+          ? item.ticketsSold ?? item.rsvpsConfirmed ?? 0
+          : item.rsvpsConfirmed ?? 0;
+      return {
+        id: item.id,
+        eventName: item.name,
+        startDateTime: item.startDateTime,
+        visibilityType: item.visibilityType,
+        coverImageUrl: item.coverImageUrl ?? DEFAULT_TAILGATE_COVER_IMAGE,
+        locationSummary: item.locationSummary,
+        coords: MOCK_COORDS[index % MOCK_COORDS.length],
+        priceCents: item.ticketPriceCents,
+        currency: "USD",
+        confirmedAttendanceCount,
+        eventSizeSummary: buildEventSizeSummary({
+          visibilityType: item.visibilityType,
+          confirmedCount: confirmedAttendanceCount,
+          ticketPriceCents: item.ticketPriceCents
+        })
+      };
+    });
 }
 
 function toRadians(value: number) {
@@ -900,18 +1047,23 @@ export default function DiscoverTailgates() {
         return true;
       })
       .map((item) => {
-      const distanceMiles = center && item.coords ? haversineMiles(center, item.coords) : undefined;
+        const distanceMiles =
+          center && item.coords ? haversineMiles(center, item.coords) : undefined;
 
-      return {
-        ...item,
-        distanceMiles,
-        distanceLabel: typeof distanceMiles === "number" ? formatDistance(distanceMiles) : undefined
-      };
-    });
+        return {
+          ...item,
+          distanceMiles,
+          distanceLabel:
+            typeof distanceMiles === "number" ? formatDistance(distanceMiles) : undefined
+        };
+      });
 
     const filtered = center
       ? enriched.filter(
-          (item) => typeof item.distanceMiles !== "number" || item.distanceMiles <= DEFAULT_RADIUS_MILES
+          (item) =>
+            Boolean(item.coords) &&
+            typeof item.distanceMiles === "number" &&
+            item.distanceMiles <= DEFAULT_RADIUS_MILES
         )
       : enriched;
 
@@ -1537,6 +1689,7 @@ export default function DiscoverTailgates() {
                   <div className="discover-card-body">
                     <div className="discover-card-copy">
                       <p>{item.locationSummary ?? "Location coming soon"}</p>
+                      <p className="discover-card-size">{item.eventSizeSummary}</p>
                       {cutoffLabel ? <p className="discover-cutoff-pill">{cutoffLabel}</p> : null}
                     </div>
                     <div className="discover-card-meta">
@@ -1547,6 +1700,9 @@ export default function DiscoverTailgates() {
                             : "Paid"
                           : "Free"}
                       </strong>
+                      <span>
+                        {item.confirmedAttendanceCount} confirmed
+                      </span>
                       {item.distanceLabel ? <span>{item.distanceLabel} away</span> : null}
                     </div>
                   </div>

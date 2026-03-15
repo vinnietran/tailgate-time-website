@@ -1,10 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 import {
-  GoogleAuthProvider,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  signInWithPopup,
   updateProfile,
   type User
 } from "firebase/auth";
@@ -292,53 +290,6 @@ export default function Login() {
     }
   };
 
-  const handleGoogleAuth = async () => {
-    setError(null);
-
-    if (!auth) {
-      setError("Firebase config missing. Add env variables to enable login.");
-      return;
-    }
-
-    if (isCreating && !acceptedTerms) {
-      setFieldErrors((prev) => ({
-        ...prev,
-        terms: "You must accept the terms to create an account."
-      }));
-      setError("Accept the terms before creating your account.");
-      return;
-    }
-    if (isCreating && !isValidPhone(phone)) {
-      setFieldErrors((prev) => ({
-        ...prev,
-        phone: "Enter a valid phone number."
-      }));
-      setError("Add a valid phone number to continue.");
-      return;
-    }
-
-    try {
-      setLoading(true);
-      debugAuthLog("login:google");
-      const provider = new GoogleAuthProvider();
-      const credentials = await signInWithPopup(auth, provider);
-      const displayName = credentials.user.displayName?.trim() ?? "";
-      const [derivedFirstName = "", ...rest] = displayName.split(/\s+/).filter(Boolean);
-      const derivedLastName = rest.join(" ");
-      await upsertUserProfile({
-        user: credentials.user,
-        firstName: derivedFirstName || undefined,
-        lastName: derivedLastName || undefined,
-        displayName,
-        phone: isCreating ? phone.trim() : undefined
-      });
-    } catch (err) {
-      setError(normalizeAuthError(err, isCreating));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <div className="public-page">
       <PublicTopNav />
@@ -396,7 +347,7 @@ export default function Login() {
                       setFirstName(event.target.value);
                       clearFieldError("firstName");
                     }}
-                    placeholder="Vincenzo"
+                    placeholder="First Name"
                     disabled={!auth || loading}
                   />
                   {fieldErrors.firstName ? <p className="input-error">{fieldErrors.firstName}</p> : null}
@@ -412,7 +363,7 @@ export default function Login() {
                       setLastName(event.target.value);
                       clearFieldError("lastName");
                     }}
-                    placeholder="Tranquillo"
+                    placeholder="Last Name"
                     disabled={!auth || loading}
                   />
                   {fieldErrors.lastName ? <p className="input-error">{fieldErrors.lastName}</p> : null}
@@ -552,18 +503,6 @@ export default function Login() {
             </button>
           </form>
 
-          <div className="login-divider">
-            <span>or</span>
-          </div>
-
-          <button
-            className="secondary-button"
-            onClick={handleGoogleAuth}
-            disabled={loading || !auth}
-          >
-            {isCreating ? "Sign up with Google" : "Continue with Google"}
-          </button>
-
           <button
             className="ghost-button"
             type="button"
@@ -571,12 +510,6 @@ export default function Login() {
           >
             {isCreating ? "Already have an account? Sign in" : "New here? Create account"}
           </button>
-
-          <p className="login-note">
-            {redirectPath !== "/dashboard"
-              ? "After sign-in, you will be returned to the page you were on."
-              : "Need SSO or magic link? We can add that next."}
-          </p>
         </div>
       </div>
       <SiteFooter />

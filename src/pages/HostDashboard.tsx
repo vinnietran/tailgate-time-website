@@ -36,15 +36,33 @@ export default function HostDashboard() {
   const displayName = profile?.displayName ?? user?.displayName;
   const email = profile?.email ?? user?.email;
   const firstName = getFirstName(displayName ?? email);
-  const { upcomingTailgates, pastTailgates, counts, loading, error } =
-    useDashboardTailgates(user?.uid);
+  const { upcomingTailgates, pastTailgates, loading, error } = useDashboardTailgates(user?.uid);
 
   const [timeframeFilter, setTimeframeFilter] = useState<TimeframeFilter>("upcoming");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
   const [spotlightIndex, setSpotlightIndex] = useState(0);
+  const timeframeTailgates = useMemo(
+    () => (timeframeFilter === "upcoming" ? upcomingTailgates : pastTailgates),
+    [pastTailgates, timeframeFilter, upcomingTailgates]
+  );
+
+  const quickFilterCounts = useMemo(
+    () => ({
+      hosting: timeframeTailgates.filter((tailgate) => tailgate.relationship === "hosting").length,
+      attending: timeframeTailgates.filter((tailgate) => tailgate.relationship === "attending")
+        .length,
+      paidOut: timeframeTailgates.filter(
+        (tailgate) =>
+          tailgate.relationship === "hosting" &&
+          tailgate.visibilityType === "open_paid" &&
+          tailgate.payoutStatus === "sent"
+      ).length
+    }),
+    [timeframeTailgates]
+  );
 
   const activeTailgates = useMemo(() => {
-    const base = timeframeFilter === "upcoming" ? upcomingTailgates : pastTailgates;
+    const base = timeframeTailgates;
 
     if (quickFilter === "hosting") {
       return base.filter((tailgate) => tailgate.relationship === "hosting");
@@ -61,7 +79,7 @@ export default function HostDashboard() {
       );
     }
     return base;
-  }, [pastTailgates, quickFilter, timeframeFilter, upcomingTailgates]);
+  }, [quickFilter, timeframeTailgates]);
 
   const toggleQuickFilter = (nextFilter: Exclude<QuickFilter, "all">) => {
     setQuickFilter((current) => (current === nextFilter ? "all" : nextFilter));
@@ -324,7 +342,7 @@ export default function HostDashboard() {
                 aria-pressed={quickFilter === "hosting"}
                 onClick={() => toggleQuickFilter("hosting")}
               >
-                {counts.hosting} Hosting
+                {quickFilterCounts.hosting} Hosting
               </button>
               <button
                 type="button"
@@ -332,7 +350,7 @@ export default function HostDashboard() {
                 aria-pressed={quickFilter === "paidOut"}
                 onClick={() => toggleQuickFilter("paidOut")}
               >
-                {counts.paidOut} Paid Out
+                {quickFilterCounts.paidOut} Paid Out
               </button>
               <button
                 type="button"
@@ -340,7 +358,7 @@ export default function HostDashboard() {
                 aria-pressed={quickFilter === "attending"}
                 onClick={() => toggleQuickFilter("attending")}
               >
-                {counts.attending} Attending
+                {quickFilterCounts.attending} Attending
               </button>
             </div>
           </div>

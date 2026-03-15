@@ -12,8 +12,13 @@ import {
   IconUser
 } from "../components/Icons";
 import { useAuth } from "../hooks/useAuth";
+import { useDialog } from "../hooks/useDialog";
 import { useUserProfile } from "../hooks/useUserProfile";
 import { auth, db, functions as firebaseFunctions, storage } from "../lib/firebase";
+import {
+  DeleteAccountReauthRequiredError,
+  deleteCurrentAccount
+} from "../services/account";
 import { formatCurrencyFromCents } from "../utils/format";
 
 type StripeConnectStatus = "not_started" | "pending" | "complete" | "restricted";
@@ -72,6 +77,7 @@ function statusLabel(status: StripeConnectStatus) {
 
 export default function AccountPayouts() {
   const navigate = useNavigate();
+  const dialog = useDialog();
   const { user } = useAuth();
   const { profile } = useUserProfile(user?.uid);
   const displayName = profile?.displayName ?? user?.displayName ?? null;
@@ -98,7 +104,15 @@ export default function AccountPayouts() {
   );
   const [payoutSummaryLoading, setPayoutSummaryLoading] = useState(false);
   const [payoutSummaryError, setPayoutSummaryError] = useState<string | null>(null);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const usesPasswordProvider = user?.providerData.some(
+    (provider) => provider.providerId === "password"
+  );
 
   useEffect(() => {
     setProfileDisplayName(displayName ?? "");
@@ -255,23 +269,16 @@ export default function AccountPayouts() {
     {
       key: "notification-settings",
       label: "Notification Preferences",
-      helper: "Coming soon on web",
+      helper: "Manage alerts",
       icon: <IconBell size={18} />,
-      disabled: true
+      onClick: () => navigate("/account/notifications")
     },
     {
       key: "change-password",
       label: "Change Password",
-      helper: "Coming soon on web",
+      helper: "Update your sign-in",
       icon: <IconUser size={18} />,
-      disabled: true
-    },
-    {
-      key: "my-tickets",
-      label: "My Tickets",
-      helper: "Coming soon on web",
-      icon: <IconUser size={18} />,
-      disabled: true
+      onClick: () => navigate("/account/change-password")
     },
     {
       key: "logout",
@@ -284,12 +291,101 @@ export default function AccountPayouts() {
     {
       key: "delete-account",
       label: "Delete Account",
-      helper: "App-only for now",
+      helper: "Permanently remove your account",
       icon: <IconUser size={18} />,
       danger: true,
-      disabled: true
+      onClick: () => void handleDeleteAccountStart()
     }
   ];
+
+  const handleDeleteAccountStart = async () => {
+    const confirmed = await dialog.confirm({
+      title: "Delete account?",
+      message:
+        "This permanently removes your TailgateTime account from the web dashboard. You'll confirm once more in the next step.",
+      confirmLabel: "Continue",
+      cancelLabel: "Keep account",
+      tone: "danger"
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeleteConfirmText("");
+    setDeletePassword("");
+    setDeleteError(null);
+    setDeleteModalOpen(true);
+  };
+
+  const closeDeleteModal = () => {
+    if (deleteLoading) {
+      return;
+    }
+    setDeleteModalOpen(false);
+    setDeleteConfirmText("");
+    setDeletePassword("");
+    setDeleteError(null);
+  };
+
+  const handleDeleteAccountSubmit = async () => {
+    if (!user) {
+      setDeleteError("Sign in again before deleting your account.");
+      return;
+    }
+
+    if (deleteConfirmText.trim().toUpperCase() !== "DELETE") {
+      setDeleteError('Type "DELETE" to continue.');
+      return;
+    }
+
+    if (usesPasswordProvider && !deletePassword.trim()) {
+      setDeleteError("Enter your current password to delete this account.");
+      return;
+    }
+
+    setDeleteLoading(true);
+    setDeleteError(null);
+
+    try {
+      await deleteCurrentAccount({
+        password: usesPasswordProvider ? deletePassword : undefined
+      });
+      setDeleteModalOpen(false);
+      navigate("/", { replace: true });
+    } catch (deleteFailure) {
+      console.error("Failed to delete account", deleteFailure);
+      const code =
+        typeof deleteFailure === "object" && deleteFailure && "code" in deleteFailure
+          ? String((deleteFailure as { code?: unknown }).code)
+          : "";
+
+      if (
+        deleteFailure instanceof DeleteAccountReauthRequiredError ||
+        code === "auth/requires-recent-login"
+      ) {
+        setDeleteError(
+          usesPasswordProvider
+            ? "Enter your current password to confirm this delete."
+            : "Sign in again with your provider, then retry the delete."
+        );
+      } else if (
+        code === "auth/wrong-password" ||
+        code === "auth/invalid-credential" ||
+        code === "auth/invalid-login-credentials"
+      ) {
+        setDeleteError("Your current password is incorrect.");
+      } else if (code === "auth/popup-closed-by-user") {
+        setDeleteError("Reauthentication was canceled before the delete finished.");
+      } else if (code === "auth/popup-blocked") {
+        setDeleteError("Allow the sign-in popup to finish deleting your account.");
+      } else {
+        setDeleteError("Unable to delete your account right now. Please try again.");
+      }
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
 
   const handleSetupPayouts = async () => {
     if (!user) {
@@ -642,6 +738,67 @@ export default function AccountPayouts() {
           </div>
         </article>
       </section>
+      {deleteModalOpen ? (
+        <div className="create-wizard-modal-overlay" role="dialog" aria-modal="true">
+          <div className="create-wizard-modal account-delete-modal">
+            <div className="create-wizard-modal-header">
+              <h3>Final delete confirmation</h3>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={closeDeleteModal}
+                disabled={deleteLoading}
+              >
+                ×
+              </button>
+            </div>
+            <p className="account-delete-copy">
+              Type <strong>DELETE</strong> to permanently remove your account.
+            </p>
+            <label className="input-group">
+              <span className="input-label">Type DELETE</span>
+              <input
+                className="text-input account-delete-input"
+                value={deleteConfirmText}
+                onChange={(event) => setDeleteConfirmText(event.target.value)}
+                placeholder="DELETE"
+                autoFocus
+              />
+            </label>
+            {usesPasswordProvider ? (
+              <label className="input-group">
+                <span className="input-label">Current Password</span>
+                <input
+                  className="text-input account-delete-input"
+                  type="password"
+                  value={deletePassword}
+                  onChange={(event) => setDeletePassword(event.target.value)}
+                  placeholder="Enter current password"
+                />
+              </label>
+            ) : null}
+            {deleteError ? <p className="error-banner">{deleteError}</p> : null}
+            <div className="app-dialog-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={closeDeleteModal}
+                disabled={deleteLoading}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="primary-button app-dialog-danger"
+                onClick={() => void handleDeleteAccountSubmit()}
+                disabled={deleteLoading}
+              >
+                {deleteLoading ? "Deleting..." : "Delete account"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </AppShell>
   );
 }

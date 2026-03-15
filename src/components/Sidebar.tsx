@@ -102,7 +102,7 @@ export default function Sidebar() {
         </nav>
         <div className="sidebar-social-links" aria-label="Social links">
           <a
-            href="https://www.instagram.com/tailgatetime/"
+            href="https://www.instagram.com/tailgatetime25/"
             target="_blank"
             rel="noopener noreferrer"
             aria-label="TailgateTime on Instagram"
@@ -112,7 +112,7 @@ export default function Sidebar() {
             <IconInstagram size={18} />
           </a>
           <a
-            href="https://www.facebook.com/tailgatetime/"
+            href="https://www.facebook.com/profile.php?id=61577940414994"
             target="_blank"
             rel="noopener noreferrer"
             aria-label="TailgateTime on Facebook"
