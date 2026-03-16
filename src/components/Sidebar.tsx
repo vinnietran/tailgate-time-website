@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { NavLink } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
 import tailgateTimeLogo from "../../ttnobg.png";
 import {
   IconChevronLeft,
@@ -72,12 +72,12 @@ export default function Sidebar() {
   return (
     <aside className={`sidebar ${isCollapsed ? "collapsed" : ""}`}>
       <div className="sidebar-top">
-        <div className="logo">
+        <Link to="/" className="logo" aria-label="Go to homepage">
           <img className="logo-image" src={tailgateTimeLogo} alt="TailgateTime logo" />
           <div className="logo-copy">
             <p className="logo-title">TailgateTime</p>
           </div>
-        </div>
+        </Link>
 
         <nav className="sidebar-nav">
           {navItems.map((item) => (

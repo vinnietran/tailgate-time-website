@@ -548,7 +548,7 @@
         <div class="top-links">
           <a href="/">Home</a>
           <a href="/#/discover">Discover</a>
-          <a href="/contact.html">Contact</a>
+          <a href="/contact.html">Contact &amp; Support</a>
         </div>
       </nav>
 
@@ -665,7 +665,7 @@
         visibilityType: "",
         plusGuestsAllowed: false,
         plusGuestLimit: DEFAULT_PLUS_LIMIT,
-        inviteGuestCount: "0",
+        inviteGuestCount: "",
         additionalGuests: [],
         submitting: false,
         hasResponded: false,
@@ -1150,9 +1150,8 @@
           ...(asRecord(data) || {}),
           ...(guestRecord || {}),
         });
-        state.inviteGuestCount = String(
-          anonymousGuestCountValue + state.additionalGuests.length
-        );
+        const totalExistingGuests = anonymousGuestCountValue + state.additionalGuests.length;
+        state.inviteGuestCount = totalExistingGuests > 0 ? String(totalExistingGuests) : "";
 
         eventDetails.innerHTML = `
           ${
@@ -1363,7 +1362,7 @@
       });
 
       inviteGuestCountInput.addEventListener("input", (event) => {
-        state.inviteGuestCount = sanitizeGuestCountInput(event.target.value || "0");
+        state.inviteGuestCount = sanitizeGuestCountInput(event.target.value || "");
         inviteGuestCountInput.value = state.inviteGuestCount;
       });
 

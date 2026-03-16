@@ -24,10 +24,7 @@ export function PublicTopNav() {
           <Link to="/discover" className={pathname.startsWith("/discover") ? "active" : ""}>
             Discover
           </Link>
-          <Link to="/user-guide" className={pathname.startsWith("/user-guide") ? "active" : ""}>
-            User Guide
-          </Link>
-          <a href="/contact.html">Contact</a>
+          <a href="/contact.html">Contact &amp; Support</a>
           <a
             href="https://www.instagram.com/tailgatetime25/"
             target="_blank"
@@ -52,7 +49,7 @@ export function PublicTopNav() {
         <div className="public-auth-actions">
           {user ? (
             <Link to="/dashboard" className="public-auth-btn signup">
-              Open Dashboard
+              My Dashboard
             </Link>
           ) : (
             <>
