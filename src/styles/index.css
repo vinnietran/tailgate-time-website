@@ -3369,6 +3369,10 @@ a {
   gap: 10px;
 }
 
+.tailgate-details-host-contact {
+  margin-top: 14px;
+}
+
 .tailgate-details-host-broadcast-input {
   min-height: 96px;
   resize: vertical;
@@ -4564,13 +4568,16 @@ a {
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.05);
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 
 .create-wizard-cover-item img {
   width: 100%;
-  height: 110px;
-  object-fit: cover;
+  height: clamp(140px, 18vw, 220px);
+  object-fit: contain;
   display: block;
+  background: rgba(8, 19, 45, 0.65);
 }
 
 .create-wizard-cover-item figcaption {

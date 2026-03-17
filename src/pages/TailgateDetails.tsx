@@ -55,6 +55,7 @@ const submitInviteRsvpPublicUrl = firebaseProjectId
   : "";
 const MAX_TICKET_QUANTITY = 8;
 const MAX_HOST_BROADCAST_MESSAGE_LENGTH = 320;
+const MAX_CONTACT_HOST_MESSAGE_LENGTH = 1200;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const MAX_QUIZ_QUESTIONS = 10;
 const DEFAULT_PLUS_LIMIT = 12;
@@ -256,6 +257,17 @@ type HostTextToAttendeesResponse = {
   sentCount?: unknown;
   failedCount?: unknown;
   successfulPhones?: unknown;
+};
+
+type ContactEventHostInput = {
+  eventId: string;
+  message: string;
+};
+
+type ContactEventHostResponse = {
+  success?: boolean;
+  hostName?: string;
+  cooldownMs?: number;
 };
 
 type TailgateDetail = {
@@ -1271,6 +1283,11 @@ export default function TailgateDetails() {
   const [hostBroadcastSending, setHostBroadcastSending] = useState(false);
   const [hostBroadcastFeedback, setHostBroadcastFeedback] =
     useState<HostBroadcastFeedback | null>(null);
+  const [isContactHostComposerOpen, setIsContactHostComposerOpen] = useState(false);
+  const [contactHostMessage, setContactHostMessage] = useState("");
+  const [contactHostSending, setContactHostSending] = useState(false);
+  const [contactHostFeedback, setContactHostFeedback] =
+    useState<HostBroadcastFeedback | null>(null);
   const [isCancelTailgateModalOpen, setIsCancelTailgateModalOpen] = useState(false);
   const [cancelTailgateSubmitting, setCancelTailgateSubmitting] = useState(false);
   const [cancelTailgateFeedback, setCancelTailgateFeedback] = useState<{
@@ -1756,6 +1773,13 @@ export default function TailgateDetails() {
     return httpsCallable<HostTextToAttendeesInput, HostTextToAttendeesResponse>(
       getFunctions(firebaseApp),
       "sendHostTextToAttendees"
+    );
+  }, []);
+  const contactEventHost = useMemo(() => {
+    if (!firebaseApp) return null;
+    return httpsCallable<ContactEventHostInput, ContactEventHostResponse>(
+      getFunctions(firebaseApp),
+      "contactEventHost"
     );
   }, []);
   const {
@@ -2315,6 +2339,15 @@ export default function TailgateDetails() {
     if (!user?.uid) return null;
     return detail.attendees.find((attendee) => attendee.userId === user.uid) ?? null;
   }, [detail, inviteQueryGuestId, inviteQueryToken, user?.uid]);
+  const loggedInInviteAttendee = useMemo(() => {
+    if (!detail || !user?.uid) return null;
+    return (
+      detail.attendees.find(
+        (attendee) =>
+          attendee.userId === user.uid && attendee.isAdditionalGuestInvite !== true
+      ) ?? null
+    );
+  }, [detail, user?.uid]);
   const openFreeCurrentAttendee = useMemo(() => {
     if (!detail || detail.visibilityType !== "open_free" || !user?.uid) return null;
     return (
@@ -2338,11 +2371,25 @@ export default function TailgateDetails() {
     rsvpDraftChoice === "Attending";
   const canAddContactGuest = plusGuestsEnabled && invitePlusGuests.length < plusGuestLimit;
   const canRespondToInviteViaLink = Boolean(rsvpAttendee && inviteQueryGuestId && inviteQueryToken);
+  const canContactHost = Boolean(
+    detail &&
+      user?.uid &&
+      !isHostUser &&
+      (detail.visibilityType === "open_free" ||
+        detail.visibilityType === "open_paid" ||
+        Boolean(loggedInInviteAttendee))
+  );
   const isOpenFreeUserGoing =
     normalizeStatus(openFreeCurrentAttendee?.status) === "Attending";
   const openFreeBringLabel =
     openFreePartySize === 1 ? "Just me" : `${openFreePartySize} people total`;
   const hostDisplayName = detail?.hostName?.trim() || "Host";
+  const contactHostCharacterCount = contactHostMessage.length;
+  const canSendContactHost =
+    canContactHost &&
+    contactHostMessage.trim().length >= 10 &&
+    contactHostCharacterCount <= MAX_CONTACT_HOST_MESSAGE_LENGTH &&
+    !contactHostSending;
   const rsvpStatusMeta = useMemo(() => {
     if (userRsvpStatus === "Attending") {
       return {
@@ -4086,6 +4133,27 @@ export default function TailgateDetails() {
     }
   };
 
+  const handleContactHostMessageChange = (
+    event: React.ChangeEvent<HTMLTextAreaElement>
+  ) => {
+    const nextValue = event.target.value.slice(0, MAX_CONTACT_HOST_MESSAGE_LENGTH);
+    setContactHostMessage(nextValue);
+    if (contactHostFeedback) {
+      setContactHostFeedback(null);
+    }
+  };
+
+  const openContactHostComposer = () => {
+    setIsContactHostComposerOpen(true);
+    setContactHostFeedback(null);
+  };
+
+  const closeContactHostComposer = () => {
+    setIsContactHostComposerOpen(false);
+    setContactHostFeedback(null);
+    setContactHostMessage("");
+  };
+
   const sendHostBroadcastMessage = async () => {
     if (!detail) return;
     if (!isEventHost) {
@@ -4215,6 +4283,76 @@ export default function TailgateDetails() {
       }
     } finally {
       setHostBroadcastSending(false);
+    }
+  };
+
+  const submitContactHostMessage = async () => {
+    if (!detail) return;
+    if (!user?.uid) {
+      setContactHostFeedback({
+        tone: "error",
+        text: "Sign in to contact the host."
+      });
+      return;
+    }
+    if (!canContactHost) {
+      setContactHostFeedback({
+        tone: "error",
+        text:
+          detail.visibilityType === "private"
+            ? "Only invited guests can contact this host."
+            : "Contacting this host is unavailable."
+      });
+      return;
+    }
+
+    const message = contactHostMessage.trim();
+    if (message.length < 10) {
+      setContactHostFeedback({
+        tone: "error",
+        text: "Enter a message with a little more detail before sending."
+      });
+      return;
+    }
+    if (message.length > MAX_CONTACT_HOST_MESSAGE_LENGTH) {
+      setContactHostFeedback({
+        tone: "error",
+        text: `Message cannot exceed ${MAX_CONTACT_HOST_MESSAGE_LENGTH} characters.`
+      });
+      return;
+    }
+    if (!contactEventHost) {
+      setContactHostFeedback({
+        tone: "error",
+        text: "Host email is unavailable in this environment."
+      });
+      return;
+    }
+
+    setContactHostSending(true);
+    setContactHostFeedback(null);
+    try {
+      const result = await contactEventHost({
+        eventId: detail.id,
+        message
+      });
+      const response = (result.data ?? {}) as ContactEventHostResponse;
+      setContactHostFeedback({
+        tone: "success",
+        text: `Email sent to ${response.hostName || hostDisplayName}. You can send another message later if needed.`
+      });
+      setContactHostMessage("");
+    } catch (error) {
+      const messageText =
+        error instanceof Error && error.message
+          ? error.message
+          : "Unable to email the host right now.";
+      setContactHostFeedback({
+        tone: "error",
+        text: messageText
+      });
+    } finally {
+      setContactHostSending(false);
     }
   };
 
@@ -4689,6 +4827,18 @@ export default function TailgateDetails() {
                   Open maps
                 </button>
               ) : null}
+              {canContactHost ? (
+                <button
+                  className="secondary-button"
+                  onClick={
+                    isContactHostComposerOpen
+                      ? closeContactHostComposer
+                      : openContactHostComposer
+                  }
+                >
+                  {isContactHostComposerOpen ? "Close contact" : "Contact host"}
+                </button>
+              ) : null}
               <button
                 className="secondary-button"
                 onClick={() => navigate(`/tailgates/${detail.id}/feed`)}
@@ -4705,6 +4855,56 @@ export default function TailgateDetails() {
                 Copy share link
               </button>
             </div>
+            {canContactHost && isContactHostComposerOpen ? (
+              <div className="tailgate-details-host-broadcast tailgate-details-host-contact">
+                <label className="input-group" htmlFor="contact-host-message">
+                  <span className="input-label">Email to {hostDisplayName}</span>
+                  <textarea
+                    id="contact-host-message"
+                    className="text-input tailgate-details-host-broadcast-input"
+                    value={contactHostMessage}
+                    onChange={handleContactHostMessageChange}
+                    maxLength={MAX_CONTACT_HOST_MESSAGE_LENGTH}
+                    placeholder="Ask the host a question about parking, timing, what to bring, or anything else event-related."
+                    rows={4}
+                  />
+                </label>
+                <div className="tailgate-details-host-broadcast-actions">
+                  <p className="tailgate-details-host-broadcast-counter">
+                    {contactHostCharacterCount}/{MAX_CONTACT_HOST_MESSAGE_LENGTH}
+                  </p>
+                  <div className="tailgate-details-inline-editor-actions">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={closeContactHostComposer}
+                      disabled={contactHostSending}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => void submitContactHostMessage()}
+                      disabled={!canSendContactHost}
+                    >
+                      {contactHostSending ? "Sending..." : "Send email"}
+                    </button>
+                  </div>
+                </div>
+                <p className="meta-muted">
+                  Messages are limited to signed-in guests and rate-limited to reduce spam.
+                </p>
+                {contactHostFeedback?.tone === "success" ? (
+                  <p className="tailgate-details-inline-editor-success">
+                    {contactHostFeedback.text}
+                  </p>
+                ) : null}
+                {contactHostFeedback?.tone === "error" ? (
+                  <p className="tailgate-details-ticket-error">{contactHostFeedback.text}</p>
+                ) : null}
+              </div>
+            ) : null}
             {detail.cancelledAt ? (
               <p className="tailgate-details-cancel-note">
                 Cancelled on {detail.cancelledAt.toLocaleString()}
