@@ -336,7 +336,8 @@ async function uploadCoverImagesForTailgate(
   hostUserId: string,
   coverImageDrafts: CoverImageDraft[]
 ) {
-  if (!storage || coverImageDrafts.length === 0) {
+  const storageService = storage;
+  if (!storageService || coverImageDrafts.length === 0) {
     return [] as string[];
   }
 
@@ -345,7 +346,7 @@ async function uploadCoverImagesForTailgate(
     coverImageDrafts.map(async (draft, index) => {
       const extension = sanitizeStorageFileName(draft.file.name);
       const imageRef = ref(
-        storage,
+        storageService,
         `tailgateCovers/${hostUserId}/${createdAt}-${index}-${createLocalId()}.${extension}`
       );
       await uploadBytes(imageRef, draft.file, {
@@ -834,9 +835,16 @@ export default function CreateTailgateWizard() {
       const first = payload.results?.[0];
       const lat = first?.geometry?.location?.lat;
       const lng = first?.geometry?.location?.lng;
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      if (
+        typeof lat !== "number" ||
+        !Number.isFinite(lat) ||
+        typeof lng !== "number" ||
+        !Number.isFinite(lng)
+      ) {
+        return null;
+      }
       const label = first?.formatted_address ?? query;
-      const next = { lat, lng };
+      const next: LatLng = { lat, lng };
       setLocationCoords(next);
       setLocationRecord((prev) =>
         prev

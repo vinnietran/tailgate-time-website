@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   collection,
   deleteDoc,
@@ -186,9 +186,10 @@ export default function Messages() {
 
   const markSelectedAsRead = useCallback(async () => {
     if (!db || !user || selectedIds.length === 0) return;
+    const firestore = db;
     await Promise.all(
       selectedIds.map((id) =>
-        updateDoc(doc(db, "users", user.uid, "notifications", id), { read: true })
+        updateDoc(doc(firestore, "users", user.uid, "notifications", id), { read: true })
       )
     );
     setSelectedIds([]);
@@ -197,9 +198,10 @@ export default function Messages() {
 
   const markAllAsRead = useCallback(async () => {
     if (!db || !user || unreadIds.length === 0) return;
+    const firestore = db;
     await Promise.all(
       unreadIds.map((id) =>
-        updateDoc(doc(db, "users", user.uid, "notifications", id), { read: true })
+        updateDoc(doc(firestore, "users", user.uid, "notifications", id), { read: true })
       )
     );
     setSelectedIds([]);
@@ -208,9 +210,10 @@ export default function Messages() {
 
   const deleteSelected = useCallback(async () => {
     if (!db || !user || selectedIds.length === 0) return;
+    const firestore = db;
     await Promise.all(
       selectedIds.map((id) =>
-        deleteDoc(doc(db, "users", user.uid, "notifications", id))
+        deleteDoc(doc(firestore, "users", user.uid, "notifications", id))
       )
     );
     setSelectedIds([]);

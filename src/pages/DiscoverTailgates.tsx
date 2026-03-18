@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { collection, onSnapshot } from "firebase/firestore";
 import { getBlob, getDownloadURL, ref } from "firebase/storage";
 import { useNavigate } from "react-router-dom";
@@ -486,7 +486,9 @@ function fromMockTailgates(): DiscoverTailgateRecord[] {
       }
       return item.startDateTime.getTime() >= nowTime;
     })
-    .map((item, index) => {
+    .map((item, index): DiscoverTailgateRecord => {
+      const visibilityType: DiscoverTailgateRecord["visibilityType"] =
+        item.visibilityType === "open_paid" ? "open_paid" : "open_free";
       const confirmedAttendanceCount =
         item.visibilityType === "open_paid"
           ? item.ticketsSold ?? item.rsvpsConfirmed ?? 0
@@ -495,7 +497,7 @@ function fromMockTailgates(): DiscoverTailgateRecord[] {
         id: item.id,
         eventName: item.name,
         startDateTime: item.startDateTime,
-        visibilityType: item.visibilityType,
+        visibilityType,
         coverImageUrl: item.coverImageUrl ?? DEFAULT_TAILGATE_COVER_IMAGE,
         locationSummary: item.locationSummary,
         coords: MOCK_COORDS[index % MOCK_COORDS.length],
@@ -503,7 +505,7 @@ function fromMockTailgates(): DiscoverTailgateRecord[] {
         currency: "USD",
         confirmedAttendanceCount,
         eventSizeSummary: buildEventSizeSummary({
-          visibilityType: item.visibilityType,
+          visibilityType,
           confirmedCount: confirmedAttendanceCount,
           ticketPriceCents: item.ticketPriceCents
         })
@@ -760,7 +762,14 @@ async function geocodeLocationQuery(
   const first = payload.results?.[0];
   const lat = first?.geometry?.location?.lat;
   const lng = first?.geometry?.location?.lng;
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (
+    typeof lat !== "number" ||
+    !Number.isFinite(lat) ||
+    typeof lng !== "number" ||
+    !Number.isFinite(lng)
+  ) {
+    return null;
+  }
 
   return {
     lat,
@@ -1088,7 +1097,8 @@ export default function DiscoverTailgates() {
   );
 
   useEffect(() => {
-    if (!firebaseStorage || tailgates.length === 0) return;
+    const storageService = firebaseStorage;
+    if (!storageService || tailgates.length === 0) return;
     let isCancelled = false;
 
     const rawCoverImageUrls = Array.from(
@@ -1115,13 +1125,13 @@ export default function DiscoverTailgates() {
       const normalized = rawUrl.replace(/^\/+/, "");
       try {
         if (!isHttpUrl(normalized)) {
-          return await getDownloadURL(ref(firebaseStorage, normalized));
+          return await getDownloadURL(ref(storageService, normalized));
         }
         if (
           normalized.includes("firebasestorage.googleapis.com") ||
           normalized.includes("storage.googleapis.com")
         ) {
-          return await getDownloadURL(ref(firebaseStorage, normalized));
+          return await getDownloadURL(ref(storageService, normalized));
         }
         return normalized;
       } catch {

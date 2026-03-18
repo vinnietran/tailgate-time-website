@@ -5,7 +5,7 @@ TailgateTime helps you plan, discover, and run game-day tailgates.
 
 You can use it as:
 - An **attendee** (discover events, RSVP, buy tickets, check in).
-- A **host** (create events, invite guests, sell tickets, manage check-in and refunds).
+- A **host** (create events, invite guests, sell tickets, manage check-in).
 
 ---
 
@@ -179,7 +179,7 @@ Supports authenticated and token-based invite flows.
 
 ---
 
-## 10. Tickets, QR, Wallet, and Refund Requests
+## 10. Tickets, QR, and Wallet
 
 ### Tickets list
 - Tickets grouped by purchase.
@@ -190,13 +190,6 @@ Supports authenticated and token-based invite flows.
 ### Wallet integration
 - iOS: Apple Wallet add/view/refresh pass.
 - Android: Google Wallet add/view.
-
-### Attendee refund requests
-For paid events:
-- Refund request is **full purchase only**.
-- Partial purchase refunds are not available.
-- Request window closes **48 hours before event start**.
-- Status updates: pending, approved, denied, processed.
 
 ---
 
@@ -214,7 +207,6 @@ Host command center for a specific event.
 - Build/edit schedule
 - Manage quizzes (invite-only events)
 - Ticket check-in tools
-- Refund center (paid events)
 - Drop or update event pin
 
 ### Messaging attendees
@@ -244,18 +236,7 @@ Features:
 
 ---
 
-## 13. Refund Center (Host)
-Paid-event hosts can manage refunds:
-- Load pending refund requests
-- Approve or deny request
-- View refund history (approved/denied/cancelled)
-- Manage refundable purchases queue
-
-Host refund workflow is purchase-centric and designed for full-purchase refunds.
-
----
-
-## 14. Timeline / Schedule Builder
+## 13. Timeline / Schedule Builder
 Hosts can:
 - Set event start time
 - Add/edit/delete schedule steps
@@ -299,7 +280,7 @@ Notification center features:
   - Select all/clear
   - Mark selected read
   - Delete selected
-- Deep links into event details, invite RSVP, and refund center
+- Deep links into event details and invite RSVP
 
 ---
 

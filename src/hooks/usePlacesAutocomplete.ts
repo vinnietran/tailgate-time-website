@@ -156,7 +156,9 @@ export function usePlacesAutocomplete({
                         return { value: candidate.value, offset };
                       })
                       .filter(
-                        (term): term is { value: string; offset?: number } => Boolean(term)
+                        (
+                          term: { value: string; offset?: number } | null
+                        ): term is { value: string; offset?: number } => Boolean(term)
                       )
                   : undefined;
 

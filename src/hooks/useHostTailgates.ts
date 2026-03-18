@@ -263,6 +263,7 @@ export function useHostTailgates(hostUserId?: string) {
 
     setLoading(true);
     setError(null);
+    const firestore = db;
 
     const rawConfigs: Array<{ key: string; field: string; value?: string | null }> = [
       { key: "hostUserId", field: "hostUserId", value: hostUserId },
@@ -282,7 +283,10 @@ export function useHostTailgates(hostUserId?: string) {
 
     const groups = new Map<string, TailgateEvent[]>();
     const unsubscribers = queryConfigs.map((config) => {
-      const tailgateQuery = query(collection(db, "tailgateEvents"), where(config.field, "==", config.value));
+      const tailgateQuery = query(
+        collection(firestore, "tailgateEvents"),
+        where(config.field, "==", config.value)
+      );
 
       return onSnapshot(
         tailgateQuery,

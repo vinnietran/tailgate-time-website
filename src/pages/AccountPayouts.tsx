@@ -195,6 +195,7 @@ export default function AccountPayouts() {
       setPayoutSummaryError(null);
       return;
     }
+    const functionsService = firebaseFunctions;
 
     let isMounted = true;
     const fetchSummary = async () => {
@@ -202,7 +203,7 @@ export default function AccountPayouts() {
       setPayoutSummaryError(null);
       try {
         const getHostPayoutSummaryFn = httpsCallable(
-          firebaseFunctions,
+          functionsService,
           "getHostPayoutSummary"
         );
         const result = await getHostPayoutSummaryFn({ hostUserId: user.uid });
@@ -699,9 +700,6 @@ export default function AccountPayouts() {
               <div className="payouts-overview-actions">
                 <Link className="secondary-button" to="/account/payout-history">
                   View payout history
-                </Link>
-                <Link className="secondary-button" to="/account/refund-requests">
-                  Review refund requests
                 </Link>
               </div>
             </>

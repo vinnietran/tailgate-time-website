@@ -544,6 +544,7 @@ export function useDashboardTailgates(userId?: string) {
 
     setLoading(true);
     setError(null);
+    const firestore = db;
 
     const eventsById = new Map<string, Record<string, unknown>>();
     const ticketTailgateIdsBySource = new Map<string, Set<string>>();
@@ -587,7 +588,7 @@ export function useDashboardTailgates(userId?: string) {
     };
 
     const unsubscribeEvents = onSnapshot(
-      collection(db, "tailgateEvents"),
+      collection(firestore, "tailgateEvents"),
       (snapshot) => {
         eventsById.clear();
         snapshot.docs.forEach((snapshotDoc) => {
@@ -609,7 +610,10 @@ export function useDashboardTailgates(userId?: string) {
 
     const ticketUnsubscribes = DASHBOARD_TICKET_LOOKUPS.map((lookup) =>
       onSnapshot(
-        query(collection(db, lookup.collectionName), where(lookup.userField, "==", userId)),
+        query(
+          collection(firestore, lookup.collectionName),
+          where(lookup.userField, "==", userId)
+        ),
         (snapshot) => {
           const ids = new Set<string>();
           snapshot.docs.forEach((snapshotDoc) => {

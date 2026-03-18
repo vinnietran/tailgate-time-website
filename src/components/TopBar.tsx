@@ -1,4 +1,3 @@
-import React from "react";
 import HeaderActions from "./HeaderActions";
 
 export default function TopBar({ firstName }: { firstName: string }) {

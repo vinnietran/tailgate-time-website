@@ -350,13 +350,14 @@ export default function EventFeed() {
 
   useEffect(() => {
     if (!db || missingDisplayNameUserIds.length === 0) return;
+    const firestore = db;
     let isCancelled = false;
 
     const fetchDisplayNames = async () => {
       const mappedEntries = await Promise.all(
         missingDisplayNameUserIds.map(async (userId) => {
           try {
-            const userSnapshot = await getDoc(doc(db, "users", userId));
+            const userSnapshot = await getDoc(doc(firestore, "users", userId));
             if (!userSnapshot.exists()) return [userId, "Tailgater"] as const;
             const data = userSnapshot.data() as Record<string, unknown>;
             const nameFromFields = firstString(
@@ -389,6 +390,7 @@ export default function EventFeed() {
 
   useEffect(() => {
     if (!storage || avatarUserIds.length === 0) return;
+    const storageService = storage;
     const missingUserIds = avatarUserIds.filter((userId) => !profilePicturesByUserId[userId]);
     if (missingUserIds.length === 0) return;
     let isCancelled = false;
@@ -397,7 +399,9 @@ export default function EventFeed() {
       const mappedEntries = await Promise.all(
         missingUserIds.map(async (userId) => {
           try {
-            const photoUrl = await getDownloadURL(ref(storage, `profilePictures/${userId}.jpg`));
+            const photoUrl = await getDownloadURL(
+              ref(storageService, `profilePictures/${userId}.jpg`)
+            );
             return [userId, photoUrl] as const;
           } catch {
             return [userId, placeholderAvatar] as const;
@@ -421,6 +425,7 @@ export default function EventFeed() {
 
   useEffect(() => {
     if (!storage || posts.length === 0) return;
+    const storageService = storage;
     let isCancelled = false;
 
     const rawImageUrls = Array.from(
@@ -452,13 +457,13 @@ export default function EventFeed() {
       const normalized = rawUrl.replace(/^\/+/, "");
       try {
         if (!isHttpUrl(normalized)) {
-          return await getDownloadURL(ref(storage, normalized));
+          return await getDownloadURL(ref(storageService, normalized));
         }
         if (
           normalized.includes("firebasestorage.googleapis.com") ||
           normalized.includes("storage.googleapis.com")
         ) {
-          return await getDownloadURL(ref(storage, normalized));
+          return await getDownloadURL(ref(storageService, normalized));
         }
         return normalized;
       } catch {
@@ -782,11 +787,12 @@ export default function EventFeed() {
     try {
       const candidateStoragePath =
         extractStoragePathFromValue(rawUrl) ?? extractStoragePathFromValue(normalizedCandidate);
+      const storageService = storage;
       let blob: Blob | null = null;
 
-      if (candidateStoragePath) {
+      if (candidateStoragePath && storageService) {
         try {
-          blob = await getBlob(ref(storage, candidateStoragePath));
+          blob = await getBlob(ref(storageService, candidateStoragePath));
         } catch {
           blob = null;
         }

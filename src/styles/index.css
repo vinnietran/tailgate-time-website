@@ -3309,62 +3309,292 @@ a {
   gap: 10px;
 }
 
-.tailgate-details-actions-hub {
+.tailgate-command-center {
   display: grid;
+  gap: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(242, 201, 76, 0.16), transparent 28%),
+    linear-gradient(155deg, rgba(38, 59, 94, 0.98), rgba(29, 46, 76, 0.95));
+}
+
+.tailgate-command-center-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.95fr);
+  gap: 16px;
+}
+
+.tailgate-command-center-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.95fr);
+  gap: 16px;
+}
+
+.tailgate-command-panel {
+  border-radius: calc(var(--radius-md) + 2px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.tailgate-command-panel .section-header h2,
+.tailgate-host-dashboard-card .section-header h2 {
+  color: var(--white);
+}
+
+.tailgate-command-panel .section-subtitle,
+.tailgate-host-dashboard-card .section-subtitle {
+  color: var(--muted-strong);
+}
+
+.tailgate-command-center-overview {
+  align-content: start;
+}
+
+.tailgate-command-center-stats h3 {
+  margin: 0;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.05rem;
+  color: var(--white);
+}
+
+.tailgate-command-kicker {
+  margin: 0;
+  color: rgba(242, 201, 76, 0.84);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.tailgate-details-hero-utility-row {
+  margin-top: 14px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.tailgate-command-utility-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tailgate-command-status-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tailgate-command-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
-.tailgate-details-action-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 10px;
-}
-
-.tailgate-details-action-card {
+.tailgate-command-action-card {
   width: 100%;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: var(--radius-sm);
-  padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.04);
   color: var(--white);
   text-align: left;
   display: grid;
-  gap: 6px;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
   cursor: pointer;
-  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease,
+    box-shadow 0.18s ease;
 }
 
-.tailgate-details-action-card strong {
+.tailgate-command-action-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 18px 30px rgba(8, 15, 30, 0.22);
+}
+
+.tailgate-command-action-card:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.tailgate-command-action-card.is-primary {
+  border-color: rgba(242, 201, 76, 0.34);
+  background: linear-gradient(145deg, rgba(242, 201, 76, 0.14), rgba(255, 255, 255, 0.04));
+}
+
+.tailgate-command-action-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: rgba(242, 201, 76, 0.12);
+  border: 1px solid rgba(242, 201, 76, 0.18);
+  color: var(--gold-400);
+}
+
+.tailgate-command-action-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.tailgate-command-action-copy strong {
   font-size: 0.95rem;
   line-height: 1.2;
 }
 
-.tailgate-details-action-card small {
+.tailgate-command-action-copy small {
   color: var(--muted);
   font-size: 0.8rem;
+  line-height: 1.35;
 }
 
-.tailgate-details-action-card:hover {
-  border-color: rgba(242, 201, 76, 0.42);
+.tailgate-command-danger-button {
+  border: 1px solid rgba(242, 117, 106, 0.34);
+  background: rgba(242, 117, 106, 0.1);
+  color: #ffd4cf;
+  border-radius: 14px;
+  padding: 12px 14px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.tailgate-command-danger-button:hover:not(:disabled) {
+  background: rgba(242, 117, 106, 0.16);
+  border-color: rgba(242, 117, 106, 0.48);
   transform: translateY(-1px);
 }
 
-.tailgate-details-action-card:disabled {
+.tailgate-command-danger-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-  transform: none;
 }
 
-.tailgate-details-action-card.is-primary {
-  border-color: rgba(242, 201, 76, 0.52);
-  background: linear-gradient(150deg, rgba(242, 201, 76, 0.16), rgba(255, 255, 255, 0.03));
+.tailgate-command-info-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.tailgate-host-command-layout {
+  grid-template-columns: minmax(0, 1.14fr) minmax(300px, 0.86fr);
+  align-items: start;
+}
+
+.tailgate-host-command-layout > .tailgate-details-checkout-banner,
+.tailgate-host-command-layout > .tailgate-command-center,
+.tailgate-host-command-layout > .tailgate-host-full-span {
+  grid-column: 1 / -1;
+}
+
+.tailgate-host-dashboard-card {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
+    linear-gradient(158deg, rgba(24, 40, 66, 0.97), rgba(18, 30, 52, 0.95));
+  border-color: rgba(255, 255, 255, 0.1);
+  border-bottom-color: rgba(242, 201, 76, 0.35);
+  box-shadow:
+    0 24px 52px rgba(6, 12, 24, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.tailgate-host-dashboard-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at top right, rgba(242, 201, 76, 0.12), transparent 34%),
+    radial-gradient(circle at bottom left, rgba(92, 141, 255, 0.14), transparent 40%);
+  pointer-events: none;
+}
+
+.tailgate-host-dashboard-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.tailgate-host-dashboard-card .section-header {
+  margin-bottom: 4px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.tailgate-host-dashboard-card .section-header h2 {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.1rem;
+  letter-spacing: 0.01em;
+}
+
+.tailgate-host-dashboard-card .section-subtitle {
+  max-width: 36rem;
+}
+
+.tailgate-host-expectations-card {
+  grid-column: 1 / -1;
+}
+
+.tailgate-host-ops-card {
+  grid-column: 1;
+}
+
+.tailgate-host-map-card,
+.tailgate-host-attendees-card {
+  grid-column: 2;
+}
+
+.tailgate-host-media-card .tailgate-details-carousel-viewport {
+  border-radius: calc(var(--radius-md) + 4px);
+  overflow: hidden;
+}
+
+.tailgate-host-map-card .tailgate-details-map,
+.tailgate-host-map-card .tailgate-details-map-placeholder {
+  min-height: 360px;
+  background: rgba(6, 12, 24, 0.22);
+}
+
+.tailgate-host-dashboard-card .tailgate-details-attendee-invite,
+.tailgate-host-dashboard-card .tailgate-details-attendee-row,
+.tailgate-host-dashboard-card .tailgate-timeline-publish-row,
+.tailgate-host-dashboard-card .tailgate-timeline-editor,
+.tailgate-host-dashboard-card .tailgate-timeline-row,
+.tailgate-host-dashboard-card .tailgate-quiz-editor,
+.tailgate-host-dashboard-card .tailgate-details-info-card,
+.tailgate-host-dashboard-card .tailgate-details-refund-row {
+  background: rgba(7, 14, 27, 0.24);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.tailgate-host-dashboard-card .tailgate-details-filter-chip {
+  background: rgba(13, 22, 40, 0.84);
+}
+
+.tailgate-host-dashboard-card .tailgate-details-map-note {
+  color: rgba(232, 238, 250, 0.84);
+}
+
+.tailgate-host-dashboard-card .tailgate-details-attendee-list,
+.tailgate-host-dashboard-card .tailgate-timeline-list {
+  gap: 12px;
 }
 
 .tailgate-details-host-broadcast {
   border-radius: var(--radius-sm);
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.03);
-  padding: 12px;
+  padding: 14px;
   display: grid;
   gap: 10px;
 }
@@ -6657,6 +6887,10 @@ a.secondary-button {
 }
 
 @media (max-width: 1100px) {
+  .tailgate-host-command-layout {
+    grid-template-columns: 1fr;
+  }
+
   .dashboard-top-panels {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -6672,6 +6906,25 @@ a.secondary-button {
   .tailgate-details-info-grid,
   .tailgate-details-inline-editor-grid {
     grid-template-columns: 1fr;
+  }
+
+  .tailgate-command-center-top,
+  .tailgate-command-center-grid,
+  .tailgate-command-action-grid,
+  .tailgate-command-info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tailgate-host-expectations-card,
+  .tailgate-host-ops-card,
+  .tailgate-host-map-card,
+  .tailgate-host-attendees-card {
+    grid-column: auto;
+  }
+
+  .tailgate-details-hero-utility-row {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .tailgate-details-rsvp-options {

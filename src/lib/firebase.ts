@@ -13,8 +13,12 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
+const forceMockFirebase = import.meta.env.VITE_E2E_MOCK_FIREBASE === "true";
 const hasConfig = Boolean(
-  firebaseConfig.apiKey && firebaseConfig.authDomain && firebaseConfig.projectId
+  !forceMockFirebase &&
+    firebaseConfig.apiKey &&
+    firebaseConfig.authDomain &&
+    firebaseConfig.projectId
 );
 
 export const app = hasConfig

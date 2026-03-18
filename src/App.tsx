@@ -1,4 +1,3 @@
-import React from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./hooks/useAuth";
 import { ProtectedRoute } from "./components/ProtectedRoute";
@@ -6,7 +5,6 @@ import HostDashboard from "./pages/HostDashboard";
 import CreateTailgateWizard from "./pages/CreateTailgateWizard";
 import AccountPayouts from "./pages/AccountPayouts";
 import AccountPayoutHistory from "./pages/AccountPayoutHistory";
-import AccountRefundRequests from "./pages/AccountRefundRequests";
 import ChangePassword from "./pages/ChangePassword";
 import Login from "./pages/Login";
 import TailgateDetails from "./pages/TailgateDetails";
@@ -58,14 +56,6 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <AccountPayoutHistory />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/account/refund-requests"
-            element={
-              <ProtectedRoute>
-                <AccountRefundRequests />
               </ProtectedRoute>
             }
           />

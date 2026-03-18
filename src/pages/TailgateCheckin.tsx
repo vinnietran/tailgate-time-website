@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { httpsCallable } from "firebase/functions";
 import {
   collection,
@@ -10,11 +10,10 @@ import {
 import { useNavigate, useParams } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import { useAuth } from "../hooks/useAuth";
-import { useProcessTicketRefund } from "../hooks/useProcessTicketRefund";
 import { db, functions as firebaseFunctions } from "../lib/firebase";
 import { mockTailgates } from "../data/mockTailgates";
 import { VisibilityType } from "../types";
-import { formatCurrencyFromCents, formatDateTime } from "../utils/format";
+import { formatDateTime } from "../utils/format";
 
 type CheckInResponse = {
   ticketId: string;
@@ -30,37 +29,6 @@ type CheckedInTicketRow = {
   checkedInCount: number;
   remaining: number;
   lastCheckInAtMs: number;
-};
-
-type HostRefundableTicketRow = {
-  ticketId: string;
-  ticketCode: string;
-  guestName: string;
-  guestContact?: string;
-  purchaseReference: string;
-  purchaseNumber?: string;
-  quantity: number;
-  amountCents?: number;
-  ticketStatus: string;
-  refundRequestStatus: "pending" | "approved" | "denied" | null;
-  refunded: boolean;
-  createdAtMs: number;
-};
-
-type HostRefundablePurchaseRow = {
-  purchaseKey: string;
-  purchaseReference: string;
-  purchaseNumber?: string;
-  representativeTicketId: string;
-  guestLabel: string;
-  admissions: number;
-  ticketCount: number;
-  amountCents?: number;
-  refundRequestStatus: "pending" | "denied" | null;
-  statusLabel: "Pending" | "Denied" | "Confirmed";
-  statusChipClass: "chip-upcoming" | "chip-cancelled" | "chip-outline";
-  statusNote?: string;
-  createdAtMs: number;
 };
 
 type CheckinEventDetail = {
@@ -172,50 +140,6 @@ function coerceNumber(value: unknown): number | undefined {
   return undefined;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function normalizeTicketStatus(value: unknown): string {
-  return String(value ?? "").trim().toLowerCase();
-}
-
-function normalizeRefundRequestStatus(value: unknown): "pending" | "approved" | "denied" | null {
-  const raw = String(value ?? "").trim().toLowerCase();
-  if (!raw) return null;
-  if (
-    raw === "pending" ||
-    raw === "requested" ||
-    raw === "open" ||
-    raw === "awaiting_host"
-  ) {
-    return "pending";
-  }
-  if (
-    raw === "approved" ||
-    raw === "refunded" ||
-    raw === "processed" ||
-    raw === "completed" ||
-    raw === "succeeded"
-  ) {
-    return "approved";
-  }
-  if (raw === "denied" || raw === "declined" || raw === "rejected") {
-    return "denied";
-  }
-  return null;
-}
-
-function formatPurchaseReference(reference: string) {
-  const trimmed = reference.trim();
-  if (!trimmed) return "unknown";
-  if (trimmed.length <= 12) return trimmed;
-  return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
-}
-
 function toCheckinDetailFromFirestore(
   id: string,
   data: Record<string, unknown>
@@ -282,26 +206,11 @@ export default function TailgateCheckin() {
   const [checkedInError, setCheckedInError] = useState<string | null>(null);
   const [hasNewSnapshot, setHasNewSnapshot] = useState(false);
   const [hasLegacySnapshot, setHasLegacySnapshot] = useState(false);
-  const [hostRefundableTickets, setHostRefundableTickets] = useState<HostRefundableTicketRow[]>([]);
-  const [hostRefundsLoading, setHostRefundsLoading] = useState(false);
-  const [hostRefundsError, setHostRefundsError] = useState<string | null>(null);
-  const [hostRefundModalPurchaseKey, setHostRefundModalPurchaseKey] = useState<string | null>(null);
-  const [hostRefundReason, setHostRefundReason] = useState("");
-  const [hostRefundFeedback, setHostRefundFeedback] = useState<{
-    tone: "success" | "error";
-    text: string;
-  } | null>(null);
 
   const checkInByCode = useMemo(() => {
     if (!firebaseFunctions) return null;
     return httpsCallable(firebaseFunctions, "checkInByTicketCode");
   }, []);
-  const {
-    processTicketRefund,
-    loading: processingHostRefund,
-    error: processingHostRefundError,
-    clearError: clearProcessingHostRefundError
-  } = useProcessTicketRefund();
 
   const isHostUser = useMemo(() => {
     if (!detail || !user?.uid) return false;
@@ -310,103 +219,6 @@ export default function TailgateCheckin() {
 
   const isCancelledEvent = detail?.status === "cancelled";
   const canCheckIn = isHostUser && detail?.visibilityType === "open_paid" && !isCancelledEvent;
-  const hostRefundablePurchases = useMemo<HostRefundablePurchaseRow[]>(() => {
-    const grouped = new Map<string, HostRefundableTicketRow[]>();
-    hostRefundableTickets.forEach((ticket) => {
-      const purchaseKey = ticket.purchaseReference || ticket.ticketId;
-      const group = grouped.get(purchaseKey);
-      if (group) {
-        group.push(ticket);
-      } else {
-        grouped.set(purchaseKey, [ticket]);
-      }
-    });
-
-    return Array.from(grouped.entries())
-      .map(([purchaseKey, tickets]) => {
-        const sortedTickets = [...tickets].sort((left, right) => right.createdAtMs - left.createdAtMs);
-        const representativeTicket = sortedTickets[0];
-        if (!representativeTicket) return null;
-
-        const admissions = sortedTickets.reduce(
-          (sum, ticket) => sum + Math.max(1, ticket.quantity),
-          0
-        );
-        const knownGuests = Array.from(
-          new Set(
-            sortedTickets
-              .map((ticket) => ticket.guestName.trim())
-              .filter((name) => name.length > 0)
-          )
-        );
-        const guestLabel =
-          knownGuests.length > 1
-            ? `${knownGuests[0]} +${knownGuests.length - 1}`
-            : knownGuests[0] ?? representativeTicket.guestName;
-        const hasCompleteAmount = sortedTickets.every(
-          (ticket) => typeof ticket.amountCents === "number"
-        );
-        const amountCents = hasCompleteAmount
-          ? sortedTickets.reduce(
-              (sum, ticket) => sum + (typeof ticket.amountCents === "number" ? ticket.amountCents : 0),
-              0
-            )
-          : typeof detail?.ticketPriceCents === "number"
-          ? detail.ticketPriceCents * admissions
-          : undefined;
-        const hasPendingRequest = sortedTickets.some(
-          (ticket) => ticket.refundRequestStatus === "pending"
-        );
-        const hasDeniedRequest = sortedTickets.some(
-          (ticket) => ticket.refundRequestStatus === "denied"
-        );
-        const refundRequestStatus = hasPendingRequest
-          ? "pending"
-          : hasDeniedRequest
-          ? "denied"
-          : null;
-        const statusLabel = hasPendingRequest
-          ? "Pending"
-          : hasDeniedRequest
-          ? "Denied"
-          : "Confirmed";
-        const statusChipClass = hasPendingRequest
-          ? "chip-upcoming"
-          : hasDeniedRequest
-          ? "chip-cancelled"
-          : "chip-outline";
-        const statusNote = hasPendingRequest
-          ? "Refund requested • Waiting for host decision."
-          : hasDeniedRequest
-          ? "Previous request denied."
-          : undefined;
-
-        return {
-          purchaseKey,
-          purchaseReference: representativeTicket.purchaseReference,
-          purchaseNumber: representativeTicket.purchaseNumber,
-          representativeTicketId: representativeTicket.ticketId,
-          guestLabel,
-          admissions,
-          ticketCount: sortedTickets.length,
-          amountCents,
-          refundRequestStatus,
-          statusLabel,
-          statusChipClass,
-          statusNote,
-          createdAtMs: sortedTickets[0]?.createdAtMs ?? 0
-        } as HostRefundablePurchaseRow;
-      })
-      .filter((purchase): purchase is HostRefundablePurchaseRow => Boolean(purchase))
-      .sort((left, right) => right.createdAtMs - left.createdAtMs);
-  }, [detail?.ticketPriceCents, hostRefundableTickets]);
-  const selectedHostRefundPurchase = useMemo(
-    () =>
-      hostRefundModalPurchaseKey
-        ? hostRefundablePurchases.find((purchase) => purchase.purchaseKey === hostRefundModalPurchaseKey) ?? null
-        : null,
-    [hostRefundModalPurchaseKey, hostRefundablePurchases]
-  );
 
   useEffect(() => {
     if (!id) {
@@ -563,140 +375,6 @@ export default function TailgateCheckin() {
     setCheckedInLoading(false);
   }, [hasLegacySnapshot, hasNewSnapshot, legacyCheckedInTickets, newCheckedInTickets]);
 
-  useEffect(() => {
-    if (!id || !canCheckIn || !db) {
-      setHostRefundableTickets([]);
-      setHostRefundsLoading(false);
-      setHostRefundsError(null);
-      setHostRefundModalPurchaseKey(null);
-      setHostRefundReason("");
-      return;
-    }
-
-    setHostRefundsLoading(true);
-    setHostRefundsError(null);
-
-    const ticketsQuery = query(
-      collection(db, "tickets"),
-      where("tailgateId", "==", id)
-    );
-
-    const unsubscribe = onSnapshot(
-      ticketsQuery,
-      (snapshot) => {
-        const rows = snapshot.docs
-          .map((docSnap) => {
-            const data = docSnap.data() as Record<string, unknown>;
-            const quantity = coercePositiveInteger(data.quantity) ?? 1;
-            const ticketStatus = normalizeTicketStatus(data.status);
-            const refundRecord = asRecord(data.refund);
-            const refundRequestRecord = asRecord(data.refundRequest);
-            const purchaseRecord = asRecord(data.purchase);
-            const refundRequestStatus = normalizeRefundRequestStatus(
-              firstString(
-                data.refundRequestStatus,
-                data.refundStatus,
-                data.refundState,
-                refundRecord?.status,
-                refundRecord?.requestStatus,
-                refundRequestRecord?.status
-              )
-            );
-
-            const basePriceCents = coerceNumber(data.ticketPriceCents);
-            const amountCents =
-              coerceNumber(data.totalPaidCents) ??
-              coerceNumber(data.amountPaidCents) ??
-              coerceNumber(data.totalAmountCents) ??
-              (typeof basePriceCents === "number" ? basePriceCents * quantity : undefined);
-            const refunded =
-              ticketStatus === "refunded" ||
-              ticketStatus === "refund_processed" ||
-              ticketStatus === "refund_succeeded" ||
-              refundRequestStatus === "approved";
-            const confirmed =
-              ticketStatus === "valid" ||
-              ticketStatus === "checked_in" ||
-              ticketStatus === "confirmed";
-            if (!confirmed || refunded) {
-              return null;
-            }
-            const purchaseReference =
-              firstString(
-                data.purchaseReference,
-                data.purchaseId,
-                data.ticketPurchaseId,
-                data.ticketPurchaseRef,
-                data.purchaseRef,
-                data.paymentIntentId,
-                purchaseRecord?.purchaseReference,
-                purchaseRecord?.id,
-                purchaseRecord?.purchaseId
-              ) ?? docSnap.id;
-
-            return {
-              ticketId: docSnap.id,
-              ticketCode: firstString(data.ticketCode) ?? "—",
-              guestName: firstString(data.attendeeName, data.guestName, data.userName, data.name) ?? "Guest",
-              guestContact: firstString(data.attendeeEmail, data.email, data.guestEmail, data.attendeeUserId),
-              purchaseReference,
-              purchaseNumber: firstString(
-                data.purchaseNumber,
-                data.purchaseLabel,
-                purchaseRecord?.purchaseNumber,
-                purchaseRecord?.orderNumber
-              ),
-              quantity,
-              amountCents,
-              ticketStatus,
-              refundRequestStatus,
-              refunded,
-              createdAtMs:
-                resolveTimestampMs(data.createdAt) ||
-                resolveTimestampMs(data.updatedAt) ||
-                resolveTimestampMs(data.checkedInAt)
-            } as HostRefundableTicketRow;
-          })
-          .filter((ticket): ticket is HostRefundableTicketRow => Boolean(ticket))
-          .sort((left, right) => right.createdAtMs - left.createdAtMs);
-
-        setHostRefundableTickets(rows);
-        setHostRefundsLoading(false);
-        setHostRefundsError(null);
-      },
-      (snapshotError) => {
-        console.error("Failed to load refundable purchases", snapshotError);
-        setHostRefundableTickets([]);
-        setHostRefundsLoading(false);
-        setHostRefundsError("Unable to load refundable purchases.");
-      }
-    );
-
-    return () => unsubscribe();
-  }, [canCheckIn, id]);
-
-  useEffect(() => {
-    if (!hostRefundFeedback) return;
-    const timer = setTimeout(() => setHostRefundFeedback(null), 4000);
-    return () => clearTimeout(timer);
-  }, [hostRefundFeedback]);
-
-  useEffect(() => {
-    if (!hostRefundModalPurchaseKey) return;
-    const exists = hostRefundablePurchases.some(
-      (purchase) => purchase.purchaseKey === hostRefundModalPurchaseKey
-    );
-    if (!exists) {
-      setHostRefundModalPurchaseKey(null);
-      setHostRefundReason("");
-      clearProcessingHostRefundError();
-    }
-  }, [
-    clearProcessingHostRefundError,
-    hostRefundModalPurchaseKey,
-    hostRefundablePurchases
-  ]);
-
   const handleCheckIn = useCallback(async () => {
     if (!id || !canCheckIn || isCheckingIn) return;
 
@@ -773,44 +451,6 @@ export default function TailgateCheckin() {
     setCheckinMessage(null);
     setHighlightedTicketCode(null);
     setLastResult(null);
-  };
-
-  const openHostRefundModal = (purchaseKey: string) => {
-    setHostRefundModalPurchaseKey(purchaseKey);
-    setHostRefundReason("");
-    setHostRefundFeedback(null);
-    clearProcessingHostRefundError();
-  };
-
-  const closeHostRefundModal = () => {
-    if (processingHostRefund) return;
-    setHostRefundModalPurchaseKey(null);
-    setHostRefundReason("");
-    clearProcessingHostRefundError();
-  };
-
-  const submitHostDirectRefund = async () => {
-    if (!selectedHostRefundPurchase || processingHostRefund) return;
-
-    try {
-      await processTicketRefund({
-        ticketId: selectedHostRefundPurchase.representativeTicketId,
-        hostDecisionReason: hostRefundReason.trim() || undefined
-      });
-      setHostRefundFeedback({
-        tone: "success",
-        text: "Purchase refunded."
-      });
-      setHostRefundModalPurchaseKey(null);
-      setHostRefundReason("");
-      clearProcessingHostRefundError();
-    } catch (refundError) {
-      console.error("Failed to process direct host refund", refundError);
-      setHostRefundFeedback({
-        tone: "error",
-        text: "Unable to refund purchase. Try again."
-      });
-    }
   };
 
   const remaining = lastResult
@@ -972,150 +612,6 @@ export default function TailgateCheckin() {
                 </div>
               )}
             </article>
-          ) : null}
-          {canCheckIn ? (
-            <article className="tailgate-checkin-card">
-              <div className="section-header">
-                <div>
-                  <h2>Refund purchases</h2>
-                  <p className="section-subtitle">
-                    Direct refunds for confirmed paid purchases. Full purchase only.
-                  </p>
-                </div>
-              </div>
-              {hostRefundsLoading ? (
-                <p className="meta-muted">Loading refundable purchases...</p>
-              ) : hostRefundsError ? (
-                <p className="tailgate-checkin-feedback tailgate-checkin-feedback-error">
-                  {hostRefundsError}
-                </p>
-              ) : hostRefundablePurchases.length === 0 ? (
-                <p className="meta-muted">No refundable purchases right now.</p>
-              ) : (
-                <div className="tailgate-checkin-table">
-                  <div className="tailgate-checkin-table-row tailgate-checkin-table-head tailgate-checkin-refund-head">
-                    <span>Purchase</span>
-                    <span>Guest</span>
-                    <span>Amount</span>
-                    <span>Status</span>
-                    <span>Action</span>
-                  </div>
-                  {hostRefundablePurchases.map((purchase) => {
-                    return (
-                      <div key={purchase.purchaseKey} className="tailgate-checkin-table-row tailgate-checkin-refund-row">
-                        <span>
-                          {purchase.purchaseNumber?.trim()
-                            ? purchase.purchaseNumber
-                            : formatPurchaseReference(purchase.purchaseReference)}
-                          <small className="tailgate-checkin-refund-subline">
-                            {purchase.admissions} admission
-                            {purchase.admissions === 1 ? "" : "s"}
-                            {purchase.ticketCount > 1 ? ` • ${purchase.ticketCount} tickets` : ""}
-                          </small>
-                        </span>
-                        <span>
-                          {purchase.guestLabel}
-                          {purchase.statusNote ? (
-                            <small className="tailgate-checkin-refund-subline">{purchase.statusNote}</small>
-                          ) : null}
-                        </span>
-                        <span>
-                          {typeof purchase.amountCents === "number"
-                            ? formatCurrencyFromCents(purchase.amountCents)
-                            : "—"}
-                        </span>
-                        <span>
-                          <span className={`chip ${purchase.statusChipClass}`}>{purchase.statusLabel}</span>
-                        </span>
-                        <span>
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            disabled={
-                              processingHostRefund || purchase.refundRequestStatus === "pending"
-                            }
-                            onClick={() => openHostRefundModal(purchase.purchaseKey)}
-                          >
-                            Refund purchase
-                          </button>
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-              {hostRefundFeedback?.tone === "success" ? (
-                <p className="success-banner">{hostRefundFeedback.text}</p>
-              ) : null}
-              {hostRefundFeedback?.tone === "error" ? (
-                <p className="tailgate-checkin-feedback tailgate-checkin-feedback-error">
-                  {hostRefundFeedback.text}
-                </p>
-              ) : null}
-            </article>
-          ) : null}
-          {selectedHostRefundPurchase ? (
-            <div className="create-wizard-modal-overlay" role="dialog" aria-modal="true">
-              <div className="create-wizard-modal create-wizard-refund-modal">
-                <div className="create-wizard-modal-header">
-                  <h3>
-                    Refund this purchase for{" "}
-                    {typeof selectedHostRefundPurchase.amountCents === "number"
-                      ? formatCurrencyFromCents(selectedHostRefundPurchase.amountCents)
-                      : "the paid amount"}
-                    ?
-                  </h3>
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    onClick={closeHostRefundModal}
-                    disabled={processingHostRefund}
-                  >
-                    Close
-                  </button>
-                </div>
-                <p className="meta-muted">
-                  {selectedHostRefundPurchase.purchaseNumber?.trim()
-                    ? selectedHostRefundPurchase.purchaseNumber
-                    : formatPurchaseReference(selectedHostRefundPurchase.purchaseReference)}{" "}
-                  · {selectedHostRefundPurchase.admissions} admission
-                  {selectedHostRefundPurchase.admissions === 1 ? "" : "s"}
-                </p>
-                <label className="input-group">
-                  <span className="input-label">Optional host note</span>
-                  <textarea
-                    className="text-input tailgate-details-host-broadcast-input"
-                    rows={4}
-                    value={hostRefundReason}
-                    onChange={(event) => setHostRefundReason(event.target.value)}
-                    placeholder="Add context for the guest."
-                  />
-                </label>
-                {processingHostRefundError ? (
-                  <p className="tailgate-details-ticket-error">
-                    Unable to process refund. Try again.
-                  </p>
-                ) : null}
-                <div className="create-wizard-payout-actions">
-                  <button
-                    type="button"
-                    className="primary-button"
-                    disabled={processingHostRefund}
-                    onClick={() => void submitHostDirectRefund()}
-                  >
-                    {processingHostRefund ? "Processing..." : "Refund purchase"}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={processingHostRefund}
-                    onClick={closeHostRefundModal}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </div>
           ) : null}
         </section>
       )}
