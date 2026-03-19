@@ -205,6 +205,19 @@ type HostBroadcastFeedback = {
   text: string;
 };
 
+type CoHostInviteRecord = {
+  phoneNumberCanonical: string;
+  phoneNumberDisplay?: string;
+  invitedAt?: Date | null;
+  invitedByUserId?: string | null;
+};
+
+type CoHostProfile = {
+  userId: string;
+  displayName: string;
+  phone?: string | null;
+};
+
 type CheckoutPurchaseStatus =
   | "checkout_created"
   | "confirmed"
@@ -245,6 +258,7 @@ type TailgateDetail = {
   hostId: string;
   hostName: string;
   coHostIds: string[];
+  coHostInvites: CoHostInviteRecord[];
   startDateTime: Date | null;
   locationRaw: unknown;
   locationSummary?: string;
@@ -968,6 +982,28 @@ function resolveTicketSalesCloseAt(
   return new Date(startDateTime.getTime() - Math.max(0, daysBefore) * DAY_IN_MS);
 }
 
+function resolveCoHostInvites(value: unknown): CoHostInviteRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => {
+      const record = asRecord(entry);
+      if (!record) return null;
+      const phoneNumberCanonical = firstString(record.phoneNumberCanonical);
+      if (!phoneNumberCanonical) return null;
+      return {
+        phoneNumberCanonical,
+        phoneNumberDisplay:
+          firstString(record.phoneNumberDisplay) ?? formatPhoneInput(phoneNumberCanonical),
+        invitedAt: normalizeDate(record.invitedAt),
+        invitedByUserId: firstString(record.invitedByUserId) ?? null
+      } as CoHostInviteRecord;
+    })
+    .filter((entry): entry is CoHostInviteRecord => Boolean(entry));
+}
+
 function toDetailFromFirestore(id: string, data: Record<string, unknown>): TailgateDetail {
   const hostId = firstString(data.hostId, data.hostUserId, data.ownerId) ?? "";
   const hostName = firstString(data.hostName, data.displayName) ?? "Host";
@@ -995,6 +1031,7 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     coHostIds: Array.isArray(data.coHostIds)
       ? data.coHostIds.filter((value): value is string => typeof value === "string")
       : [],
+    coHostInvites: resolveCoHostInvites(data.coHostInvites),
     startDateTime,
     locationRaw: data.location,
     locationSummary:
@@ -1053,6 +1090,7 @@ function toDetailFromMock(event: TailgateEvent): TailgateDetail {
     hostId: event.hostUserId,
     hostName: "Host",
     coHostIds: [],
+    coHostInvites: [],
     startDateTime: event.startDateTime,
     locationRaw: event.locationSummary,
     locationSummary: event.locationSummary,
@@ -1192,6 +1230,13 @@ export default function TailgateDetails() {
   const [hostBroadcastSending, setHostBroadcastSending] = useState(false);
   const [hostBroadcastFeedback, setHostBroadcastFeedback] =
     useState<HostBroadcastFeedback | null>(null);
+  const [coHostPhoneDraft, setCoHostPhoneDraft] = useState("");
+  const [coHostFeedback, setCoHostFeedback] = useState<HostBroadcastFeedback | null>(null);
+  const [coHostMutation, setCoHostMutation] = useState<{
+    id: string;
+    action: "add" | "remove";
+  } | null>(null);
+  const [coHostProfiles, setCoHostProfiles] = useState<Record<string, CoHostProfile>>({});
   const [isContactHostComposerOpen, setIsContactHostComposerOpen] = useState(false);
   const [contactHostMessage, setContactHostMessage] = useState("");
   const [contactHostSending, setContactHostSending] = useState(false);
@@ -1689,6 +1734,14 @@ export default function TailgateDetails() {
       "contactEventHost"
     );
   }, []);
+  const addTailgateCoHost = useMemo(() => {
+    if (!firebaseFunctions) return null;
+    return httpsCallable(firebaseFunctions, "addTailgateCoHost");
+  }, []);
+  const removeTailgateCoHost = useMemo(() => {
+    if (!firebaseFunctions) return null;
+    return httpsCallable(firebaseFunctions, "removeTailgateCoHost");
+  }, []);
 
   const buildInlineEditDraft = (value: TailgateDetail): InlineEditDraft => {
     const start = value.startDateTime ?? value.eventTargetTime ?? new Date();
@@ -1753,10 +1806,74 @@ export default function TailgateDetails() {
     setHostBroadcastMessage("");
     setHostBroadcastSending(false);
     setHostBroadcastFeedback(null);
+    setCoHostPhoneDraft("");
+    setCoHostFeedback(null);
+    setCoHostMutation(null);
+    setCoHostProfiles({});
     setIsCancelTailgateModalOpen(false);
     setCancelTailgateSubmitting(false);
     setCancelTailgateFeedback(null);
   }, [detail?.id]);
+
+  useEffect(() => {
+    if (!detail || !db) {
+      setCoHostProfiles({});
+      return;
+    }
+    const firestore = db;
+
+    const coHostIds = detail.coHostIds.filter((value) => value !== detail.hostId);
+    if (coHostIds.length === 0) {
+      setCoHostProfiles({});
+      return;
+    }
+
+    let cancelled = false;
+    const loadProfiles = async () => {
+      try {
+        const entries = await Promise.all(
+          coHostIds.map(async (uid) => {
+            try {
+              const snapshot = await getDoc(doc(firestore, "users", uid));
+              const data = snapshot.exists() ? (snapshot.data() as Record<string, unknown>) : {};
+              return [
+                uid,
+                {
+                  userId: uid,
+                  displayName:
+                    firstString(data.displayName, data.fullName, data.name) ?? "Co-host",
+                  phone: firstString(data.phoneNumber, data.phone) ?? null
+                } satisfies CoHostProfile
+              ] as const;
+            } catch (error) {
+              console.error("Failed loading co-host profile", uid, error);
+              return [
+                uid,
+                {
+                  userId: uid,
+                  displayName: "Co-host",
+                  phone: null
+                } satisfies CoHostProfile
+              ] as const;
+            }
+          })
+        );
+        if (!cancelled) {
+          setCoHostProfiles(Object.fromEntries(entries));
+        }
+      } catch (error) {
+        console.error("Failed loading co-host profiles", error);
+        if (!cancelled) {
+          setCoHostProfiles({});
+        }
+      }
+    };
+
+    void loadProfiles();
+    return () => {
+      cancelled = true;
+    };
+  }, [detail, detail?.coHostIds, detail?.hostId]);
 
   useEffect(() => {
     if (status !== "cancelled") return;
@@ -2362,11 +2479,15 @@ export default function TailgateDetails() {
   ).length;
   const hostBroadcastCharacterCount = hostBroadcastMessage.length;
   const canSendHostBroadcast =
-    isEventHost &&
+    isHostUser &&
     hostBroadcastMessage.trim().length > 0 &&
     hostBroadcastCharacterCount <= MAX_HOST_BROADCAST_MESSAGE_LENGTH &&
     !hostBroadcastSending &&
     Boolean(sendHostTextToAttendees);
+  const canManageCoHosts =
+    isEventHost && detail?.visibilityType === "open_paid" && status !== "cancelled";
+  const activeCoHostIds = detail?.coHostIds.filter((value) => value !== detail.hostId) ?? [];
+  const pendingCoHostInvites = detail?.coHostInvites ?? [];
   useEffect(() => {
     setTicketQuantity((current) =>
       Math.max(1, Math.min(current, maxSelectableQuantity))
@@ -3634,10 +3755,10 @@ export default function TailgateDetails() {
 
   const sendHostBroadcastMessage = async () => {
     if (!detail) return;
-    if (!isEventHost) {
+    if (!isHostUser) {
       setHostBroadcastFeedback({
         tone: "error",
-        text: "Only the host can message attendees."
+        text: "Only the host or a co-host can message attendees."
       });
       return;
     }
@@ -3742,7 +3863,7 @@ export default function TailgateDetails() {
       ) {
         setHostBroadcastFeedback({
           tone: "error",
-          text: "Only the host can message attendees."
+          text: "Only the host or a co-host can message attendees."
         });
       } else if (
         combinedError.includes("invalid-argument") ||
@@ -3761,6 +3882,119 @@ export default function TailgateDetails() {
       }
     } finally {
       setHostBroadcastSending(false);
+    }
+  };
+
+  const addCoHostByPhone = async () => {
+    if (!detail) return;
+    if (!isEventHost) {
+      setCoHostFeedback({
+        tone: "error",
+        text: "Only the host can manage co-hosts."
+      });
+      return;
+    }
+    if (!addTailgateCoHost) {
+      setCoHostFeedback({
+        tone: "error",
+        text: "Co-host tools are unavailable in this environment."
+      });
+      return;
+    }
+
+    const phone = formatPhoneInput(coHostPhoneDraft);
+    const digits = toPhoneDigits(phone);
+    if (digits.length !== 10) {
+      setCoHostFeedback({
+        tone: "error",
+        text: "Enter a valid 10-digit phone number."
+      });
+      return;
+    }
+
+    setCoHostMutation({ id: digits, action: "add" });
+    setCoHostFeedback(null);
+    try {
+      const result = await addTailgateCoHost({
+        tailgateId: detail.id,
+        phoneNumber: phone
+      });
+      const response = (result.data ?? {}) as {
+        accountLinked?: boolean;
+        textSent?: boolean;
+      };
+      setCoHostPhoneDraft("");
+      setCoHostFeedback({
+        tone: "success",
+        text: response.accountLinked
+          ? response.textSent === false
+            ? "Co-host added. Text delivery was unavailable."
+            : "Co-host added and text sent."
+          : response.textSent === false
+          ? "Pending co-host added. They need a TailgateTime account on this number."
+          : "Co-host text sent. They need a TailgateTime account on this number to access tools."
+      });
+    } catch (error) {
+      const message = errorMessageValue(error);
+      if (message.includes("not_authorized")) {
+        setCoHostFeedback({ tone: "error", text: "Only the host can manage co-hosts." });
+      } else if (message.includes("invalid_phone")) {
+        setCoHostFeedback({ tone: "error", text: "Enter a valid 10-digit phone number." });
+      } else if (message.includes("invalid_cohost")) {
+        setCoHostFeedback({ tone: "error", text: "You can't add the host as a co-host." });
+      } else if (message.includes("cohost_exists")) {
+        setCoHostFeedback({ tone: "error", text: "That co-host is already added." });
+      } else {
+        setCoHostFeedback({ tone: "error", text: "Unable to add co-host right now." });
+      }
+    } finally {
+      setCoHostMutation(null);
+    }
+  };
+
+  const removeCoHostEntry = async (params: { userId?: string; phoneNumber?: string }) => {
+    if (!detail) return;
+    if (!isEventHost) {
+      setCoHostFeedback({
+        tone: "error",
+        text: "Only the host can manage co-hosts."
+      });
+      return;
+    }
+    if (!removeTailgateCoHost) {
+      setCoHostFeedback({
+        tone: "error",
+        text: "Co-host tools are unavailable in this environment."
+      });
+      return;
+    }
+
+    const mutationId = params.userId ?? params.phoneNumber ?? "";
+    if (!mutationId) {
+      return;
+    }
+
+    setCoHostMutation({ id: mutationId, action: "remove" });
+    setCoHostFeedback(null);
+    try {
+      await removeTailgateCoHost({
+        tailgateId: detail.id,
+        ...(params.userId ? { coHostUserId: params.userId } : {}),
+        ...(params.phoneNumber ? { phoneNumber: params.phoneNumber } : {})
+      });
+      setCoHostFeedback({
+        tone: "success",
+        text: params.userId ? "Co-host removed." : "Pending co-host removed."
+      });
+    } catch (error) {
+      const message = errorMessageValue(error);
+      if (message.includes("not_authorized")) {
+        setCoHostFeedback({ tone: "error", text: "Only the host can manage co-hosts." });
+      } else {
+        setCoHostFeedback({ tone: "error", text: "Unable to remove co-host right now." });
+      }
+    } finally {
+      setCoHostMutation(null);
     }
   };
 
@@ -4254,7 +4488,7 @@ export default function TailgateDetails() {
                         <small>Post updates and keep everyone synced in real time.</small>
                       </span>
                     </button>
-                    {isEventHost ? (
+                    {isHostUser ? (
                       <button
                         type="button"
                         className={`tailgate-command-action-card${
@@ -4294,21 +4528,7 @@ export default function TailgateDetails() {
                       </span>
                     </button>
                   </div>
-                  <button
-                    type="button"
-                    className="tailgate-command-danger-button"
-                    onClick={openCancelTailgateModal}
-                    disabled={!canCancelTailgate}
-                  >
-                    {status === "cancelled"
-                      ? "Tailgate cancelled"
-                      : hasEventStarted
-                      ? "Cancellation unavailable"
-                      : cancelTailgateSubmitting
-                      ? "Cancelling..."
-                      : "Cancel tailgate"}
-                  </button>
-                  {isEventHost && isHostBroadcastComposerOpen ? (
+                  {isHostUser && isHostBroadcastComposerOpen ? (
                     <div className="tailgate-details-host-broadcast tailgate-details-host-contact">
                       <label className="input-group" htmlFor="host-broadcast-message">
                         <span className="input-label">Text attendees</span>
@@ -4363,6 +4583,176 @@ export default function TailgateDetails() {
                       ) : null}
                     </div>
                   ) : null}
+                  {canManageCoHosts || activeCoHostIds.length > 0 || pendingCoHostInvites.length > 0 ? (
+                    <div className="tailgate-command-subsection">
+                      <div className="tailgate-command-cohost-header">
+                        <div>
+                          <h3>Co-hosts</h3>
+                          <p>
+                            {activeCoHostIds.length > 0 || pendingCoHostInvites.length > 0
+                              ? `${activeCoHostIds.length} active${
+                                  pendingCoHostInvites.length > 0
+                                    ? ` · ${pendingCoHostInvites.length} pending`
+                                    : ""
+                                }`
+                              : "No co-hosts yet"}
+                          </p>
+                        </div>
+                      </div>
+                      {activeCoHostIds.length === 0 && pendingCoHostInvites.length === 0 ? (
+                        <p className="tailgate-command-cohost-empty">
+                          Add co-hosts by phone so they can help manage the event and check in
+                          tickets.
+                        </p>
+                      ) : null}
+                      {activeCoHostIds.length > 0 ? (
+                        <div className="tailgate-command-cohost-list">
+                          {activeCoHostIds.map((uid) => {
+                            const profile = coHostProfiles[uid];
+                            const displayName = profile?.displayName?.trim() || "Co-host";
+                            return (
+                              <div key={uid} className="tailgate-command-cohost-row">
+                                <div className="tailgate-command-cohost-avatar" aria-hidden="true">
+                                  {displayName.charAt(0).toUpperCase()}
+                                </div>
+                                <div className="tailgate-command-cohost-copy">
+                                  <strong>{displayName}</strong>
+                                  <span>{profile?.phone?.trim() || "TailgateTime account linked"}</span>
+                                </div>
+                                {canManageCoHosts ? (
+                                  <button
+                                    type="button"
+                                    className="tailgate-command-cohost-remove"
+                                    onClick={() => void removeCoHostEntry({ userId: uid })}
+                                    disabled={
+                                      coHostMutation?.id === uid &&
+                                      coHostMutation.action === "remove"
+                                    }
+                                  >
+                                    {coHostMutation?.id === uid &&
+                                    coHostMutation.action === "remove"
+                                      ? "Removing..."
+                                      : "Remove"}
+                                  </button>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                      {pendingCoHostInvites.length > 0 ? (
+                        <div className="tailgate-command-cohost-list">
+                          {pendingCoHostInvites.map((invite) => (
+                            <div
+                              key={invite.phoneNumberCanonical}
+                              className="tailgate-command-cohost-row is-pending"
+                            >
+                              <div className="tailgate-command-cohost-avatar" aria-hidden="true">
+                                ?
+                              </div>
+                              <div className="tailgate-command-cohost-copy">
+                                <strong>
+                                  {invite.phoneNumberDisplay ||
+                                    formatPhoneInput(invite.phoneNumberCanonical)}
+                                </strong>
+                                <span>
+                                  Create a TailgateTime account with this phone number to get
+                                  access.
+                                </span>
+                              </div>
+                              {canManageCoHosts ? (
+                                <button
+                                  type="button"
+                                  className="tailgate-command-cohost-remove"
+                                  onClick={() =>
+                                    void removeCoHostEntry({
+                                      phoneNumber: invite.phoneNumberCanonical
+                                    })
+                                  }
+                                  disabled={
+                                    coHostMutation?.id === invite.phoneNumberCanonical &&
+                                    coHostMutation.action === "remove"
+                                  }
+                                >
+                                  {coHostMutation?.id === invite.phoneNumberCanonical &&
+                                  coHostMutation.action === "remove"
+                                    ? "Removing..."
+                                    : "Remove"}
+                                </button>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {canManageCoHosts ? (
+                        <div className="tailgate-command-cohost-compose">
+                          <div className="tailgate-command-cohost-compose-copy">
+                            <h4>Add by phone</h4>
+                            <p>
+                              <strong>{hostDisplayName}</strong> has added you as a co-host for{" "}
+                              <strong>{detail.eventName}</strong>. You can now assist with checking
+                              in guest tickets.
+                            </p>
+                            <p>
+                              If this phone number is not tied to a TailgateTime account yet, they
+                              will need to sign up with the same number before access is granted.
+                            </p>
+                          </div>
+                          <div className="tailgate-command-cohost-compose-row">
+                            <input
+                              className="text-input"
+                              type="tel"
+                              inputMode="tel"
+                              value={coHostPhoneDraft}
+                              onChange={(event) =>
+                                setCoHostPhoneDraft(formatPhoneInput(event.target.value))
+                              }
+                              placeholder="(555) 555-5555"
+                              disabled={Boolean(coHostMutation)}
+                            />
+                            <button
+                              type="button"
+                              className="primary-button"
+                              onClick={() => void addCoHostByPhone()}
+                              disabled={
+                                toPhoneDigits(coHostPhoneDraft).length !== 10 ||
+                                (coHostMutation?.id === toPhoneDigits(coHostPhoneDraft) &&
+                                  coHostMutation.action === "add")
+                              }
+                            >
+                              {coHostMutation?.id === toPhoneDigits(coHostPhoneDraft) &&
+                              coHostMutation.action === "add"
+                                ? "Sending..."
+                                : "Text co-host"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                      {coHostFeedback?.tone === "success" ? (
+                        <p className="tailgate-details-inline-editor-success">{coHostFeedback.text}</p>
+                      ) : null}
+                      {coHostFeedback?.tone === "info" ? (
+                        <p className="meta-muted">{coHostFeedback.text}</p>
+                      ) : null}
+                      {coHostFeedback?.tone === "error" ? (
+                        <p className="tailgate-details-ticket-error">{coHostFeedback.text}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="tailgate-command-danger-button"
+                    onClick={openCancelTailgateModal}
+                    disabled={!canCancelTailgate}
+                  >
+                    {status === "cancelled"
+                      ? "Tailgate cancelled"
+                      : hasEventStarted
+                      ? "Cancellation unavailable"
+                      : cancelTailgateSubmitting
+                      ? "Cancelling..."
+                      : "Cancel tailgate"}
+                  </button>
                 </section>
 
                 <section className="tailgate-command-panel">

@@ -5,7 +5,7 @@ import { TailgateEvent } from "../types";
 import { mockTailgates } from "../data/mockTailgates";
 import { debugAuthLog } from "../utils/debug";
 
-export type DashboardRelationship = "hosting" | "attending";
+export type DashboardRelationship = "hosting" | "co_hosting" | "attending";
 
 export type DashboardTailgate = TailgateEvent & {
   relationship: DashboardRelationship;
@@ -413,7 +413,7 @@ function resolveRelationship(
   if (hostMatches) return "hosting";
 
   if (Array.isArray(data.coHostIds) && data.coHostIds.some((value) => value === userId)) {
-    return "hosting";
+    return "co_hosting";
   }
 
   const attendees = Array.isArray(data.attendees) ? data.attendees : [];

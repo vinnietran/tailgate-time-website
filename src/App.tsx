@@ -1,23 +1,35 @@
+import { Suspense, lazy, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./hooks/useAuth";
 import { ProtectedRoute } from "./components/ProtectedRoute";
-import HostDashboard from "./pages/HostDashboard";
-import CreateTailgateWizard from "./pages/CreateTailgateWizard";
-import AccountPayouts from "./pages/AccountPayouts";
-import AccountPayoutHistory from "./pages/AccountPayoutHistory";
-import ChangePassword from "./pages/ChangePassword";
+import { AdminRoute } from "./components/AdminRoute";
 import Login from "./pages/Login";
-import TailgateDetails from "./pages/TailgateDetails";
-import TailgateEdit from "./pages/TailgateEdit";
-import TailgateCheckin from "./pages/TailgateCheckin";
-import CheckinHub from "./pages/CheckinHub";
-import Messages from "./pages/Messages";
-import NotificationPreferences from "./pages/NotificationPreferences";
-import DiscoverTailgates from "./pages/DiscoverTailgates";
 import Home from "./pages/Home";
-import EventFeed from "./pages/EventFeed";
-import UserGuide from "./pages/UserGuide";
 import { DialogProvider } from "./hooks/useDialog";
+
+const HostDashboard = lazy(() => import("./pages/HostDashboard"));
+const CreateTailgateWizard = lazy(() => import("./pages/CreateTailgateWizard"));
+const AccountPayouts = lazy(() => import("./pages/AccountPayouts"));
+const AccountPayoutHistory = lazy(() => import("./pages/AccountPayoutHistory"));
+const ChangePassword = lazy(() => import("./pages/ChangePassword"));
+const TailgateDetails = lazy(() => import("./pages/TailgateDetails"));
+const TailgateEdit = lazy(() => import("./pages/TailgateEdit"));
+const TailgateCheckin = lazy(() => import("./pages/TailgateCheckin"));
+const CheckinHub = lazy(() => import("./pages/CheckinHub"));
+const Messages = lazy(() => import("./pages/Messages"));
+const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
+const DiscoverTailgates = lazy(() => import("./pages/DiscoverTailgates"));
+const EventFeed = lazy(() => import("./pages/EventFeed"));
+const UserGuide = lazy(() => import("./pages/UserGuide"));
+const AdminSpotlight = lazy(() => import("./pages/AdminSpotlight"));
+
+function RouteFallback() {
+  return <div className="page-shell" aria-busy="true" />;
+}
+
+function withSuspense(element: ReactNode) {
+  return <Suspense fallback={<RouteFallback />}>{element}</Suspense>;
+}
 
 export default function App() {
   return (
@@ -29,97 +41,105 @@ export default function App() {
           <Route path="/signup" element={<Navigate to="/login?mode=signup" replace />} />
           <Route
             path="/dashboard"
-            element={
+            element={withSuspense(
               <ProtectedRoute>
                 <HostDashboard />
               </ProtectedRoute>
-            }
+            )}
           />
           <Route
             path="/tailgates/new"
-            element={
+            element={withSuspense(
               <ProtectedRoute>
                 <CreateTailgateWizard />
               </ProtectedRoute>
-            }
+            )}
           />
           <Route
             path="/account"
-            element={
+            element={withSuspense(
               <ProtectedRoute>
                 <AccountPayouts />
               </ProtectedRoute>
-            }
+            )}
           />
           <Route
             path="/account/payout-history"
-            element={
+            element={withSuspense(
               <ProtectedRoute>
                 <AccountPayoutHistory />
               </ProtectedRoute>
-            }
+            )}
           />
           <Route
             path="/account/notifications"
-            element={
+            element={withSuspense(
               <ProtectedRoute>
                 <NotificationPreferences />
               </ProtectedRoute>
-            }
+            )}
           />
           <Route
             path="/account/change-password"
-            element={
+            element={withSuspense(
               <ProtectedRoute>
                 <ChangePassword />
               </ProtectedRoute>
-            }
+            )}
           />
           <Route
             path="/tailgates/:id"
-            element={<TailgateDetails />}
+            element={withSuspense(<TailgateDetails />)}
           />
           <Route
             path="/tailgates/:id/edit"
-            element={
+            element={withSuspense(
               <ProtectedRoute>
                 <TailgateEdit />
               </ProtectedRoute>
-            }
+            )}
           />
           <Route
             path="/tailgates/:id/checkin"
-            element={
+            element={withSuspense(
               <ProtectedRoute>
                 <TailgateCheckin />
               </ProtectedRoute>
-            }
+            )}
           />
           <Route
             path="/tailgates/:id/feed"
-            element={<EventFeed />}
+            element={withSuspense(<EventFeed />)}
           />
           <Route
             path="/checkin"
-            element={
+            element={withSuspense(
               <ProtectedRoute>
                 <CheckinHub />
               </ProtectedRoute>
-            }
+            )}
           />
           <Route
             path="/messages"
-            element={
+            element={withSuspense(
               <ProtectedRoute>
                 <Messages />
               </ProtectedRoute>
-            }
+            )}
           />
           <Route
             path="/discover"
-            element={<DiscoverTailgates />}
+            element={withSuspense(<DiscoverTailgates />)}
           />
-          <Route path="/user-guide" element={<UserGuide />} />
+          <Route path="/user-guide" element={withSuspense(<UserGuide />)} />
+          <Route
+            path="/admin/spotlight"
+            element={withSuspense(
+              <AdminRoute>
+                <AdminSpotlight />
+              </AdminRoute>
+            )}
+          />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </DialogProvider>

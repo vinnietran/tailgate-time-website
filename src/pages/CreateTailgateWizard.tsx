@@ -589,6 +589,7 @@ export default function CreateTailgateWizard() {
   const [hostPlatformFeePercent, setHostPlatformFeePercent] = useState(
     STANDARD_PLATFORM_FEE_PERCENT
   );
+  const [hostPromoEndsAtMs, setHostPromoEndsAtMs] = useState<number | null>(null);
   const [payoutModalOpen, setPayoutModalOpen] = useState(false);
   const [paidFeeModalOpen, setPaidFeeModalOpen] = useState(false);
   const [payoutSetupLoading, setPayoutSetupLoading] = useState(false);
@@ -643,6 +644,13 @@ export default function CreateTailgateWizard() {
   const [coverImageDrafts, setCoverImageDrafts] = useState<CoverImageDraft[]>([]);
   const coverImageInputRef = useRef<HTMLInputElement | null>(null);
   const coverImageDraftsRef = useRef<CoverImageDraft[]>([]);
+  const reconcileHostPromoEligibility = useMemo(
+    () =>
+      firebaseFunctions
+        ? httpsCallable(firebaseFunctions, "reconcileHostEarlyAdopterPromoEligibility")
+        : null,
+    []
+  );
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const guestInvitesEnabled = visibilityType === "private";
@@ -721,6 +729,16 @@ export default function CreateTailgateWizard() {
       selloutTotalFee
     };
   }, [hostPlatformFeeRate, ticketCapacity, ticketPriceCents, visibilityType]);
+  const hostPromoEndsLabel = useMemo(() => {
+    if (!hostPromoEndsAtMs) {
+      return null;
+    }
+    return new Intl.DateTimeFormat("en-US", {
+      month: "long",
+      day: "numeric",
+      year: "numeric"
+    }).format(new Date(hostPromoEndsAtMs));
+  }, [hostPromoEndsAtMs]);
   const filledQuizQuestions = quizQuestions.filter(
     (question) => question.questionText.trim() !== ""
   );
@@ -740,10 +758,18 @@ export default function CreateTailgateWizard() {
       setPayoutReady(false);
       setConnectStatus("not_started");
       setHostPlatformFeePercent(STANDARD_PLATFORM_FEE_PERCENT);
+      setHostPromoEndsAtMs(null);
       return false;
     }
 
     try {
+      try {
+        if (reconcileHostPromoEligibility) {
+          await reconcileHostPromoEligibility({});
+        }
+      } catch (promoError) {
+        console.warn("[CreateTailgateWizard] Failed to reconcile promo eligibility", promoError);
+      }
       const userSnap = await getDoc(doc(db, "users", user.uid));
       const data = userSnap.exists() ? (userSnap.data() as Record<string, unknown>) : null;
       const ready = isPayoutReady(data);
@@ -751,15 +777,17 @@ export default function CreateTailgateWizard() {
       setPayoutReady(ready);
       setConnectStatus(resolveStripeConnectStatus(data));
       setHostPlatformFeePercent(feeSummary.feePercent);
+      setHostPromoEndsAtMs(feeSummary.promoEndsAtMs);
       return ready;
     } catch (error) {
       console.error("Failed to refresh Stripe payout status", error);
       setPayoutReady(false);
       setConnectStatus("not_started");
       setHostPlatformFeePercent(STANDARD_PLATFORM_FEE_PERCENT);
+      setHostPromoEndsAtMs(null);
       return false;
     }
-  }, [user?.uid]);
+  }, [reconcileHostPromoEligibility, user?.uid]);
 
   useEffect(() => {
     void refreshPayoutStatus();
@@ -3002,21 +3030,51 @@ export default function CreateTailgateWizard() {
                 Close
               </button>
             </div>
-            <p className="create-wizard-payout-copy">
-              TailgateTime charges a {STANDARD_PLATFORM_FEE_PERCENT}% platform fee on ticket sales
-              for paid events.
-            </p>
-            <p className="create-wizard-payout-status">
-              Your current fee for paid tailgates is {hostPlatformFeePercent}%.
-            </p>
+            {hostPlatformFeePercent < STANDARD_PLATFORM_FEE_PERCENT ? (
+              <>
+                <div className="create-wizard-promo-celebration-card">
+                  <p className="create-wizard-promo-celebration-eyebrow">
+                    Early adopter unlocked
+                  </p>
+                  <h4 className="create-wizard-promo-celebration-title">
+                    Thanks for building TailgateTime with us.
+                  </h4>
+                  <p className="create-wizard-promo-celebration-body">
+                    Your paid-event fee is currently {hostPlatformFeePercent}%.
+                  </p>
+                  {hostPromoEndsLabel ? (
+                    <p className="create-wizard-promo-celebration-meta">
+                      Locked in through {hostPromoEndsLabel}.
+                    </p>
+                  ) : null}
+                </div>
+                <p className="create-wizard-payout-copy">
+                  You are currently on the early-adopter rate for paid events.
+                </p>
+                <p className="create-wizard-payout-status">
+                  Standard host fee is {STANDARD_PLATFORM_FEE_PERCENT}%.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="create-wizard-payout-copy">
+                  TailgateTime charges a {STANDARD_PLATFORM_FEE_PERCENT}% platform fee on ticket
+                  sales for paid events.
+                </p>
+                <p className="create-wizard-payout-status">
+                  Your current fee for paid tailgates is {hostPlatformFeePercent}%.
+                </p>
+              </>
+            )}
             <p className="create-wizard-payout-copy">
               That TailgateTime fee includes transaction processing, payout handling, and payment
               support, so there are no separate processing charges shown to hosts here.
             </p>
             <p className="create-wizard-payout-copy">
               Early-adopter promo: hosts who sell at least {EARLY_ADOPTER_MIN_TICKETS_SOLD} tickets
-              for a qualifying event before {PROMO_CUTOFF_DISPLAY} can unlock a reduced{" "}
-              {EARLY_ADOPTER_PLATFORM_FEE_PERCENT}% fee for one year from that event date.
+              for a qualifying event before {PROMO_CUTOFF_DISPLAY} drop to{" "}
+              {EARLY_ADOPTER_PLATFORM_FEE_PERCENT}% immediately, and that rate lasts through one
+              year after the qualifying event date.
             </p>
             {paidTicketEstimate ? (
               <div className="create-wizard-fee-grid create-wizard-fee-grid-modal">

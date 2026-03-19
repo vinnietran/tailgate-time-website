@@ -6,10 +6,12 @@ import { IconCalendar, IconExternal, IconLocation } from "./Icons";
 
 export default function TailgateCard({
   event,
-  isHost
+  isHost,
+  hostLabel = "Hosting"
 }: {
   event: TailgateEvent;
   isHost?: boolean;
+  hostLabel?: string;
 }) {
   const navigate = useNavigate();
   const status = getEventStatus(event);
@@ -43,7 +45,7 @@ export default function TailgateCard({
         <div>
           <h3>{event.name}</h3>
           <div className="chip-row">
-            {isHost === true ? <span className="chip chip-live">Hosting</span> : null}
+            {isHost === true ? <span className="chip chip-live">{hostLabel}</span> : null}
             {showPaidOutChip ? <span className="chip chip-payout">Paid out</span> : null}
             <span className="chip chip-outline">{visibilityLabel}</span>
             <span className={`chip chip-status chip-${status}`}>{statusLabel}</span>

@@ -1,7 +1,15 @@
 import { expect, Locator, Page } from "@playwright/test";
 import { getApps, initializeApp } from "firebase/app";
-import { getAuth, signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { collection, getDocs, getFirestore, limit, query, where } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  getFirestore,
+  limit,
+  query,
+  where
+} from "firebase/firestore";
 
 export type QaAccount = {
   firstName: string;
@@ -15,6 +23,15 @@ export type QaAccount = {
 export type QaPaidEvent = {
   id: string;
   eventName: string;
+};
+
+export type QaTailgateAttendee = {
+  id: string;
+  token?: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  status?: string;
 };
 
 const firebaseConfig = {
@@ -149,17 +166,39 @@ export async function logout(page: Page) {
 
 export async function createTailgate(params: {
   page: Page;
-  visibilityLabel: "Invite only" | "Open (Free)";
+  visibilityLabel: "Invite only" | "Open (Free)" | "Open (Paid)";
   eventName: string;
   description: string;
   location: string;
   date: string;
   startTime: string;
   endTime: string;
+  ticketPrice?: string;
+  capacity?: string;
+  ticketSalesCutoffDays?: string;
 }) {
-  const { page, visibilityLabel, eventName, description, location, date, startTime, endTime } = params;
+  const {
+    page,
+    visibilityLabel,
+    eventName,
+    description,
+    location,
+    date,
+    startTime,
+    endTime,
+    ticketPrice = "25.00",
+    capacity = "",
+    ticketSalesCutoffDays = "0"
+  } = params;
   await page.goto("/#/tailgates/new");
   await page.getByLabel(new RegExp(visibilityLabel.replace(/[()]/g, "\\$&"), "i")).check();
+
+  if (visibilityLabel === "Open (Paid)") {
+    await page.getByLabel("Ticket Price (USD)").fill(ticketPrice);
+    await page.getByLabel("Capacity (optional)").fill(capacity);
+    await page.getByLabel("Stop selling tickets (days before)").fill(ticketSalesCutoffDays);
+  }
+
   await page.getByRole("button", { name: /next: event details/i }).click();
 
   await page.getByLabel("Tailgate Event Name").fill(eventName);
@@ -170,7 +209,7 @@ export async function createTailgate(params: {
   await page.getByRole("button", { name: /next: event location/i }).click();
 
   await page.getByLabel("Location").fill(location);
-  if (visibilityLabel === "Open (Free)") {
+  if (visibilityLabel !== "Invite only") {
     await page.getByRole("button", { name: /find on map/i }).click();
     await expect(page.getByTitle("Tailgate location preview")).toBeVisible({ timeout: 20000 });
   }
@@ -235,6 +274,33 @@ export async function selectExistingQaPaidEvent(): Promise<QaPaidEvent> {
   };
 }
 
+export async function readTailgateAttendees(eventId: string): Promise<QaTailgateAttendee[]> {
+  const db = getFirestore(getFirebaseApp());
+  const snapshot = await getDoc(doc(db, "tailgateEvents", eventId));
+
+  if (!snapshot.exists()) {
+    return [];
+  }
+
+  const data = snapshot.data() as Record<string, unknown>;
+  if (!Array.isArray(data.attendees)) {
+    return [];
+  }
+
+  return data.attendees
+    .map((entry) => (typeof entry === "object" && entry ? (entry as Record<string, unknown>) : null))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .map((entry) => ({
+      id: typeof entry.id === "string" ? entry.id : "",
+      token: typeof entry.token === "string" ? entry.token : undefined,
+      name: typeof entry.name === "string" ? entry.name : "",
+      email: typeof entry.email === "string" ? entry.email : undefined,
+      phone: typeof entry.phone === "string" ? entry.phone : undefined,
+      status: typeof entry.status === "string" ? entry.status : undefined
+    }))
+    .filter((attendee) => attendee.id.length > 0);
+}
+
 export async function expectAnyText(page: Page, values: string[], timeout = 30000) {
   const deadline = Date.now() + timeout;
 
@@ -249,14 +315,6 @@ export async function expectAnyText(page: Page, values: string[], timeout = 3000
   }
 
   throw new Error(`None of the expected texts were found: ${values.join(", ")}`);
-}
-
-async function fillIfVisible(locator: Locator, value: string) {
-  if (await locator.count()) {
-    await locator.first().fill(value);
-    return true;
-  }
-  return false;
 }
 
 async function waitForFirstVisible(page: Page, locators: Locator[], timeout = 30000) {

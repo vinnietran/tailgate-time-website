@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { join } from "path";
 import {
   completeStripeCheckout,
   createTailgate,
@@ -7,6 +8,7 @@ import {
   isQaMode,
   logout,
   makeQaAccount,
+  readTailgateAttendees,
   selectExistingQaPaidEvent,
   signIn,
   signUp
@@ -19,10 +21,16 @@ const guestAccount = makeQaAccount("guest", runId);
 
 let privateEventId = "";
 let privateEventName = "";
+let privateInviteGuestId = "";
+let privateInviteToken = "";
+let privateInviteEventId = "";
+let privateInviteEventName = "";
 let openFreeEventId = "";
 let openFreeEventName = "";
 let paidEventId = "";
 let paidEventName = "";
+let cancelEventId = "";
+let cancelEventName = "";
 
 async function ensureOpenFreeEventFixture(page: Page) {
   if (openFreeEventId) {
@@ -43,6 +51,86 @@ async function ensureOpenFreeEventFixture(page: Page) {
   });
   await page.getByRole("button", { name: "Pin location" }).click();
   await expectAnyText(page, ["Exact in-lot pin shared by host.", "Map ready"]);
+  await logout(page);
+}
+
+async function ensurePrivateInviteEventFixture(page: Page) {
+  if (privateInviteEventId && privateInviteGuestId && privateInviteToken) {
+    return;
+  }
+
+  privateInviteEventName = `Codex QA Invite Link ${runId}`;
+  await ensureSignedIn(page, hostAccount);
+  privateInviteEventId = await createTailgate({
+    page,
+    visibilityLabel: "Invite only",
+    eventName: privateInviteEventName,
+    description: "Private QA invite-link tailgate.",
+    location: "Lot 5, Stadium Drive, Pittsburgh, PA",
+    date: "2030-09-13",
+    startTime: "15:00",
+    endTime: "18:00"
+  });
+
+  await page.getByLabel("Guest name").fill(guestAccount.displayName);
+  await page.getByLabel("Phone (optional)").fill(guestAccount.phone);
+  await page.getByLabel("Email (optional)").fill(guestAccount.email);
+  await page.getByRole("button", { name: "Add guest" }).click();
+  await expectAnyText(page, ["Guest invited."]);
+
+  const attendees = await readTailgateAttendees(privateInviteEventId);
+  const invitedGuest = attendees.find(
+    (attendee) => attendee.email?.toLowerCase() === guestAccount.email.toLowerCase()
+  );
+  if (!invitedGuest?.id || !invitedGuest.token) {
+    throw new Error("Unable to find the invite-link guest record in Firestore.");
+  }
+
+  privateInviteGuestId = invitedGuest.id;
+  privateInviteToken = invitedGuest.token;
+  await logout(page);
+}
+
+async function ensurePaidEventFixture(page: Page) {
+  if (paidEventId) {
+    return;
+  }
+
+  paidEventName = `Codex QA Paid ${runId}`;
+  await ensureSignedIn(page, hostAccount);
+  paidEventId = await createTailgate({
+    page,
+    visibilityLabel: "Open (Paid)",
+    eventName: paidEventName,
+    description: "Paid QA lifecycle tailgate.",
+    location: "100 Art Rooney Ave, Pittsburgh, PA 15212",
+    date: "2030-09-16",
+    startTime: "13:00",
+    endTime: "16:00",
+    ticketPrice: "25.00",
+    capacity: "1",
+    ticketSalesCutoffDays: "0"
+  });
+  await logout(page);
+}
+
+async function ensureCancelableEventFixture(page: Page) {
+  if (cancelEventId) {
+    return;
+  }
+
+  cancelEventName = `Codex QA Cancel ${runId}`;
+  await ensureSignedIn(page, hostAccount);
+  cancelEventId = await createTailgate({
+    page,
+    visibilityLabel: "Open (Free)",
+    eventName: cancelEventName,
+    description: "Cancelable QA tailgate.",
+    location: "100 Art Rooney Ave, Pittsburgh, PA 15212",
+    date: "2030-09-18",
+    startTime: "17:00",
+    endTime: "20:00"
+  });
   await logout(page);
 }
 
@@ -135,6 +223,23 @@ test.describe("QA release flows", () => {
     await expectAnyText(page, ["You're in", "Update my count"]);
   });
 
+  test("guest can RSVP to a private tailgate through an invite link", async ({ page }) => {
+    await ensurePrivateInviteEventFixture(page);
+    await page.goto(
+      `/#/tailgates/${privateInviteEventId}?guestId=${encodeURIComponent(
+        privateInviteGuestId
+      )}&token=${encodeURIComponent(privateInviteToken)}`
+    );
+
+    await expect(page.getByText("Your RSVP")).toBeVisible({ timeout: 30000 });
+    await page.getByRole("button", { name: "Going" }).click();
+    await page.getByRole("button", { name: "Save RSVP" }).click();
+
+    await expect(page.getByText("RSVP updated to Going.")).toBeVisible({ timeout: 30000 });
+    await page.reload();
+    await expect(page.getByText("Going")).toBeVisible({ timeout: 30000 });
+  });
+
   test("guest can contact the host from event details", async ({ page }) => {
     await ensureOpenFreeEventFixture(page);
     await ensureSignedIn(page, guestAccount);
@@ -150,19 +255,51 @@ test.describe("QA release flows", () => {
     await expect(page.locator("#contact-host-message")).toHaveCount(0);
   });
 
-  test("guest can post into the event feed", async ({ page }) => {
+  test("guest can post an event feed photo", async ({ page }) => {
     await ensureOpenFreeEventFixture(page);
     await ensureSignedIn(page, guestAccount);
     await page.goto(`/#/tailgates/${openFreeEventId}`);
 
     await page.getByRole("button", { name: "Event feed" }).click();
     await page.getByPlaceholder("Share an update...").fill(`Guest QA post ${runId}`);
+    await page.locator('input[type="file"]').setInputFiles(
+      join(process.cwd(), "tests/e2e/fixtures/qa-feed-upload.svg")
+    );
+    await expect(page.getByAltText("Selected upload")).toBeVisible({ timeout: 30000 });
     await page.getByRole("button", { name: "Post" }).click();
     await expect(page.locator(".event-feed-post-text", { hasText: `Guest QA post ${runId}` })).toBeVisible({
       timeout: 30000
     });
+    await expect(page.getByAltText("Post image 1")).toBeVisible({ timeout: 30000 });
 
     await logout(page);
+  });
+
+  test("host can cancel a QA tailgate from event details", async ({ page }) => {
+    await ensureCancelableEventFixture(page);
+    await ensureSignedIn(page, hostAccount);
+    await page.goto(`/#/tailgates/${cancelEventId}`);
+
+    await page.getByRole("button", { name: "Cancel tailgate" }).click();
+    await page.getByRole("button", { name: "Confirm cancel" }).click();
+
+    await expectAnyText(page, ["Tailgate cancelled.", "Tailgate cancelled"]);
+    await page.reload();
+    await expect(page.getByText(/cancelled on/i)).toBeVisible({ timeout: 30000 });
+  });
+
+  test("host can check in tickets with invalid code handling", async ({ page }) => {
+    await ensurePaidEventFixture(page);
+    await ensureSignedIn(page, hostAccount);
+    await page.goto(`/#/tailgates/${paidEventId}/checkin`);
+
+    await expect(page.getByRole("heading", { name: "Check-in by code" })).toBeVisible({
+      timeout: 30000
+    });
+    await page.getByLabel("Ticket Code").fill("TG-INVALID");
+    await page.getByRole("button", { name: "Check in" }).click();
+
+    await expect(page.getByText("Invalid ticket code.")).toBeVisible({ timeout: 30000 });
   });
 
   test("host sees the guest list and can open attendee messaging", async ({ page }) => {
@@ -182,9 +319,8 @@ test.describe("QA release flows", () => {
   });
 
   test("guest can purchase a QA paid ticket", async ({ page }) => {
-    const paidEvent = await selectExistingQaPaidEvent();
-    paidEventId = paidEvent.id;
-    paidEventName = paidEvent.eventName;
+    await ensurePaidEventFixture(page);
+    paidEventId = paidEventId || (await selectExistingQaPaidEvent()).id;
 
     await ensureSignedIn(page, guestAccount);
     await page.goto(`/#/tailgates/${paidEventId}`);
@@ -207,6 +343,8 @@ test.describe("QA release flows", () => {
       "Payment received. Ticket confirmation may take a moment.",
       "You already have 1 ticket."
     ]);
+
+    await expectAnyText(page, ["This tailgate is sold out.", "Sold out"], 120000);
 
     await logout(page);
   });

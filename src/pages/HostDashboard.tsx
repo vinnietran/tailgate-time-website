@@ -5,34 +5,27 @@ import TopBar from "../components/TopBar";
 import TailgateCard from "../components/TailgateCard";
 import { useAuth } from "../hooks/useAuth";
 import { useDashboardTailgates } from "../hooks/useDashboardTailgates";
+import { useDashboardSpotlight } from "../hooks/useDashboardSpotlight";
 import { useUserProfile } from "../hooks/useUserProfile";
 import { formatCurrencyFromCents, formatDateTime, getFirstName } from "../utils/format";
 import { getVisibilityLabel } from "../utils/tailgate";
-import createWizardDetailsImage from "../../screenshots/create_wizard_details.png";
-import createWizardLocationImage from "../../screenshots/create_wizard_location.png";
 
 type TimeframeFilter = "upcoming" | "past";
 type QuickFilter = "all" | "hosting" | "paidOut" | "attending";
-
-type SpotlightCard = {
-  id: string;
-  badge?: string;
-  title: string;
-  description: string;
-  ctaLabel?: string;
-  to?: string;
-  imageSrc?: string;
-  art: "map" | "host" | "partner";
-};
 
 function isCancelledStatus(status?: string) {
   const raw = (status ?? "").toLowerCase();
   return raw === "cancelled" || raw === "canceled" || raw.startsWith("cancel");
 }
 
+function isHostLikeRelationship(relationship: string) {
+  return relationship === "hosting" || relationship === "co_hosting";
+}
+
 export default function HostDashboard() {
   const { user } = useAuth();
   const { profile } = useUserProfile(user?.uid);
+  const { cards: spotlightCards, error: spotlightError } = useDashboardSpotlight();
   const displayName = profile?.displayName ?? user?.displayName;
   const email = profile?.email ?? user?.email;
   const firstName = getFirstName(displayName ?? email);
@@ -48,12 +41,12 @@ export default function HostDashboard() {
 
   const quickFilterCounts = useMemo(
     () => ({
-      hosting: timeframeTailgates.filter((tailgate) => tailgate.relationship === "hosting").length,
+      hosting: timeframeTailgates.filter((tailgate) => isHostLikeRelationship(tailgate.relationship)).length,
       attending: timeframeTailgates.filter((tailgate) => tailgate.relationship === "attending")
         .length,
       paidOut: timeframeTailgates.filter(
         (tailgate) =>
-          tailgate.relationship === "hosting" &&
+          isHostLikeRelationship(tailgate.relationship) &&
           tailgate.visibilityType === "open_paid" &&
           tailgate.payoutStatus === "sent"
       ).length
@@ -65,7 +58,7 @@ export default function HostDashboard() {
     const base = timeframeTailgates;
 
     if (quickFilter === "hosting") {
-      return base.filter((tailgate) => tailgate.relationship === "hosting");
+      return base.filter((tailgate) => isHostLikeRelationship(tailgate.relationship));
     }
     if (quickFilter === "attending") {
       return base.filter((tailgate) => tailgate.relationship === "attending");
@@ -73,7 +66,7 @@ export default function HostDashboard() {
     if (quickFilter === "paidOut") {
       return base.filter(
         (tailgate) =>
-          tailgate.relationship === "hosting" &&
+          isHostLikeRelationship(tailgate.relationship) &&
           tailgate.visibilityType === "open_paid" &&
           tailgate.payoutStatus === "sent"
       );
@@ -84,39 +77,6 @@ export default function HostDashboard() {
   const toggleQuickFilter = (nextFilter: Exclude<QuickFilter, "all">) => {
     setQuickFilter((current) => (current === nextFilter ? "all" : nextFilter));
   };
-  const spotlightCards = useMemo<SpotlightCard[]>(
-    () => [
-      {
-        id: "discover",
-        title: "Find open tailgates nearby",
-        description:
-          "Explore public events around your game day location and jump in with a few taps.",
-        ctaLabel: "Discover now",
-        to: "/discover",
-        imageSrc: createWizardLocationImage,
-        art: "map"
-      },
-      {
-        id: "host",
-        title: "Host your own tailgate",
-        description:
-          "Create your event in minutes, invite your crew, and manage the full experience.",
-        ctaLabel: "Start hosting",
-        to: "/tailgates/new",
-        imageSrc: createWizardDetailsImage,
-        art: "host"
-      },
-      {
-        id: "sponsor",
-        badge: "Sponsored",
-        title: "Game day partner spotlight",
-        description:
-          "Feature sponsors and local offers right on the dashboard home experience.",
-        art: "partner"
-      }
-    ],
-    []
-  );
   const goToPreviousSpotlight = () => {
     setSpotlightIndex((current) => Math.max(0, current - 1));
   };
@@ -183,8 +143,12 @@ export default function HostDashboard() {
           <div className="dashboard-next-header">
             <h2>Your Next Tailgate</h2>
             {nextTailgate ? (
-              <span className={`chip ${nextTailgate.relationship === "hosting" ? "chip-live" : "chip-upcoming"}`}>
-                {nextTailgate.relationship === "hosting" ? "Hosting" : "Attending"}
+              <span className={`chip ${isHostLikeRelationship(nextTailgate.relationship) ? "chip-live" : "chip-upcoming"}`}>
+                {nextTailgate.relationship === "co_hosting"
+                  ? "Co-hosting"
+                  : nextTailgate.relationship === "hosting"
+                  ? "Hosting"
+                  : "Attending"}
               </span>
             ) : null}
           </div>
@@ -212,7 +176,7 @@ export default function HostDashboard() {
               <p className="dashboard-next-highlight">{nextTailgateMetric}</p>
               <div className="dashboard-next-actions">
                 <Link className="primary-button" to={`/tailgates/${nextTailgate.id}`}>
-                  {nextTailgate.relationship === "hosting"
+                  {isHostLikeRelationship(nextTailgate.relationship)
                     ? "Manage tailgate"
                     : "View tailgate"}
                 </Link>
@@ -235,6 +199,7 @@ export default function HostDashboard() {
             <h2>TailgateTime Spotlight</h2>
             <p>Features, game day tools, and partner highlights.</p>
           </div>
+          {spotlightError ? <p className="tailgate-details-ticket-error">{spotlightError}</p> : null}
           <div className="dashboard-spotlight-carousel">
             <button
               type="button"
@@ -252,29 +217,46 @@ export default function HostDashboard() {
               >
                 {spotlightCards.map((card) => (
                   <article className="dashboard-spotlight-card" key={card.id}>
-                    {card.badge ? (
-                      <span className="dashboard-spotlight-badge">{card.badge}</span>
-                    ) : null}
-                    {card.imageSrc ? (
-                      <img
-                        className="dashboard-spotlight-image"
-                        src={card.imageSrc}
-                        alt={`${card.title} preview`}
-                      />
-                    ) : (
-                      <div className={`dashboard-spotlight-art ${card.art}`} aria-hidden="true">
-                        <span />
-                        <span />
-                        <span />
+                    <div className="dashboard-spotlight-media">
+                      {card.badge ? (
+                        <span className="dashboard-spotlight-badge">{card.badge}</span>
+                      ) : null}
+                      {card.imageSrc ? (
+                        <img
+                          className="dashboard-spotlight-image"
+                          src={card.imageSrc}
+                          alt={`${card.title} preview`}
+                        />
+                      ) : (
+                        <div className={`dashboard-spotlight-art ${card.art}`} aria-hidden="true">
+                          <span />
+                          <span />
+                          <span />
+                        </div>
+                      )}
+                    </div>
+                    <div className="dashboard-spotlight-content">
+                      <div className="dashboard-spotlight-copy">
+                        <h3>{card.title}</h3>
+                        <p>{card.description}</p>
                       </div>
-                    )}
-                    <h3>{card.title}</h3>
-                    <p>{card.description}</p>
-                    {card.ctaLabel && card.to ? (
-                      <Link to={card.to} className="dashboard-spotlight-cta">
-                        {card.ctaLabel}
-                      </Link>
-                    ) : null}
+                      {card.ctaLabel && card.ctaTarget ? (
+                        card.ctaType === "external_url" ? (
+                          <a
+                            href={card.ctaTarget}
+                            className="dashboard-spotlight-cta"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {card.ctaLabel}
+                          </a>
+                        ) : card.ctaType === "route" ? (
+                          <Link to={card.ctaTarget} className="dashboard-spotlight-cta">
+                            {card.ctaLabel}
+                          </Link>
+                        ) : null
+                      ) : null}
+                    </div>
                   </article>
                 ))}
               </div>
@@ -380,7 +362,8 @@ export default function HostDashboard() {
               <TailgateCard
                 key={tailgate.id}
                 event={tailgate}
-                isHost={tailgate.relationship === "hosting"}
+                isHost={isHostLikeRelationship(tailgate.relationship)}
+                hostLabel={tailgate.relationship === "co_hosting" ? "Co-hosting" : "Hosting"}
               />
             ))}
           </div>

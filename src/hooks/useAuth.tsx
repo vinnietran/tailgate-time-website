@@ -1,22 +1,50 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, User } from "firebase/auth";
-import { auth } from "../lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
+import { auth, db } from "../lib/firebase";
 import { mockUser } from "../data/mockUser";
 import { debugAuthLog } from "../utils/debug";
 
 type AuthContextValue = {
   user: User | null;
   loading: boolean;
+  isAdmin: boolean;
+  adminLoading: boolean;
+  refreshAdminClaim: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue>({
   user: null,
-  loading: true
+  loading: true,
+  isAdmin: false,
+  adminLoading: true,
+  refreshAdminClaim: async () => {}
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminLoading, setAdminLoading] = useState(true);
+
+  const loadAdminAccess = useCallback(async (currentUser: User | null) => {
+    if (!currentUser || !db) {
+      setIsAdmin(false);
+      setAdminLoading(false);
+      return;
+    }
+
+    setAdminLoading(true);
+    try {
+      const snapshot = await getDoc(doc(db, "users", currentUser.uid));
+      setIsAdmin(snapshot.exists() && snapshot.data()?.admin === true);
+    } catch (error) {
+      console.error("Failed to resolve admin access", error);
+      setIsAdmin(false);
+    } finally {
+      setAdminLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     debugAuthLog("init", {
@@ -30,12 +58,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         debugAuthLog("fallback:mock-user", { uid: mockUser.uid });
       }
       setLoading(false);
+      setAdminLoading(false);
       return;
     }
 
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setLoading(false);
+      void loadAdminAccess(currentUser);
       debugAuthLog("state-changed", {
         uid: currentUser?.uid ?? null,
         email: currentUser?.email ?? null
@@ -43,9 +73,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [loadAdminAccess]);
 
-  const value = useMemo(() => ({ user, loading }), [user, loading]);
+  const refreshAdminClaim = useCallback(async () => {
+    await loadAdminAccess(auth?.currentUser ?? null);
+  }, [loadAdminAccess]);
+
+  const value = useMemo(
+    () => ({ user, loading, isAdmin, adminLoading, refreshAdminClaim }),
+    [adminLoading, isAdmin, loading, refreshAdminClaim, user]
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

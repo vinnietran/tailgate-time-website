@@ -8,7 +8,7 @@ import { auth } from "../lib/firebase";
 
 export default function HeaderActions() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const unreadCount = useUnreadNotificationsCount(user?.uid);
   const [menuOpen, setMenuOpen] = useState(false);
   const [logoutPending, setLogoutPending] = useState(false);
@@ -95,6 +95,19 @@ export default function HeaderActions() {
               >
                 View profile
               </button>
+              {isAdmin ? (
+                <button
+                  type="button"
+                  className="account-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    navigate("/admin/spotlight");
+                  }}
+                >
+                  Admin console
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="account-menu-item danger"

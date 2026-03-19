@@ -12,14 +12,21 @@ type TimestampLike = {
 };
 
 type PromoEligibilityLike = {
+  qualifyingEventId?: unknown;
+  qualifyingEventDate?: unknown;
   startsAt?: unknown;
   endsAt?: unknown;
   reducedFeePercent?: unknown;
+  status?: unknown;
+  revokedAt?: unknown;
+  revokedReason?: unknown;
 };
 
 type UserLike = {
   promoTailgateFeeEligibility?: PromoEligibilityLike;
 };
+
+export type PromoEligibilityStatus = "provisional" | "active" | "revoked";
 
 function toMillis(value: unknown): number | null {
   if (!value) return null;
@@ -48,12 +55,47 @@ function toMillis(value: unknown): number | null {
   return null;
 }
 
-export function resolveHostPlatformFeeSummary(
+export function normalizePromoEligibilityStatus(
+  value: unknown
+): PromoEligibilityStatus | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "provisional" ||
+    normalized === "active" ||
+    normalized === "revoked"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+export function hasUsablePromoEligibility(
   userData: UserLike | null | undefined,
   atMs = Date.now()
 ) {
   const eligibility = userData?.promoTailgateFeeEligibility;
   if (!eligibility) {
+    return false;
+  }
+  if (normalizePromoEligibilityStatus(eligibility.status) === "revoked") {
+    return false;
+  }
+  const endsAtMs = toMillis(eligibility.endsAt);
+  if (endsAtMs !== null && atMs >= endsAtMs) {
+    return false;
+  }
+  return true;
+}
+
+export function resolveHostPlatformFeeSummary(
+  userData: UserLike | null | undefined,
+  atMs = Date.now()
+) {
+  const eligibility = userData?.promoTailgateFeeEligibility;
+  if (!eligibility || !hasUsablePromoEligibility(userData, atMs)) {
     return {
       feePercent: STANDARD_PLATFORM_FEE_PERCENT,
       promoActive: false,
