@@ -1,0 +1,1 @@
+function c(n){const t=n.trim();return!t||!t.startsWith("/")||t.startsWith("//")?"/account":t}function i(n,t){const r=n.trim();if(!r)return r;try{const e=new URL(r);return e.searchParams.set("redirect",c(t)),e.toString()}catch{return r}}export{i as b};

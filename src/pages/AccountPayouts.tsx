@@ -4,7 +4,7 @@ import { updateProfile as updateAuthProfile } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import { doc, onSnapshot, setDoc } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import {
   IconBell,
@@ -19,6 +19,7 @@ import {
   DeleteAccountReauthRequiredError,
   deleteCurrentAccount
 } from "../services/account";
+import { buildConnectCallbackUrl } from "../utils/connectCallbacks";
 import { formatCurrencyFromCents } from "../utils/format";
 
 type StripeConnectStatus = "not_started" | "pending" | "complete" | "restricted";
@@ -76,6 +77,7 @@ function statusLabel(status: StripeConnectStatus) {
 }
 
 export default function AccountPayouts() {
+  const location = useLocation();
   const navigate = useNavigate();
   const dialog = useDialog();
   const { user } = useAuth();
@@ -124,6 +126,12 @@ export default function AccountPayouts() {
 
   const photoURL = profilePhotoOverride ?? profile?.photoURL ?? user?.photoURL ?? null;
   const profileInitial = (profileDisplayName || email || "H").slice(0, 1).toUpperCase();
+  const connectRedirectPath = `${location.pathname}${location.search}`;
+  const connectReturnUrl = buildConnectCallbackUrl(CONNECT_RETURN_URL, connectRedirectPath);
+  const connectRefreshUrl = buildConnectCallbackUrl(
+    CONNECT_REFRESH_URL,
+    connectRedirectPath
+  );
 
   useEffect(() => {
     if (!user?.uid) {
@@ -406,8 +414,8 @@ export default function AccountPayouts() {
         "createConnectOnboardingLink"
       );
       const result = await createLink({
-        returnUrl: CONNECT_RETURN_URL,
-        refreshUrl: CONNECT_REFRESH_URL
+        returnUrl: connectReturnUrl,
+        refreshUrl: connectRefreshUrl
       });
       const url = (result.data as { url?: string } | null)?.url;
       if (!url || typeof url !== "string") {

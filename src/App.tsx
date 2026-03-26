@@ -22,6 +22,7 @@ const DiscoverTailgates = lazy(() => import("./pages/DiscoverTailgates"));
 const EventFeed = lazy(() => import("./pages/EventFeed"));
 const UserGuide = lazy(() => import("./pages/UserGuide"));
 const AdminSpotlight = lazy(() => import("./pages/AdminSpotlight"));
+const AdminOps = lazy(() => import("./pages/AdminOps"));
 
 function RouteFallback() {
   return <div className="page-shell" aria-busy="true" />;
@@ -137,6 +138,14 @@ export default function App() {
             element={withSuspense(
               <AdminRoute>
                 <AdminSpotlight />
+              </AdminRoute>
+            )}
+          />
+          <Route
+            path="/admin/ops"
+            element={withSuspense(
+              <AdminRoute>
+                <AdminOps />
               </AdminRoute>
             )}
           />

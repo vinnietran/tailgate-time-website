@@ -43,7 +43,7 @@ import {
   getTailgateCrowdTag,
   getVisibilityLabel
 } from "../utils/tailgate";
-import { formatCurrencyFromCents, formatDateTime } from "../utils/format";
+import { formatCurrencyFromCents, formatDateTime, getFirstName } from "../utils/format";
 
 const MAPS_API_KEY = (
   import.meta.env.MAPS_API_KEY ??
@@ -2291,6 +2291,10 @@ export default function TailgateDetails() {
   const openFreeBringLabel =
     openFreePartySize === 1 ? "Just me" : `${openFreePartySize} people total`;
   const hostDisplayName = detail?.hostName?.trim() || "Host";
+  const publicHostDisplayName =
+    detail?.visibilityType === "open_free" || detail?.visibilityType === "open_paid"
+      ? getFirstName(hostDisplayName)
+      : hostDisplayName;
   const contactHostCharacterCount = contactHostMessage.length;
   const canSendContactHost =
     canContactHost &&
@@ -4052,7 +4056,11 @@ export default function TailgateDetails() {
       setIsContactHostComposerOpen(false);
       setContactHostFeedback({
         tone: "success",
-        text: `Email sent to ${response.hostName || hostDisplayName}.`
+        text: `Email sent to ${
+          detail?.visibilityType === "open_free" || detail?.visibilityType === "open_paid"
+            ? getFirstName(response.hostName || hostDisplayName)
+            : response.hostName || hostDisplayName
+        }.`
       });
       setContactHostMessage("");
     } catch (error) {
@@ -4977,7 +4985,7 @@ export default function TailgateDetails() {
               </p>
               <div className="tailgate-details-hero-host">
                 <span className="tailgate-details-hero-host-label">Hosted by</span>
-                <strong>{hostDisplayName}</strong>
+                <strong>{publicHostDisplayName}</strong>
               </div>
               <div className="tailgate-details-hero-actions">
                 {canOpenMaps ? (
@@ -5010,7 +5018,7 @@ export default function TailgateDetails() {
               {canContactHost && isContactHostComposerOpen ? (
                 <div className="tailgate-details-host-broadcast tailgate-details-host-contact">
                   <label className="input-group" htmlFor="contact-host-message">
-                    <span className="input-label">Email to {hostDisplayName}</span>
+                    <span className="input-label">Email to {publicHostDisplayName}</span>
                     <textarea
                       id="contact-host-message"
                       className="text-input tailgate-details-host-broadcast-input"

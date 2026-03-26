@@ -3786,6 +3786,142 @@ a {
   color: #172844;
 }
 
+.admin-console-nav {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.admin-ops-hero {
+  gap: 20px;
+}
+
+.admin-ops-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.admin-ops-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.admin-ops-metric-card {
+  border-radius: 18px;
+  padding: 16px;
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(23, 40, 68, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.admin-ops-metric-card p,
+.admin-ops-metric-card span {
+  margin: 0;
+}
+
+.admin-ops-metric-card p {
+  color: rgba(31, 49, 79, 0.7);
+  font-size: 0.84rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.admin-ops-metric-card strong {
+  color: #172844;
+  font-size: clamp(1.5rem, 2vw, 2rem);
+  line-height: 1.05;
+}
+
+.admin-ops-metric-card span {
+  color: rgba(31, 49, 79, 0.78);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.admin-ops-metric-card.is-success {
+  background: linear-gradient(180deg, rgba(234, 251, 241, 0.98), rgba(245, 255, 249, 0.98));
+  border-color: rgba(73, 167, 102, 0.18);
+}
+
+.admin-ops-metric-card.is-warning {
+  background: linear-gradient(180deg, rgba(255, 248, 228, 0.98), rgba(255, 251, 239, 0.98));
+  border-color: rgba(242, 201, 76, 0.26);
+}
+
+.admin-ops-metric-card.is-danger {
+  background: linear-gradient(180deg, rgba(255, 238, 235, 0.98), rgba(255, 246, 244, 0.98));
+  border-color: rgba(230, 104, 84, 0.2);
+}
+
+.admin-ops-list {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-ops-list-item {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(23, 40, 68, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.admin-ops-list-item.compact {
+  gap: 8px;
+}
+
+.admin-ops-list-top {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-ops-list-top h3,
+.admin-ops-list-top p,
+.admin-ops-list-note,
+.admin-ops-list-meta {
+  margin: 0;
+}
+
+.admin-ops-list-top h3 {
+  color: #172844;
+  font-size: 1rem;
+}
+
+.admin-ops-list-top p {
+  margin-top: 4px;
+  color: rgba(31, 49, 79, 0.7);
+  font-size: 0.92rem;
+}
+
+.admin-ops-list-note {
+  color: rgba(31, 49, 79, 0.84);
+  line-height: 1.5;
+}
+
+.admin-ops-list-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  color: rgba(31, 49, 79, 0.68);
+  font-size: 0.88rem;
+}
+
+.admin-ops-inline-link {
+  width: fit-content;
+  color: #173d75;
+  font-weight: 600;
+}
+
+.admin-ops-inline-link:hover {
+  text-decoration: underline;
+}
+
 .admin-console-card .section-subtitle,
 .admin-console-card .input-label {
   color: rgba(31, 49, 79, 0.72);
@@ -7260,6 +7396,11 @@ a.secondary-button {
     grid-template-columns: 1fr;
   }
 
+  .admin-ops-grid,
+  .admin-ops-metric-grid {
+    grid-template-columns: 1fr;
+  }
+
   .tailgate-host-expectations-card,
   .tailgate-host-ops-card,
   .tailgate-host-map-card,
@@ -7286,6 +7427,27 @@ a.secondary-button {
 
   .discover-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .admin-console-nav {
+    width: 100%;
+  }
+
+  .admin-console-nav .secondary-button {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+
+  .admin-ops-list-top {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-ops-list-top .chip,
+  .admin-ops-list-top strong {
+    width: fit-content;
   }
 }
 

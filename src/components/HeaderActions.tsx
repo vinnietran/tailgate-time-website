@@ -96,17 +96,30 @@ export default function HeaderActions() {
                 View profile
               </button>
               {isAdmin ? (
-                <button
-                  type="button"
-                  className="account-menu-item"
-                  role="menuitem"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    navigate("/admin/spotlight");
-                  }}
-                >
-                  Admin console
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="account-menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      navigate("/admin/ops");
+                    }}
+                  >
+                    Ops console
+                  </button>
+                  <button
+                    type="button"
+                    className="account-menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      navigate("/admin/spotlight");
+                    }}
+                  >
+                    Spotlight editor
+                  </button>
+                </>
               ) : null}
               <button
                 type="button"

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { httpsCallable } from "firebase/functions";
 import { addDoc, collection, doc, getDoc, updateDoc } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import { IconLocation } from "../components/Icons";
 import { useAuth } from "../hooks/useAuth";
@@ -15,6 +15,7 @@ import {
   resolveHostPlatformFeeSummary,
   STANDARD_PLATFORM_FEE_PERCENT
 } from "../utils/platformFees";
+import { buildConnectCallbackUrl } from "../utils/connectCallbacks";
 import { estimateHostPayout } from "../utils/tailgate";
 
 type WizardStep = {
@@ -578,8 +579,15 @@ function isPayoutReady(data: Record<string, unknown> | null) {
 }
 
 export default function CreateTailgateWizard() {
+  const location = useLocation();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const connectRedirectPath = `${location.pathname}${location.search}`;
+  const connectReturnUrl = buildConnectCallbackUrl(CONNECT_RETURN_URL, connectRedirectPath);
+  const connectRefreshUrl = buildConnectCallbackUrl(
+    CONNECT_REFRESH_URL,
+    connectRedirectPath
+  );
 
   const [stepIndex, setStepIndex] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -1345,8 +1353,8 @@ export default function CreateTailgateWizard() {
     try {
       const createLink = httpsCallable(firebaseFunctions, "createConnectOnboardingLink");
       const result = await createLink({
-        returnUrl: CONNECT_RETURN_URL,
-        refreshUrl: CONNECT_REFRESH_URL
+        returnUrl: connectReturnUrl,
+        refreshUrl: connectRefreshUrl
       });
       const url = (result.data as { url?: string } | null)?.url;
       if (!url || typeof url !== "string") {
