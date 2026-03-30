@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { collection, onSnapshot } from "firebase/firestore";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { getBlob, getDownloadURL, ref } from "firebase/storage";
 import { useNavigate } from "react-router-dom";
 import tailgateTimeLogo from "../../ttnobg.png";
@@ -46,6 +46,7 @@ type DiscoverTailgate = DiscoverTailgateRecord & {
 const DEFAULT_RADIUS_MILES = 50;
 const EARTH_RADIUS_MILES = 3958.8;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const PUBLIC_DISCOVER_VISIBILITY_TYPES = ["open_free", "open_paid"] as const;
 const MAPS_API_KEY = (
   import.meta.env.MAPS_API_KEY ??
   import.meta.env.VITE_MAPS_API_KEY ??
@@ -1015,8 +1016,13 @@ export default function DiscoverTailgates() {
     setLoadingState("initial");
     setError(null);
 
-    const unsubscribe = onSnapshot(
+    const publicTailgatesQuery = query(
       collection(db, "tailgateEvents"),
+      where("visibilityType", "in", [...PUBLIC_DISCOVER_VISIBILITY_TYPES])
+    );
+
+    const unsubscribe = onSnapshot(
+      publicTailgatesQuery,
       (snapshot) => {
         const items = snapshot.docs
           .map((doc) => toDiscoverTailgateRecord(doc.id, doc.data() as Record<string, unknown>))

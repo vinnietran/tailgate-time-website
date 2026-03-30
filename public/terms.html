@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Terms of Service | TailgateTime</title>
+  <link rel="icon" type="image/png" href="ttnobg.png" />
+  <link rel="icon" sizes="32x32" href="ttnobg.png" />
+  <link rel="icon" sizes="16x16" href="ttnobg.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static-page-shell.css" />
+  <style>
+    :root {
+      --bg: #f7f9ff;
+      --bg-soft: #eef3ff;
+      --text: #1d2f4d;
+      --muted: #5f7194;
+      --navy-strong: #1a2c47;
+      --line: #ccd7eb;
+      --card: #ffffff;
+      --shadow: 0 16px 36px rgba(28, 49, 81, 0.12);
+      --radius-xl: 24px;
+      --radius-lg: 18px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 15% 0%, rgba(247, 207, 99, 0.25), transparent 46%),
+        radial-gradient(circle at 100% 8%, rgba(122, 165, 228, 0.2), transparent 42%),
+        var(--bg);
+    }
+
+    a { color: inherit; }
+
+    .page-shell {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 18px 20px 48px;
+    }
+
+    .top-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 14px 18px;
+      background: rgba(255, 255, 255, 0.82);
+      border: 1px solid rgba(204, 215, 235, 0.9);
+      border-radius: var(--radius-lg);
+      backdrop-filter: blur(6px);
+      box-shadow: 0 10px 24px rgba(29, 47, 77, 0.08);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+      font-weight: 800;
+      letter-spacing: 0.01em;
+      color: var(--navy-strong);
+    }
+
+    .brand img {
+      width: 34px;
+      height: 34px;
+      object-fit: contain;
+    }
+
+    .top-links {
+      display: inline-flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .top-links a {
+      text-decoration: none;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.95rem;
+      padding: 6px 10px;
+      border-radius: 999px;
+      transition: color 0.2s ease, background 0.2s ease;
+    }
+
+    .top-links a:hover {
+      background: var(--bg-soft);
+      color: var(--navy-strong);
+    }
+
+    .top-links a.active {
+      background: rgba(247, 207, 99, 0.25);
+      color: var(--navy-strong);
+    }
+
+    .legal-shell {
+      margin: 28px auto 0;
+      max-width: 920px;
+    }
+
+    .legal-card {
+      background: var(--card);
+      border: 1px solid rgba(204, 215, 235, 0.85);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow);
+      padding: 28px;
+    }
+
+    .legal-card h1 {
+      margin: 0 0 10px;
+      color: var(--navy-strong);
+      font-size: clamp(1.8rem, 2.6vw, 2.4rem);
+      letter-spacing: -0.02em;
+    }
+
+    .legal-card .updated {
+      margin: 0 0 20px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .legal-card h2 {
+      margin: 22px 0 8px;
+      color: var(--navy-strong);
+      font-size: 1.15rem;
+    }
+
+    .legal-card p,
+    .legal-card li {
+      color: #2a3f61;
+      line-height: 1.65;
+    }
+
+    .legal-card ul {
+      margin: 8px 0 10px;
+      padding-left: 20px;
+    }
+
+    .footer {
+      margin-top: 22px;
+      text-align: center;
+      color: #6a7c9f;
+      font-size: 0.9rem;
+    }
+
+    .footer a {
+      color: var(--navy-strong);
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    .footer a:hover {
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    @media (max-width: 720px) {
+      .page-shell { padding: 14px 14px 34px; }
+      .top-nav { flex-direction: column; align-items: flex-start; }
+      .legal-card { padding: 18px; }
+    }
+  </style>
+</head>
+<body class="static-page">
+  <div class="page-shell">
+    <header class="public-nav-shell">
+      <div class="public-nav">
+        <a href="/" class="public-brand">
+          <img src="/ttnobg.png" alt="TailgateTime logo" />
+          <strong>TailgateTime</strong>
+        </a>
+        <nav class="public-nav-links" aria-label="Public site">
+          <a href="/">Home</a>
+          <a href="/#/release-2-0">2.0</a>
+          <a href="/#/discover">Discover</a>
+          <a href="/contact.html">Contact &amp; Support</a>
+          <a
+            href="https://www.instagram.com/tailgatetime25/"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="public-nav-social-link"
+            aria-label="TailgateTime on Instagram"
+            title="Instagram"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="5"></rect>
+              <circle cx="12" cy="12" r="4"></circle>
+              <circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none"></circle>
+            </svg>
+          </a>
+          <a
+            href="https://www.facebook.com/profile.php?id=61577940414994"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="public-nav-social-link"
+            aria-label="TailgateTime on Facebook"
+            title="Facebook"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14.5 8H17V4.7h-2.6c-3 0-4.6 1.8-4.6 4.8V12H7v3.2h2.8V20h3.4v-4.8h2.9L16.7 12h-3.5V9.9c0-1.2.5-1.9 1.8-1.9z"></path>
+            </svg>
+          </a>
+        </nav>
+        <div class="public-auth-actions">
+          <a href="/#/login?mode=login" class="public-auth-btn login">Login</a>
+          <a href="/#/login?mode=signup" class="public-auth-btn signup">Sign Up</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="legal-shell">
+      <article class="legal-card">
+        <h1>TailgateTime Terms of Service</h1>
+        <p class="updated"><strong>Effective Date:</strong> August 18, 2025<br />
+        <strong>Last Updated:</strong> March 2, 2026</p>
+
+        <p>These Terms of Service ("Terms") govern your access to and use of the TailgateTime mobile application, website, and related services (collectively, the "Service"), provided by V&amp;S Ventures LLC ("TailgateTime," "we," "our," or "us").</p>
+
+        <p>By accessing, downloading, registering, hosting an event, purchasing a ticket, or otherwise using the Service, you agree to be bound by these Terms.</p>
+
+        <p>If you do not agree, you may not use the Service.</p>
+
+        <h2>1. Nature of the Platform</h2>
+        <p>TailgateTime is a technology platform that enables users to:</p>
+        <ul>
+          <li>Create and promote tailgate events ("Hosts")</li>
+          <li>Discover, RSVP to, and purchase tickets for tailgate events ("Attendees")</li>
+          <li>Communicate and share content related to events</li>
+        </ul>
+        <p>TailgateTime is not an event organizer, promoter, venue operator, alcohol provider, security company, transportation provider, or insurer.</p>
+        <p>We do not control, supervise, or manage any event listed on the platform.</p>
+        <p>All events are organized and operated solely by independent Hosts.</p>
+
+        <h2>2. Eligibility</h2>
+        <p>You must be at least 13 years old to create an account.</p>
+        <p>You must be at least 18 years old to:</p>
+        <ul>
+          <li>Purchase tickets</li>
+          <li>Host paid events</li>
+          <li>Receive payouts</li>
+        </ul>
+        <p>If alcohol is present at an event, compliance with all age and alcohol laws is solely the responsibility of the Host and Attendees.</p>
+        <p>By using the Service, you represent that you have legal capacity to enter into these Terms.</p>
+
+        <h2>3. Accounts</h2>
+        <p>You are responsible for:</p>
+        <ul>
+          <li>Maintaining the confidentiality of your credentials</li>
+          <li>All activity under your account</li>
+          <li>Providing accurate and current information</li>
+        </ul>
+        <p>We may suspend or terminate accounts at our sole discretion.</p>
+
+        <h2>4. Open and Paid Tailgate Events</h2>
+        <h2>4.1 Host Responsibility</h2>
+        <p>Hosts are solely responsible for:</p>
+        <ul>
+          <li>Event planning and execution</li>
+          <li>Compliance with all laws and regulations</li>
+          <li>Permits and venue rules</li>
+          <li>Alcohol compliance</li>
+          <li>Security and crowd control</li>
+          <li>Insurance</li>
+          <li>Clean-up</li>
+          <li>Taxes</li>
+        </ul>
+        <p>TailgateTime assumes no responsibility for:</p>
+        <ul>
+          <li>Injuries</li>
+          <li>Property damage</li>
+          <li>Alcohol-related incidents</li>
+          <li>Arrests or citations</li>
+          <li>Venue disputes</li>
+          <li>Parking or towing</li>
+          <li>Event cancellations</li>
+        </ul>
+        <p>Hosts agree to defend and indemnify TailgateTime against claims arising from their events.</p>
+
+        <h2>4.2 Attendee Acknowledgment</h2>
+        <p>By attending an event, you acknowledge:</p>
+        <ul>
+          <li>Events may involve alcohol, grills, vehicles, crowds, and inherent risks.</li>
+          <li>You voluntarily assume all risks associated with attendance.</li>
+        </ul>
+        <p>You release TailgateTime from liability arising from participation in any event.</p>
+
+        <h2>5. Ticket Sales and Payments</h2>
+        <p>Payments are processed by third-party providers (e.g., Stripe).</p>
+        <p>TailgateTime:</p>
+        <ul>
+          <li>Does not own ticket revenue</li>
+          <li>Facilitates payment on behalf of Hosts</li>
+          <li>Does not guarantee event quality or legality</li>
+        </ul>
+        <p>Ticket sales are final unless otherwise specified by the Host or required by law.</p>
+
+        <h2>6. Refund Policy</h2>
+        <h2>6.1 General Rule</h2>
+        <p>All ticket purchases are final and non-refundable except:</p>
+        <ul>
+          <li>As stated in the event listing</li>
+          <li>As required by applicable law</li>
+        </ul>
+        <p>Platform service fees and payment processing fees are non-refundable unless required by law.</p>
+
+        <h2>6.2 Host Cancellations</h2>
+        <p>If a Host cancels an event:</p>
+        <ul>
+          <li>TailgateTime may facilitate refunds at its discretion.</li>
+          <li>Processing fees may be deducted.</li>
+        </ul>
+        <p>If the Host has already been paid, TailgateTime may:</p>
+        <ul>
+          <li>Offset future payouts</li>
+          <li>Debit the Host's connected account</li>
+          <li>Invoice the Host for refund amounts</li>
+        </ul>
+        <p>TailgateTime is not responsible for travel, lodging, or other incidental expenses.</p>
+
+        <h2>6.3 Force Majeure</h2>
+        <p>TailgateTime is not responsible for cancellations caused by:</p>
+        <ul>
+          <li>Weather</li>
+          <li>Government action</li>
+          <li>Law enforcement</li>
+          <li>Public health events</li>
+          <li>Utility failures</li>
+          <li>Acts of God</li>
+        </ul>
+        <p>Refund decisions in these cases are at the Host's discretion unless required by law.</p>
+
+        <h2>6.4 Chargebacks</h2>
+        <p>If an attendee files a chargeback:</p>
+        <ul>
+          <li>TailgateTime may provide evidence to the payment processor.</li>
+          <li>The Host is responsible for chargeback losses and associated fees.</li>
+        </ul>
+        <p>We may deduct such amounts from current or future payouts.</p>
+
+        <h2>7. Host Payout Policy</h2>
+        <h2>7.1 Payout Timing</h2>
+        <p>TailgateTime may delay payouts:</p>
+        <ul>
+          <li>Until after event completion</li>
+          <li>During risk review</li>
+          <li>For fraud investigation</li>
+        </ul>
+        <p>Funds may be held for up to 30 days or longer if necessary for risk mitigation.</p>
+
+        <h2>7.2 Reserves and Withholding</h2>
+        <p>We may establish rolling reserves or holdbacks for:</p>
+        <ul>
+          <li>New Hosts</li>
+          <li>High-value events</li>
+          <li>Elevated dispute rates</li>
+          <li>Suspicious activity</li>
+        </ul>
+
+        <h2>7.3 Payout Reversals</h2>
+        <p>If refunds or chargebacks occur after payout:</p>
+        <p>We may:</p>
+        <ul>
+          <li>Offset against future payouts</li>
+          <li>Debit the Host's connected account</li>
+          <li>Pursue recovery</li>
+        </ul>
+
+        <h2>7.4 Taxes</h2>
+        <p>Hosts are solely responsible for:</p>
+        <ul>
+          <li>Reporting income</li>
+          <li>Paying applicable taxes</li>
+        </ul>
+        <p>TailgateTime may issue required tax forms.</p>
+
+        <h2>8. Prohibited Conduct</h2>
+        <p>You may not:</p>
+        <ul>
+          <li>Use the Service for unlawful activity</li>
+          <li>Sell illegal goods</li>
+          <li>Promote violence</li>
+          <li>Harass others</li>
+          <li>Circumvent platform fees</li>
+          <li>Reverse engineer or disrupt the Service</li>
+        </ul>
+        <p>Violations may result in immediate termination.</p>
+
+        <h2>9. User Content</h2>
+        <p>You retain ownership of content you post.</p>
+        <p>You grant TailgateTime a worldwide, non-exclusive, royalty-free license to host, display, and distribute such content in connection with operating and marketing the Service.</p>
+        <p>We may remove content at our discretion.</p>
+
+        <h2>10. Disclaimers</h2>
+        <p><strong>THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE."</strong></p>
+        <p><strong>WE DISCLAIM ALL WARRANTIES, EXPRESS OR IMPLIED.</strong></p>
+        <p>We do not guarantee:</p>
+        <ul>
+          <li>Event safety</li>
+          <li>User conduct</li>
+          <li>Event legality</li>
+          <li>Payment processor availability</li>
+          <li>Continuous platform uptime</li>
+        </ul>
+
+        <h2>11. Limitation of Liability</h2>
+        <p><strong>TO THE MAXIMUM EXTENT PERMITTED BY LAW:</strong></p>
+        <p><strong>TAILGATETIME'S TOTAL LIABILITY SHALL NOT EXCEED THE GREATER OF:</strong></p>
+        <ul>
+          <li>$100 USD</li>
+          <li>THE TOTAL PLATFORM FEES YOU PAID IN THE PRIOR 12 MONTHS</li>
+        </ul>
+        <p><strong>WE ARE NOT LIABLE FOR:</strong></p>
+        <ul>
+          <li>PERSONAL INJURY</li>
+          <li>DEATH</li>
+          <li>PROPERTY DAMAGE</li>
+          <li>LOST PROFITS</li>
+          <li>INCIDENTAL OR CONSEQUENTIAL DAMAGES</li>
+        </ul>
+
+        <h2>12. Indemnification</h2>
+        <p>You agree to defend, indemnify, and hold harmless V&amp;S Ventures LLC and its affiliates from any claims arising out of:</p>
+        <ul>
+          <li>Your event</li>
+          <li>Your attendance</li>
+          <li>Your violation of law</li>
+          <li>Your violation of these Terms</li>
+        </ul>
+
+        <h2>13. No Agency or Partnership</h2>
+        <p>Nothing in these Terms creates:</p>
+        <ul>
+          <li>Agency</li>
+          <li>Joint venture</li>
+          <li>Employment</li>
+          <li>Partnership</li>
+        </ul>
+        <p>Hosts and Attendees act independently.</p>
+
+        <h2>14. Arbitration and Class Action Waiver</h2>
+        <p>Any dispute shall be resolved through binding arbitration in Pennsylvania.</p>
+        <p>You waive:</p>
+        <ul>
+          <li>Jury trial</li>
+          <li>Class action participation</li>
+          <li>Class arbitration</li>
+        </ul>
+
+        <h2>15. Governing Law</h2>
+        <p>These Terms are governed by the laws of the Commonwealth of Pennsylvania.</p>
+
+        <h2>16. Changes to Terms</h2>
+        <p>We may update these Terms at any time.</p>
+        <p>Continued use of the Service constitutes acceptance.</p>
+
+        <h2>17. Contact Information</h2>
+        <p><strong>V&amp;S Ventures LLC</strong><br />
+        <a href="mailto:team@tailgate-time.com">team@tailgate-time.com</a></p>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer-links">
+        <a href="/">Home</a>
+        <a href="/#/release-2-0">Release 2.0</a>
+        <a href="/#/discover">Discover</a>
+        <a href="/contact.html">Contact &amp; Support</a>
+        <a href="/privacy-policy.html">Privacy</a>
+        <a href="/terms.html">Terms</a>
+      </div>
+      <p class="site-footer-legal">&copy; 2026 TailgateTime. All rights reserved.</p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -22,6 +22,16 @@ export function formatCurrencyFromCents(valueCents?: number) {
   }).format(value);
 }
 
+export function formatCurrencyFromCentsExact(valueCents?: number) {
+  const value = (valueCents ?? 0) / 100;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value);
+}
+
 export function getFirstName(nameOrEmail?: string | null) {
   if (!nameOrEmail) return "Host";
   const trimmed = nameOrEmail.trim();

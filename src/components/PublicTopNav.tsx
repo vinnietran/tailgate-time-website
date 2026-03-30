@@ -20,6 +20,9 @@ export function PublicTopNav() {
           <Link to="/" className={pathname === "/" ? "active" : ""}>
             Home
           </Link>
+          <Link to="/release-2-0" className={pathname.startsWith("/release-2-0") ? "active" : ""}>
+            2.0
+          </Link>
           <Link to="/discover" className={pathname.startsWith("/discover") ? "active" : ""}>
             Discover
           </Link>

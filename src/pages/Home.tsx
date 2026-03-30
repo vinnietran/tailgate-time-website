@@ -139,6 +139,11 @@ export default function Home() {
                 <img src={playStoreBadge} alt="Get it on Google Play" />
               </a>
             </div>
+            <div className="homepage-secondary-links">
+              <Link to="/release-2-0" className="homepage-inline-link">
+                See what is new in 2.0
+              </Link>
+            </div>
           </div>
         </div>
       </section>

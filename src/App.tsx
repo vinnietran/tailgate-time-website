@@ -21,6 +21,7 @@ const NotificationPreferences = lazy(() => import("./pages/NotificationPreferenc
 const DiscoverTailgates = lazy(() => import("./pages/DiscoverTailgates"));
 const EventFeed = lazy(() => import("./pages/EventFeed"));
 const UserGuide = lazy(() => import("./pages/UserGuide"));
+const Release20 = lazy(() => import("./pages/Release20"));
 const AdminSpotlight = lazy(() => import("./pages/AdminSpotlight"));
 const AdminOps = lazy(() => import("./pages/AdminOps"));
 
@@ -132,6 +133,7 @@ export default function App() {
             path="/discover"
             element={withSuspense(<DiscoverTailgates />)}
           />
+          <Route path="/release-2-0" element={withSuspense(<Release20 />)} />
           <Route path="/user-guide" element={withSuspense(<UserGuide />)} />
           <Route
             path="/admin/spotlight"

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   addDoc,
   arrayUnion,
@@ -278,6 +278,10 @@ type TailgateDetail = {
   eventTargetTime?: Date | null;
   timelineEnabled?: boolean;
   schedulePublished?: boolean;
+  quiz?: {
+    title: string;
+    questions: QuizQuestion[];
+  } | null;
   expectations?: Partial<Record<ExpectationKey, boolean>>;
 };
 
@@ -1004,6 +1008,19 @@ function resolveCoHostInvites(value: unknown): CoHostInviteRecord[] {
     .filter((entry): entry is CoHostInviteRecord => Boolean(entry));
 }
 
+function resolveEventQuiz(data: Record<string, unknown>) {
+  const quizRecord = asRecord(data.quiz);
+  if (!quizRecord) return null;
+
+  const questions = normalizeQuizQuestions(quizRecord.questions);
+  if (questions.length === 0) return null;
+
+  return {
+    title: firstString(quizRecord.title) ?? "",
+    questions
+  };
+}
+
 function toDetailFromFirestore(id: string, data: Record<string, unknown>): TailgateDetail {
   const hostId = firstString(data.hostId, data.hostUserId, data.ownerId) ?? "";
   const hostName = firstString(data.hostName, data.displayName) ?? "Host";
@@ -1020,6 +1037,7 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     coerceNumber(data.rsvpsConfirmed) ??
     0;
   const ticketSalesCloseAt = resolveTicketSalesCloseAt(data, startDateTime);
+  const quiz = resolveEventQuiz(data);
 
   return {
     id,
@@ -1056,6 +1074,7 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
       startDateTime,
     timelineEnabled: data.timelineEnabled === true || data.schedulePublished === true,
     schedulePublished: data.schedulePublished === true,
+    quiz,
     expectations: asRecord(data.expectations) as TailgateDetail["expectations"]
   };
 }
@@ -1110,6 +1129,7 @@ function toDetailFromMock(event: TailgateEvent): TailgateDetail {
     eventTargetTime: event.startDateTime,
     timelineEnabled: false,
     schedulePublished: false,
+    quiz: null,
     expectations: {}
   };
 }
@@ -1187,6 +1207,7 @@ export default function TailgateDetails() {
   const [currentQuizQuestionIndex, setCurrentQuizQuestionIndex] = useState(0);
   const [quizErrors, setQuizErrors] = useState<Record<number, QuizQuestionError>>({});
   const [quizValidationMessage, setQuizValidationMessage] = useState<string | null>(null);
+  const [showQuizEditor, setShowQuizEditor] = useState(false);
   const [eventStartInput, setEventStartInput] = useState("09:00");
   const [activeCoverIndex, setActiveCoverIndex] = useState(0);
   const [resolvedCoverImageUrlsByRaw, setResolvedCoverImageUrlsByRaw] = useState<
@@ -1222,6 +1243,7 @@ export default function TailgateDetails() {
     phone: "",
     email: ""
   });
+  const [guestSearchQuery, setGuestSearchQuery] = useState("");
   const [guestInviteSaving, setGuestInviteSaving] = useState(false);
   const [guestInviteError, setGuestInviteError] = useState<string | null>(null);
   const [guestInviteSuccess, setGuestInviteSuccess] = useState<string | null>(null);
@@ -1639,10 +1661,13 @@ export default function TailgateDetails() {
       quizzesCollection,
       (snapshot) => {
         if (snapshot.empty) {
+          const fallbackQuestions = detail.quiz?.questions ?? [];
           setQuizDocId(null);
-          setQuizTitle("");
+          setQuizTitle(detail.quiz?.title ?? "");
           setQuizTitleError("");
-          setQuizQuestions([createEmptyQuizQuestion([])]);
+          setQuizQuestions(
+            fallbackQuestions.length > 0 ? fallbackQuestions : [createEmptyQuizQuestion([])]
+          );
           setCurrentQuizQuestionIndex(0);
           setQuizErrors({});
           setQuizValidationMessage(null);
@@ -1687,7 +1712,16 @@ export default function TailgateDetails() {
     );
 
     return () => unsubscribe();
-  }, [id, detail?.visibilityType]);
+  }, [id, detail?.visibilityType, detail?.quiz?.title, detail?.quiz?.questions.length]);
+
+  useEffect(() => {
+    if (!showQuizEditor) return;
+    quizSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [showQuizEditor]);
+
+  useEffect(() => {
+    setShowQuizEditor(false);
+  }, [detail?.id]);
 
   useEffect(() => {
     const baseEventTime = detail?.eventTargetTime ?? detail?.startDateTime;
@@ -1782,6 +1816,7 @@ export default function TailgateDetails() {
       phone: "",
       email: ""
     });
+    setGuestSearchQuery("");
     setRsvpPendingChoice(null);
     setRsvpError(null);
     setRsvpSuccess(null);
@@ -2209,6 +2244,7 @@ export default function TailgateDetails() {
       goingHeadcount: going.length + anonymousPlusGoing
     };
   }, [detail]);
+  const deferredGuestSearchQuery = useDeferredValue(guestSearchQuery.trim().toLowerCase());
 
   const filteredAttendees = useMemo(() => {
     if (!detail) return [];
@@ -2220,6 +2256,19 @@ export default function TailgateDetails() {
       return true;
     });
   }, [attendeeFilter, detail]);
+  const visibleAttendees = useMemo(() => {
+    if (!deferredGuestSearchQuery) return filteredAttendees;
+    return filteredAttendees.filter((attendee) => {
+      const haystack = [attendee.name, attendee.email, attendee.phone]
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(deferredGuestSearchQuery);
+    });
+  }, [deferredGuestSearchQuery, filteredAttendees]);
+  const attendeeSummaryLabel = `${attendeeCounts.totalHeadcount} guest${
+    attendeeCounts.totalHeadcount === 1 ? "" : "s"
+  } · ${attendeeCounts.goingHeadcount} going · ${attendeeCounts.pending} pending`;
   const inviteQueryGuestId = useMemo(() => {
     const params = new URLSearchParams(location.search);
     const value = params.get("guestId");
@@ -2475,6 +2524,9 @@ export default function TailgateDetails() {
   const canShowWhosComingSection = detail?.visibilityType === "private";
   const canManageGuestInvites = isHostUser && detail?.visibilityType === "private";
   const canManageQuiz = isHostUser && detail?.visibilityType === "private";
+  const hasSavedQuiz =
+    (detail?.quiz?.questions.length ?? 0) > 0 || quizDocId !== null;
+  const showQuizModule = canManageQuiz && (hasSavedQuiz || showQuizEditor);
   const currentQuizQuestion =
     quizQuestions[currentQuizQuestionIndex] ?? EMPTY_QUIZ_QUESTION_FALLBACK;
   const currentQuizErrors = quizErrors[currentQuizQuestionIndex] ?? {};
@@ -4472,13 +4524,19 @@ export default function TailgateDetails() {
                       <button
                         type="button"
                         className="tailgate-command-action-card"
-                        onClick={scrollToQuiz}
+                        onClick={() => {
+                          if (hasSavedQuiz) {
+                            scrollToQuiz();
+                            return;
+                          }
+                          setShowQuizEditor(true);
+                        }}
                       >
                         <span className="tailgate-command-action-icon" aria-hidden="true">
                           <IconDashboard size={16} />
                         </span>
                         <span className="tailgate-command-action-copy">
-                          <strong>{quizDocId ? "Edit quiz" : "Add quiz"}</strong>
+                          <strong>{hasSavedQuiz ? "Edit quiz" : "Add quiz"}</strong>
                           <small>Create private trivia and pregame engagement.</small>
                         </span>
                       </button>
@@ -5870,7 +5928,7 @@ export default function TailgateDetails() {
             </article>
           ) : null}
 
-          {canManageQuiz ? (
+          {showQuizModule ? (
             <article
               className="tailgate-details-card tailgate-host-dashboard-card tailgate-host-quiz-card tailgate-host-full-span"
               ref={quizSectionRef}
@@ -5879,7 +5937,9 @@ export default function TailgateDetails() {
                 <div>
                   <h2>Quiz</h2>
                   <p className="section-subtitle">
-                    Build or edit trivia for this invite-only tailgate.
+                    {hasSavedQuiz
+                      ? "Build or edit trivia for this invite-only tailgate."
+                      : "Create trivia for this invite-only tailgate."}
                   </p>
                 </div>
               </div>
@@ -6149,12 +6209,16 @@ export default function TailgateDetails() {
                 <div className="tailgate-details-attendee-invite">
                   {canManageGuestInvites ? (
                     <>
-                      <p className="tailgate-details-attendee-invite-title">Invite guest</p>
-                      <p className="tailgate-details-attendee-invite-copy">
-                        Add invitees directly from the event details screen.
-                      </p>
+                      <div className="tailgate-details-attendee-invite-header">
+                        <div>
+                          <p className="tailgate-details-attendee-invite-title">Invite guest</p>
+                          <p className="tailgate-details-attendee-invite-copy">
+                            Add invitees directly from the event details screen.
+                          </p>
+                        </div>
+                      </div>
                       <div className="tailgate-details-attendee-invite-grid">
-                        <label className="input-group">
+                        <label className="input-group tailgate-details-attendee-invite-field tailgate-details-attendee-invite-field-primary">
                           <span className="input-label">Guest name</span>
                           <input
                             className="text-input"
@@ -6168,7 +6232,7 @@ export default function TailgateDetails() {
                             placeholder="Jane Doe"
                           />
                         </label>
-                        <label className="input-group">
+                        <label className="input-group tailgate-details-attendee-invite-field">
                           <span className="input-label">Phone (optional)</span>
                           <input
                             className="text-input"
@@ -6183,7 +6247,7 @@ export default function TailgateDetails() {
                             inputMode="tel"
                           />
                         </label>
-                        <label className="input-group">
+                        <label className="input-group tailgate-details-attendee-invite-field">
                           <span className="input-label">Email (optional)</span>
                           <input
                             className="text-input"
@@ -6200,22 +6264,24 @@ export default function TailgateDetails() {
                         </label>
                       </div>
                       <div className="tailgate-details-attendee-invite-actions">
+                        <div className="tailgate-details-attendee-invite-feedback">
+                          {guestInviteError ? (
+                            <p className="tailgate-details-ticket-error">{guestInviteError}</p>
+                          ) : null}
+                          {guestInviteSuccess ? (
+                            <p className="tailgate-details-inline-editor-success">
+                              {guestInviteSuccess}
+                            </p>
+                          ) : null}
+                        </div>
                         <button
                           type="button"
-                          className="secondary-button"
+                          className="primary-button"
                           onClick={() => void addGuestInvite()}
                           disabled={guestInviteSaving}
                         >
                           {guestInviteSaving ? "Adding..." : "Add guest"}
                         </button>
-                        {guestInviteError ? (
-                          <p className="tailgate-details-ticket-error">{guestInviteError}</p>
-                        ) : null}
-                        {guestInviteSuccess ? (
-                          <p className="tailgate-details-inline-editor-success">
-                            {guestInviteSuccess}
-                          </p>
-                        ) : null}
                       </div>
                     </>
                   ) : (
@@ -6225,27 +6291,42 @@ export default function TailgateDetails() {
                   )}
                 </div>
               ) : null}
-              <div className="tailgate-details-filter-row">
-                {([
-                  { key: "All", label: `All (${attendeeCounts.totalHeadcount})` },
-                  { key: "Going", label: `Going (${attendeeCounts.goingHeadcount})` },
-                  { key: "Pending", label: `Pending (${attendeeCounts.pending})` },
-                  { key: "Not Going", label: `Not Going (${attendeeCounts.notGoing})` }
-                ] as Array<{ key: AttendeeFilterKey; label: string }>).map((filter) => (
-                  <button
-                    key={filter.key}
-                    className={`tailgate-details-filter-chip${
-                      attendeeFilter === filter.key ? " is-active" : ""
-                    }`}
-                    onClick={() => setAttendeeFilter(filter.key)}
-                  >
-                    {filter.label}
-                  </button>
-                ))}
-              </div>
-              <div className="tailgate-details-attendee-list">
-                {filteredAttendees.length > 0 ? (
-                  filteredAttendees.map((attendee) => {
+              <div className="tailgate-details-attendee-browser">
+                <div className="tailgate-details-attendee-controls">
+                  <div className="tailgate-details-attendee-toolbar">
+                    <p className="tailgate-details-attendee-summary">{attendeeSummaryLabel}</p>
+                    <label className="input-group tailgate-details-attendee-search-group">
+                      <span className="input-label">Search guests</span>
+                      <input
+                        className="text-input tailgate-details-attendee-search"
+                        value={guestSearchQuery}
+                        onChange={(event) => setGuestSearchQuery(event.target.value)}
+                        placeholder="Search by name, email, or phone"
+                      />
+                    </label>
+                  </div>
+                  <div className="tailgate-details-filter-row">
+                    {([
+                      { key: "All", label: `All (${attendeeCounts.totalHeadcount})` },
+                      { key: "Going", label: `Going (${attendeeCounts.goingHeadcount})` },
+                      { key: "Pending", label: `Pending (${attendeeCounts.pending})` },
+                      { key: "Not Going", label: `Not Going (${attendeeCounts.notGoing})` }
+                    ] as Array<{ key: AttendeeFilterKey; label: string }>).map((filter) => (
+                      <button
+                        key={filter.key}
+                        className={`tailgate-details-filter-chip${
+                          attendeeFilter === filter.key ? " is-active" : ""
+                        }`}
+                        onClick={() => setAttendeeFilter(filter.key)}
+                      >
+                        {filter.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="tailgate-details-attendee-list">
+                  {visibleAttendees.length > 0 ? (
+                    visibleAttendees.map((attendee) => {
                     const meta = attendeeStatusMeta[attendee.status];
                     const anonymousPlusCount = resolveAnonymousPlusGuests(attendee);
                     const attendeeMeta = [
@@ -6269,10 +6350,15 @@ export default function TailgateDetails() {
                         <span className={`chip ${meta.className}`}>{meta.label}</span>
                       </div>
                     );
-                  })
-                ) : (
-                  <p className="meta-muted">No attendees for this filter yet.</p>
-                )}
+                    })
+                  ) : (
+                    <p className="meta-muted">
+                      {deferredGuestSearchQuery
+                        ? "No guests match this search."
+                        : "No attendees for this filter yet."}
+                    </p>
+                  )}
+                </div>
               </div>
             </article>
           ) : null}

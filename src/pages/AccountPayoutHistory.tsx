@@ -6,7 +6,7 @@ import {
   useHostPayoutHistory
 } from "../hooks/useHostPayoutHistory";
 import { useAuth } from "../hooks/useAuth";
-import { formatCurrencyFromCents } from "../utils/format";
+import { formatCurrencyFromCentsExact } from "../utils/format";
 
 type CanonicalStatus = "succeeded" | "pending" | "failed" | "other";
 type StatusFilter = "all" | "succeeded" | "pending" | "failed";
@@ -91,11 +91,12 @@ function buildSections(items: HostPayoutHistoryItem[]): PayoutSection[] {
 }
 
 function formatPayoutAmount(valueCents: number, currency: string): string {
-  if (!Number.isFinite(valueCents)) return "$0";
+  if (!Number.isFinite(valueCents)) return "$0.00";
+  if (currency === "USD") {
+    return formatCurrencyFromCentsExact(valueCents);
+  }
   const amount = valueCents / 100;
-  const hasCents = valueCents % 100 !== 0;
-  const formatted = hasCents ? amount.toFixed(2) : amount.toFixed(0);
-  return currency === "USD" ? `$${formatted}` : `${currency} ${formatted}`;
+  return `${currency} ${amount.toFixed(2)}`;
 }
 
 export default function AccountPayoutHistory() {
@@ -171,7 +172,7 @@ export default function AccountPayoutHistory() {
             </div>
             <div className="tailgate-details-metric-card">
               <p>Total Amount</p>
-              <strong>{formatCurrencyFromCents(filteredTotalCents)}</strong>
+              <strong>{formatCurrencyFromCentsExact(filteredTotalCents)}</strong>
               <span className="tailgate-details-metric-meta">Excludes failed</span>
             </div>
           </div>

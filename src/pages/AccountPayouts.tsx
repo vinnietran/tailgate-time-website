@@ -20,7 +20,7 @@ import {
   deleteCurrentAccount
 } from "../services/account";
 import { buildConnectCallbackUrl } from "../utils/connectCallbacks";
-import { formatCurrencyFromCents } from "../utils/format";
+import { formatCurrencyFromCentsExact } from "../utils/format";
 
 type StripeConnectStatus = "not_started" | "pending" | "complete" | "restricted";
 
@@ -690,19 +690,19 @@ export default function AccountPayouts() {
                 </div>
                 <div className="tailgate-details-metric-card">
                   <p>Gross Revenue</p>
-                  <strong>{formatCurrencyFromCents(payoutSummary.grossRevenueCents)}</strong>
+                  <strong>{formatCurrencyFromCentsExact(payoutSummary.grossRevenueCents)}</strong>
                 </div>
                 <div className="tailgate-details-metric-card">
                   <p>Est. Payout</p>
-                  <strong>{formatCurrencyFromCents(payoutSummary.estPayoutCents)}</strong>
+                  <strong>{formatCurrencyFromCentsExact(payoutSummary.estPayoutCents)}</strong>
                 </div>
                 <div className="tailgate-details-metric-card">
                   <p>Pending Payout</p>
-                  <strong>{formatCurrencyFromCents(payoutSummary.pendingPayoutCents)}</strong>
+                  <strong>{formatCurrencyFromCentsExact(payoutSummary.pendingPayoutCents)}</strong>
                 </div>
                 <div className="tailgate-details-metric-card">
                   <p>Payout Sent</p>
-                  <strong>{formatCurrencyFromCents(payoutSummary.payoutSentCents)}</strong>
+                  <strong>{formatCurrencyFromCentsExact(payoutSummary.payoutSentCents)}</strong>
                 </div>
               </div>
               <div className="payouts-overview-actions">

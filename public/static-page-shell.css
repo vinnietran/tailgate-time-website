@@ -1,0 +1,202 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+.static-page .public-nav-shell {
+  position: relative;
+  z-index: 5;
+}
+
+.static-page .public-nav {
+  width: 100%;
+  min-height: 70px;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(204, 215, 235, 0.9);
+  border-radius: 18px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 10px 24px rgba(29, 47, 77, 0.08);
+}
+
+.static-page .public-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #172844;
+  text-decoration: none;
+}
+
+.static-page .public-brand img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+}
+
+.static-page .public-brand strong {
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.static-page .public-nav-links {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.static-page .public-nav-links a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: #5f7194;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+
+.static-page .public-nav-links a:hover {
+  background: #eef3ff;
+  color: #172844;
+}
+
+.static-page .public-nav-links a.active {
+  background: rgba(247, 207, 99, 0.25);
+  color: #172844;
+}
+
+.static-page .public-nav-links a.public-nav-social-link {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(95, 113, 148, 0.22);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.static-page .public-nav-links a.public-nav-social-link svg {
+  width: 16px;
+  height: 16px;
+}
+
+.static-page .public-auth-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.static-page .public-auth-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.static-page .public-auth-btn.login {
+  color: #253b60;
+  background: #eef3ff;
+  border: 1px solid rgba(37, 59, 96, 0.2);
+}
+
+.static-page .public-auth-btn.login:hover {
+  background: #e2ebff;
+}
+
+.static-page .public-auth-btn.signup {
+  color: #24334f;
+  background: linear-gradient(140deg, #ffd86f, #f5c54a);
+  border: 1px solid rgba(242, 201, 76, 0.72);
+  box-shadow: 0 8px 16px rgba(241, 195, 63, 0.3);
+}
+
+.static-page .public-auth-btn.signup:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(241, 195, 63, 0.4);
+}
+
+.static-page .site-footer {
+  position: relative;
+  z-index: 1;
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(27, 47, 79, 0.14);
+  display: grid;
+  gap: 8px;
+}
+
+.static-page .site-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.static-page .site-footer-links a {
+  color: rgba(27, 47, 79, 0.74);
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 4px 8px;
+  border-radius: 999px;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+
+.static-page .site-footer-links a:hover {
+  color: #172844;
+  background: rgba(27, 47, 79, 0.08);
+}
+
+.static-page .site-footer-legal {
+  margin: 0;
+  color: rgba(31, 49, 79, 0.62);
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 980px) {
+  .static-page .public-nav {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .static-page .public-nav-links,
+  .static-page .public-auth-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .static-page .public-nav {
+    padding: 14px;
+  }
+
+  .static-page .public-nav-links {
+    gap: 8px;
+  }
+
+  .static-page .public-auth-actions {
+    flex-wrap: wrap;
+  }
+
+  .static-page .public-auth-btn {
+    flex: 1 1 160px;
+  }
+}
