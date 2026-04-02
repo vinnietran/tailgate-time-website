@@ -287,6 +287,29 @@ export function IconWallet({ size = 20, ...props }: IconProps) {
   );
 }
 
+export function IconChartBars({ size = 20, ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...props}
+    >
+      <path d="M4 20V10" />
+      <path d="M10 20V4" />
+      <path d="M16 20v-7" />
+      <path d="M22 20v-11" />
+      <path d="M2 20h20" />
+    </svg>
+  );
+}
+
 export function IconChevronLeft({ size = 18, ...props }: IconProps) {
   return (
     <svg

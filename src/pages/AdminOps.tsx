@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import AppShell from "../components/AppShell";
+import AdminConsoleNav from "../components/AdminConsoleNav";
 import TopBar from "../components/TopBar";
 import { useAuth } from "../hooks/useAuth";
 import {
@@ -57,19 +58,6 @@ function metricToneClass(tone?: "default" | "success" | "warning" | "danger") {
   if (tone === "warning") return "is-warning";
   if (tone === "danger") return "is-danger";
   return "";
-}
-
-function AdminConsoleNav() {
-  return (
-    <div className="admin-console-nav">
-      <Link className="secondary-button" to="/admin/ops">
-        Ops dashboard
-      </Link>
-      <Link className="secondary-button" to="/admin/spotlight">
-        Spotlight editor
-      </Link>
-    </div>
-  );
 }
 
 function CheckoutAlertRow({ item }: { item: OpsPurchaseAlert }) {
@@ -169,7 +157,7 @@ export default function AdminOps() {
     useAdminOpsDashboard();
 
   return (
-    <AppShell header={<TopBar firstName={firstName} />}>
+    <AppShell header={<TopBar firstName={firstName} />} showHeaderActions={false}>
       <section className="admin-console-stack">
         <article className="tailgate-card admin-console-card admin-ops-hero">
           <div className="section-header">

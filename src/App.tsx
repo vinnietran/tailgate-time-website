@@ -24,6 +24,7 @@ const EventFeed = lazy(() => import("./pages/EventFeed"));
 const UserGuide = lazy(() => import("./pages/UserGuide"));
 const Release20 = lazy(() => import("./pages/Release20"));
 const AdminSpotlight = lazy(() => import("./pages/AdminSpotlight"));
+const AdminMetrics = lazy(() => import("./pages/AdminMetrics"));
 const AdminOps = lazy(() => import("./pages/AdminOps"));
 
 function RouteFallback() {
@@ -142,6 +143,14 @@ export default function App() {
             element={withSuspense(
               <AdminRoute>
                 <AdminSpotlight />
+              </AdminRoute>
+            )}
+          />
+          <Route
+            path="/admin/metrics"
+            element={withSuspense(
+              <AdminRoute>
+                <AdminMetrics />
               </AdminRoute>
             )}
           />

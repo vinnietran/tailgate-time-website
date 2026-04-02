@@ -4186,6 +4186,7 @@ a {
 
 .admin-console-card {
   display: grid;
+  align-content: start;
   gap: 16px;
   cursor: default;
   background:
@@ -4302,6 +4303,15 @@ a {
   flex-wrap: wrap;
 }
 
+.admin-console-nav-link {
+  text-decoration: none;
+}
+
+.admin-console-nav .primary-button,
+.admin-console-nav .secondary-button {
+  justify-content: center;
+}
+
 .admin-ops-hero {
   gap: 20px;
 }
@@ -4309,6 +4319,12 @@ a {
 .admin-ops-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.admin-metrics-insight-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 20px;
 }
 
@@ -4467,6 +4483,185 @@ a {
 .admin-console-card .secondary-button:hover {
   border-color: rgba(242, 201, 76, 0.45);
   background: rgba(242, 201, 76, 0.12);
+}
+
+.admin-metrics-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: rgba(31, 49, 79, 0.68);
+  font-size: 0.88rem;
+}
+
+.admin-metrics-range-toggle {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-metrics-range-toggle .secondary-button.active {
+  background: rgba(23, 61, 117, 0.12);
+  border-color: rgba(23, 61, 117, 0.22);
+  color: #173d75;
+}
+
+.admin-metrics-trend-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.admin-metrics-trend-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(23, 40, 68, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 254, 0.96)),
+    radial-gradient(circle at top right, rgba(127, 210, 255, 0.14), transparent 38%);
+}
+
+.admin-metrics-trend-card-header {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-metrics-trend-card-header p,
+.admin-metrics-trend-card-header strong,
+.admin-metrics-trend-card-header span,
+.admin-metrics-trend-footer span {
+  margin: 0;
+}
+
+.admin-metrics-trend-card-header p {
+  color: rgba(31, 49, 79, 0.7);
+  font-size: 0.84rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.admin-metrics-trend-card-header strong {
+  color: #172844;
+  font-size: clamp(1.4rem, 2vw, 1.9rem);
+  line-height: 1.05;
+}
+
+.admin-metrics-trend-card-header span,
+.admin-metrics-trend-footer span {
+  color: rgba(31, 49, 79, 0.72);
+  font-size: 0.9rem;
+}
+
+.admin-metrics-trend-bars {
+  height: 120px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 6px;
+  align-items: end;
+  padding-top: 8px;
+}
+
+.admin-metrics-trend-bar {
+  border-radius: 999px 999px 8px 8px;
+  background: linear-gradient(180deg, rgba(23, 61, 117, 0.96), rgba(127, 210, 255, 0.78));
+  min-height: 10px;
+}
+
+.admin-metrics-trend-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.admin-metrics-breakdown-list {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-metrics-breakdown-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(23, 40, 68, 0.08);
+}
+
+.admin-metrics-breakdown-row span,
+.admin-metrics-breakdown-row strong,
+.admin-metrics-breakdown-row small {
+  margin: 0;
+}
+
+.admin-metrics-breakdown-row span {
+  color: #172844;
+  font-weight: 600;
+}
+
+.admin-metrics-breakdown-row strong {
+  color: #172844;
+  font-size: 1rem;
+}
+
+.admin-metrics-breakdown-row small {
+  text-align: right;
+  color: rgba(31, 49, 79, 0.68);
+}
+
+.admin-metrics-detail-list {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-metrics-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(23, 40, 68, 0.08);
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.admin-metrics-detail-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.admin-metrics-detail-copy span {
+  color: #172844;
+  font-weight: 600;
+}
+
+.admin-metrics-detail-copy small {
+  color: rgba(31, 49, 79, 0.68);
+  line-height: 1.4;
+}
+
+.admin-metrics-detail-row strong {
+  color: #172844;
+  font-size: 1rem;
+  line-height: 1.1;
+  white-space: nowrap;
+  padding-top: 1px;
+}
+
+.admin-metrics-activity-card {
+  grid-column: 1 / -1;
+}
+
+.admin-metrics-note-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
 }
 
 .tailgate-host-dashboard-card .section-header {
@@ -7968,7 +8163,10 @@ a.secondary-button {
   }
 
   .admin-ops-grid,
-  .admin-ops-metric-grid {
+  .admin-ops-metric-grid,
+  .admin-metrics-insight-grid,
+  .admin-metrics-trend-grid,
+  .admin-metrics-note-grid {
     grid-template-columns: 1fr;
   }
 
@@ -8019,7 +8217,8 @@ a.secondary-button {
     width: 100%;
   }
 
-  .admin-console-nav .secondary-button {
+  .admin-console-nav .secondary-button,
+  .admin-console-nav .primary-button {
     flex: 1 1 0;
     justify-content: center;
   }
@@ -8032,6 +8231,23 @@ a.secondary-button {
   .admin-ops-list-top .chip,
   .admin-ops-list-top strong {
     width: fit-content;
+  }
+
+  .admin-metrics-breakdown-row {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-metrics-breakdown-row small {
+    text-align: left;
+  }
+
+  .admin-metrics-detail-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-metrics-detail-row strong {
+    white-space: normal;
   }
 }
 

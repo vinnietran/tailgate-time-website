@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import AppShell from "../components/AppShell";
+import AdminConsoleNav from "../components/AdminConsoleNav";
 import TopBar from "../components/TopBar";
 import { useAuth } from "../hooks/useAuth";
 import { db } from "../lib/firebase";
@@ -289,7 +290,7 @@ export default function AdminSpotlight() {
   };
 
   return (
-    <AppShell header={<TopBar firstName={firstName} />}>
+    <AppShell header={<TopBar firstName={firstName} />} showHeaderActions={false}>
       <section className="admin-console-stack">
         <article className="tailgate-card admin-console-card">
           <div className="section-header">
@@ -299,9 +300,12 @@ export default function AdminSpotlight() {
                 Edit the live carousel for the app and website without shipping a release.
               </p>
             </div>
-            <button type="button" className="secondary-button" onClick={addCard} disabled={loading || saving}>
-              Add card
-            </button>
+            <div className="admin-console-nav">
+              <AdminConsoleNav />
+              <button type="button" className="secondary-button" onClick={addCard} disabled={loading || saving}>
+                Add card
+              </button>
+            </div>
           </div>
           <div className="admin-console-note">
             Use this to edit existing spotlight cards, reorder the carousel, or add a new sponsor

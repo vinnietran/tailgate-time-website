@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import tailgateTimeLogo from "../../ttnobg.png";
 import {
+  IconChartBars,
   IconChevronLeft,
   IconCompass,
   IconDashboard,
@@ -10,6 +11,7 @@ import {
   IconSpark,
   IconWallet
 } from "./Icons";
+import { useAuth } from "../hooks/useAuth";
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "tt.sidebar.collapsed";
 
@@ -49,7 +51,20 @@ const navItems: SidebarNavItem[] = [
 ];
 
 export default function Sidebar() {
+  const { isAdmin } = useAuth();
   const [isCollapsed, setIsCollapsed] = useState(false);
+
+  const renderedNavItems = isAdmin
+    ? [
+        ...navItems,
+        {
+          to: "/admin/metrics",
+          label: "Admin Metrics",
+          meta: "Owner dashboard",
+          icon: <IconChartBars size={18} />
+        }
+      ]
+    : navItems;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -80,7 +95,7 @@ export default function Sidebar() {
         </Link>
 
         <nav className="sidebar-nav">
-          {navItems.map((item) => (
+          {renderedNavItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

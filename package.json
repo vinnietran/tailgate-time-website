@@ -10,7 +10,7 @@
     "build:prod": "vite build --mode tailgatetime-prod",
     "preview": "vite preview",
     "deploy:hosting:lot-legends": "npm run build:lot-legends && firebase deploy --project lot-legends --only hosting",
-    "deploy:hosting:prod": "npm run build:prod && firebase deploy --project prod --only hosting",
+    "deploy:hosting:prod": "npm run build:prod && firebase deploy --project tailgatetime-prod --only hosting",
     "lint": "eslint \"src/**/*.{ts,tsx}\" \"tests/**/*.ts\" \"vite.config.ts\" \"playwright.config.ts\"",
     "typecheck": "tsc --noEmit",
     "verify": "npm run typecheck && npm run build",
