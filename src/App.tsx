@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./hooks/useAuth";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AdminRoute } from "./components/AdminRoute";
+import AnalyticsTracker from "./components/AnalyticsTracker";
 import Login from "./pages/Login";
 import Home from "./pages/Home";
 import { DialogProvider } from "./hooks/useDialog";
@@ -37,6 +38,7 @@ export default function App() {
   return (
     <AuthProvider>
       <DialogProvider>
+        <AnalyticsTracker />
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<Login />} />

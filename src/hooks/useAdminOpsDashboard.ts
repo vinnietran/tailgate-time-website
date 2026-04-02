@@ -77,6 +77,7 @@ type TailgateRecord = {
   status: string;
   startDateTime: Date;
   ticketPriceCents: number;
+  ticketsSold: number;
   cancelledAt: Date | null;
 };
 
@@ -305,6 +306,10 @@ function isPurchasePending(status: string) {
   );
 }
 
+function formatMetricCurrency(cents: number) {
+  return cents > 0 ? `$${Math.round(cents / 100)}` : "$0";
+}
+
 function normalizeTailgate(data: Record<string, unknown>, id: string): TailgateRecord {
   const visibilityType = firstString(data.visibilityType).toLowerCase() || "open_free";
   const status = normalizeToken(data.status ?? data.eventStatus) || "upcoming";
@@ -312,6 +317,14 @@ function normalizeTailgate(data: Record<string, unknown>, id: string): TailgateR
     coerceNumber(data.ticketPriceCents) ??
     coerceNumber(data.priceCents) ??
     coerceNumber(data.ticketPrice) ??
+    0;
+  const ticketsSold =
+    coerceNumber(data.confirmedPaidCount) ??
+    coerceNumber(data.ticketsSold) ??
+    coerceNumber(data.soldCount) ??
+    coerceNumber(data.ticketsPurchased) ??
+    coerceNumber(data.paidAttendees) ??
+    coerceNumber(data.rsvpsConfirmed) ??
     0;
 
   return {
@@ -322,6 +335,7 @@ function normalizeTailgate(data: Record<string, unknown>, id: string): TailgateR
     status,
     startDateTime: pickTailgateDate(data),
     ticketPriceCents: Math.max(0, Math.round(ticketPriceCents)),
+    ticketsSold: Math.max(0, Math.round(ticketsSold)),
     cancelledAt:
       normalizeDate(data.cancelledAt) ??
       (status === "cancelled" || status === "canceled" ? pickTailgateDate(data) : null)
@@ -491,6 +505,17 @@ export function useAdminOpsDashboard() {
       (sum, purchase) => sum + Math.max(0, purchase.amountCents),
       0
     );
+    const lifetimePaidTailgates = tailgateList.filter(
+      (tailgate) => tailgate.visibilityType === "open_paid" && tailgate.ticketPriceCents > 0
+    );
+    const lifetimeTicketsSold = lifetimePaidTailgates.reduce(
+      (sum, tailgate) => sum + tailgate.ticketsSold,
+      0
+    );
+    const revenueLifetimeCents = lifetimePaidTailgates.reduce(
+      (sum, tailgate) => sum + tailgate.ticketPriceCents * tailgate.ticketsSold,
+      0
+    );
 
     const checkoutAlerts = purchases
       .filter((purchase) => {
@@ -592,9 +617,15 @@ export function useAdminOpsDashboard() {
     const metrics: OpsMetric[] = [
       {
         label: "24h Revenue",
-        value: revenue24hCents > 0 ? `$${Math.round(revenue24hCents / 100)}` : "$0",
+        value: formatMetricCurrency(revenue24hCents),
         helper: `${confirmedPurchases24h.length} confirmed purchases`,
         tone: confirmedPurchases24h.length > 0 ? "success" : "default"
+      },
+      {
+        label: "Lifetime Gross Revenue",
+        value: formatMetricCurrency(revenueLifetimeCents),
+        helper: `${lifetimeTicketsSold} tickets sold across paid tailgates`,
+        tone: revenueLifetimeCents > 0 ? "success" : "default"
       },
       {
         label: "Checkout Alerts",
