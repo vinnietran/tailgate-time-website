@@ -13,6 +13,7 @@ import { db, storage as firebaseStorage } from "../lib/firebase";
 import { loadGoogleMapsSdk } from "../lib/googleMapsSdk";
 import { formatCurrencyFromCents } from "../utils/format";
 import { buildEventSizeSummary } from "../utils/tailgate";
+import { resolveLocationLabel } from "../utils/location";
 
 type ViewMode = "list" | "map";
 type MapPanelMode = "results" | "details";
@@ -191,20 +192,36 @@ function isCancelledEvent(data: Record<string, unknown>) {
 }
 
 function resolveLocationSummary(data: Record<string, unknown>) {
-  const direct = firstString(data.locationSummary, data.location, data.venueName);
+  const combined = resolveLocationLabel(data.location);
+  if (combined) return combined;
+
+  const direct = firstString(
+    data.locationSummary,
+    data.location,
+    data.venueName,
+    data.address,
+    data.displayAddress,
+    data.locationLabel
+  );
   if (direct) return direct;
 
   const location = asRecord(data.location);
   if (!location) return undefined;
 
   return firstString(
+    location.label,
+    location.displayAddress,
     location.address,
     location.formattedAddress,
     location.formatted,
     location.description,
     location.text,
     location.name,
-    location.shortAddress
+    location.mainText,
+    location.shortAddress,
+    location.secondaryText,
+    location.lotName,
+    location.venueName
   );
 }
 
@@ -438,8 +455,9 @@ function toDiscoverTailgateRecord(
   if (isCancelledEvent(data)) return null;
 
   const startDateTime =
-    normalizeDate(data.startDateTime) ??
     normalizeDate(data.dateTime) ??
+    normalizeDate(data.eventTargetTime) ??
+    normalizeDate(data.startDateTime) ??
     normalizeDate(data.startAt) ??
     normalizeDate(data.eventDateTime) ??
     normalizeDate(data.eventDate) ??

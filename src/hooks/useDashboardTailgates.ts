@@ -4,6 +4,7 @@ import { db } from "../lib/firebase";
 import { TailgateEvent } from "../types";
 import { mockTailgates } from "../data/mockTailgates";
 import { debugAuthLog } from "../utils/debug";
+import { resolveLocationLabel } from "../utils/location";
 
 export type DashboardRelationship = "hosting" | "co_hosting" | "attending";
 
@@ -87,6 +88,8 @@ function normalizeDate(value: unknown) {
 
 function pickDate(data: Record<string, unknown>) {
   const candidates: unknown[] = [
+    data.dateTime,
+    data.eventTargetTime,
     data.startDateTime,
     data.startTime,
     data.startAt,
@@ -96,7 +99,6 @@ function pickDate(data: Record<string, unknown>) {
     data.kickoffAt,
     data.kickoffTime,
     data.eventDate,
-    data.dateTime,
     data.date,
     data.createdAt
   ];
@@ -129,17 +131,36 @@ function deriveVisibilityType(data: Record<string, unknown>): TailgateEvent["vis
 }
 
 function deriveLocationSummary(data: Record<string, unknown>) {
-  const direct = firstString(data.locationSummary, data.location, data.venueName);
+  const combined = resolveLocationLabel(data.location);
+  if (combined) return combined;
+
+  const direct = firstString(
+    data.locationSummary,
+    data.location,
+    data.venueName,
+    data.address,
+    data.displayAddress,
+    data.locationLabel
+  );
   if (direct) return direct;
 
   const location = data.location as Record<string, unknown> | undefined;
   if (!location || typeof location !== "object") return undefined;
 
   return firstString(
+    location.label,
+    location.displayAddress,
     location.address,
     location.formattedAddress,
+    location.formatted,
+    location.description,
+    location.text,
     location.name,
-    location.lotName
+    location.mainText,
+    location.shortAddress,
+    location.secondaryText,
+    location.lotName,
+    location.venueName
   );
 }
 

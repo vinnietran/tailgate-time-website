@@ -884,15 +884,47 @@
         if (typeof locationValue === "string") {
           label = locationValue.trim();
         } else {
-          label = firstString(
-            locationRecord?.formatted,
-            locationRecord?.formattedAddress,
-            locationRecord?.description,
-            locationRecord?.address,
-            locationRecord?.text,
-            locationRecord?.name,
-            locationRecord?.shortAddress
+          const name = firstString(
+            locationRecord?.businessName,
+            locationRecord?.placeName,
+            locationRecord?.locationName,
+            locationRecord?.siteName,
+            locationRecord?.venueName,
+            locationRecord?.lotName,
+            locationRecord?.mainText,
+            locationRecord?.displayName,
+            locationRecord?.primaryText,
+            locationRecord?.name
           );
+          const address = firstString(
+            locationRecord?.addressLine1,
+            locationRecord?.address1,
+            locationRecord?.displayAddress,
+            locationRecord?.shortFormattedAddress,
+            locationRecord?.formattedAddress,
+            locationRecord?.formatted,
+            locationRecord?.description,
+            locationRecord?.text,
+            locationRecord?.secondaryText,
+            locationRecord?.locality,
+            locationRecord?.address
+          );
+          if (name && address) {
+            label = name === address ? name : `${name} · ${address}`;
+          } else {
+            label =
+              name ||
+              address ||
+              firstString(
+                locationRecord?.formatted,
+                locationRecord?.formattedAddress,
+                locationRecord?.description,
+                locationRecord?.address,
+                locationRecord?.text,
+                locationRecord?.name,
+                locationRecord?.shortAddress
+              );
+          }
         }
 
         if (typeof lat === "number" && typeof lng === "number") {

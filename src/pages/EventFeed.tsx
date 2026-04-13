@@ -312,6 +312,7 @@ export default function EventFeed() {
         setEventName(firstString(data.eventName, data.name, data.title) ?? "Tailgate");
         setEventStartAt(
           normalizeDate(data.dateTime) ??
+            normalizeDate(data.eventTargetTime) ??
             normalizeDate(data.startDateTime) ??
             normalizeDate(data.startAt) ??
             null

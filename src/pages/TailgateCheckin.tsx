@@ -152,6 +152,7 @@ function toCheckinDetailFromFirestore(
     eventName: firstString(data.eventName, data.name, data.title) ?? "Untitled Tailgate",
     startDateTime:
       resolveDate(data.dateTime) ??
+      resolveDate(data.eventTargetTime) ??
       resolveDate(data.startDateTime) ??
       resolveDate(data.startAt) ??
       resolveDate(data.eventDateTime) ??

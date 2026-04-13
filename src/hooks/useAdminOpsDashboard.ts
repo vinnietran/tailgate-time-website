@@ -163,6 +163,8 @@ function normalizeDate(value: unknown): Date | null {
 
 function pickTailgateDate(data: Record<string, unknown>) {
   const candidates: unknown[] = [
+    data.dateTime,
+    data.eventTargetTime,
     data.startDateTime,
     data.startTime,
     data.startAt,
@@ -172,7 +174,6 @@ function pickTailgateDate(data: Record<string, unknown>) {
     data.kickoffAt,
     data.kickoffTime,
     data.eventDate,
-    data.dateTime,
     data.date,
     data.createdAt
   ];

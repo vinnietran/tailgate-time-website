@@ -3781,6 +3781,25 @@ a {
   color: var(--muted-strong);
 }
 
+.create-wizard-address-block {
+  white-space: pre-line;
+  line-height: 1.35;
+}
+
+.create-wizard-location-preview-address {
+  margin: 12px 0 0;
+  display: grid;
+  gap: 4px;
+  color: var(--muted-strong);
+}
+
+.create-wizard-location-preview-address span {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .tailgate-details-hero-host {
   margin-top: 14px;
   display: inline-grid;

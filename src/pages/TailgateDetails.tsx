@@ -43,7 +43,8 @@ import {
   getTailgateCrowdTag,
   getVisibilityLabel
 } from "../utils/tailgate";
-import { formatCurrencyFromCents, formatDateTime, getFirstName } from "../utils/format";
+import { formatCurrencyFromCents, formatDateTime } from "../utils/format";
+import { resolveLocationLabel } from "../utils/location";
 
 const MAPS_API_KEY = (
   import.meta.env.MAPS_API_KEY ??
@@ -356,6 +357,22 @@ function firstString(...values: unknown[]): string | undefined {
     }
   }
   return undefined;
+}
+
+function normalizeLocationCandidate(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    if (/^places\/[\w/-]+$/i.test(trimmed)) {
+      return undefined;
+    }
+    return trimmed;
+  }
+
+  const record = asRecord(value);
+  if (!record) return undefined;
+
+  return firstString(record.text, record.label, record.name, record.value);
 }
 
 function stringArrayFromUnknown(value: unknown): string[] {
@@ -793,24 +810,8 @@ function normalizeAttendees(
 }
 
 function resolveLocationString(location: unknown): string | undefined {
-  if (!location) return undefined;
-  if (typeof location === "string") {
-    const trimmed = location.trim();
-    return trimmed || undefined;
-  }
-
-  const record = asRecord(location);
-  if (!record) return undefined;
-
-  return firstString(
-    record.formatted,
-    record.formattedAddress,
-    record.description,
-    record.address,
-    record.text,
-    record.name,
-    record.shortAddress
-  );
+  const label = resolveLocationLabel(location);
+  return label.length > 0 ? label : undefined;
 }
 
 function resolveLocationCoords(
@@ -1026,6 +1027,7 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
   const hostName = firstString(data.hostName, data.displayName) ?? "Host";
   const startDateTime =
     normalizeDate(data.dateTime) ??
+    normalizeDate(data.eventTargetTime) ??
     normalizeDate(data.startDateTime) ??
     normalizeDate(data.startAt) ??
     normalizeDate(data.createdAt);
@@ -1053,8 +1055,14 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     startDateTime,
     locationRaw: data.location,
     locationSummary:
-      resolveLocationString(data.location) ??
-      firstString(data.locationSummary, data.venueName),
+      firstString(
+        normalizeLocationCandidate(data.locationSummary),
+        normalizeLocationCandidate(data.locationName),
+        normalizeLocationCandidate(data.placeName),
+        normalizeLocationCandidate(data.businessName),
+        normalizeLocationCandidate(data.siteName),
+        normalizeLocationCandidate(data.venueName)
+      ) ?? resolveLocationString(data.location),
     locationCoords: resolveLocationCoords(data.location, data.locationCoords),
     attendees: normalizeAttendees(data.attendees, hostId, hostName),
     visibilityType,
@@ -1069,9 +1077,7 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     status: firstString(data.status, data.eventStatus),
     cancelledAt: normalizeDate(data.cancelledAt),
     eventTargetTime:
-      normalizeDate(data.eventTargetTime) ??
-      normalizeDate(data.gameTime) ??
-      startDateTime,
+      startDateTime ?? normalizeDate(data.gameTime) ?? normalizeDate(data.eventTargetTime),
     timelineEnabled: data.timelineEnabled === true || data.schedulePublished === true,
     schedulePublished: data.schedulePublished === true,
     quiz,
@@ -1724,7 +1730,7 @@ export default function TailgateDetails() {
   }, [detail?.id]);
 
   useEffect(() => {
-    const baseEventTime = detail?.eventTargetTime ?? detail?.startDateTime;
+    const baseEventTime = detail?.startDateTime ?? detail?.eventTargetTime;
     if (!baseEventTime) return;
 
     const timeValue = toTimeInput(baseEventTime);
@@ -2102,7 +2108,7 @@ export default function TailgateDetails() {
   const exactPinCoords = resolveExactPinCoords(detail?.locationRaw);
   const hasExactPin = Boolean(exactPinCoords);
   const resolvedLocationText =
-    detail?.locationSummary ?? resolveLocationString(detail?.locationRaw);
+    resolveLocationString(detail?.locationRaw) ?? detail?.locationSummary;
   const displayLocationLabel =
     resolvedLocationText && !isCoordinateString(resolvedLocationText)
       ? resolvedLocationText
@@ -2123,6 +2129,8 @@ export default function TailgateDetails() {
       : mapCoords
       ? "General meetup area selected."
       : "Location coming soon.");
+  const locationFallbackNote =
+    displayLocationLabel ?? resolvedLocationText ?? "Location not set";
   const locationDirectionQuery = mapCoords
     ? `${mapCoords.lat},${mapCoords.lng}`
     : resolvedLocationText ?? "";
@@ -2340,10 +2348,7 @@ export default function TailgateDetails() {
   const openFreeBringLabel =
     openFreePartySize === 1 ? "Just me" : `${openFreePartySize} people total`;
   const hostDisplayName = detail?.hostName?.trim() || "Host";
-  const publicHostDisplayName =
-    detail?.visibilityType === "open_free" || detail?.visibilityType === "open_paid"
-      ? getFirstName(hostDisplayName)
-      : hostDisplayName;
+  const publicHostDisplayName = hostDisplayName;
   const contactHostCharacterCount = contactHostMessage.length;
   const canSendContactHost =
     canContactHost &&
@@ -2501,7 +2506,7 @@ export default function TailgateDetails() {
         ? `You already have ${confirmedTicketCount} ticket${confirmedTicketCount === 1 ? "" : "s"}.`
         : "Your tickets are confirmed."
       : "Continue to checkout to purchase tickets.";
-  const timelineBaseEventTime = detail?.eventTargetTime ?? detail?.startDateTime ?? null;
+  const timelineBaseEventTime = detail?.startDateTime ?? detail?.eventTargetTime ?? null;
   const hasTimelineSteps = timelineSteps.length > 0;
   const timelineEnabledForEvent =
     detail?.timelineEnabled === true ||
@@ -2632,14 +2637,27 @@ export default function TailgateDetails() {
     updates.location = existingLocation
       ? {
           ...existingLocation,
+          label: nextLocation,
+          displayAddress: nextLocation,
           description: nextLocation,
           formatted: nextLocation,
           formattedAddress: nextLocation,
           address: nextLocation,
           text: nextLocation,
-          name: nextLocation
+          name: nextLocation,
+          mainText: nextLocation
         }
-      : nextLocation;
+      : {
+          label: nextLocation,
+          displayAddress: nextLocation,
+          description: nextLocation,
+          formatted: nextLocation,
+          formattedAddress: nextLocation,
+          address: nextLocation,
+          text: nextLocation,
+          name: nextLocation,
+          mainText: nextLocation
+        };
 
     if (detail.visibilityType === "open_paid") {
       const priceCents = parsePriceToCents(inlineEditDraft.ticketPrice);
@@ -3547,7 +3565,10 @@ export default function TailgateDetails() {
     try {
       setTimelineError(null);
       await updateDoc(doc(db, "tailgateEvents", id), {
-        eventTargetTime: nextEventStart
+        dateTime: nextEventStart,
+        startDateTime: nextEventStart,
+        eventTargetTime: nextEventStart,
+        updatedAt: new Date()
       });
     } catch (saveError) {
       console.error("Failed to save event start time", saveError);
@@ -4108,11 +4129,7 @@ export default function TailgateDetails() {
       setIsContactHostComposerOpen(false);
       setContactHostFeedback({
         tone: "success",
-        text: `Email sent to ${
-          detail?.visibilityType === "open_free" || detail?.visibilityType === "open_paid"
-            ? getFirstName(response.hostName || hostDisplayName)
-            : response.hostName || hostDisplayName
-        }.`
+        text: `Email sent to ${response.hostName || hostDisplayName}.`
       });
       setContactHostMessage("");
     } catch (error) {
@@ -6171,7 +6188,7 @@ export default function TailgateDetails() {
               <p className="tailgate-details-map-note">
                 {hasExactPin
                   ? "Exact in-lot pin shared by host."
-                  : "Showing general meetup area. Host can drop the exact in-lot pin later."}
+                  : `Showing general meetup area for ${locationFallbackNote}. Host can drop the exact in-lot pin later.`}
               </p>
             ) : null}
             {mapUrl ? (
@@ -6179,7 +6196,7 @@ export default function TailgateDetails() {
             ) : (
               <div className="tailgate-details-map-placeholder">
                 {MAPS_API_KEY
-                  ? "No coordinates yet. Host can drop an exact location pin from Host Controls."
+                  ? `No coordinates yet. ${locationFallbackNote}. Host can drop an exact location pin from Host Controls.`
                   : "Set MAPS_API_KEY to preview Google Maps for this tailgate."}
               </div>
             )}

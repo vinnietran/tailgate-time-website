@@ -16,6 +16,7 @@ import {
   STANDARD_PLATFORM_FEE_PERCENT
 } from "../utils/platformFees";
 import { buildConnectCallbackUrl } from "../utils/connectCallbacks";
+import { resolveLocationLabel } from "../utils/location";
 import { estimateHostPayout } from "../utils/tailgate";
 
 type WizardStep = {
@@ -92,7 +93,9 @@ type LocationTerm = {
 };
 
 type LocationRecord = {
+  label?: string;
   description?: string;
+  displayAddress?: string;
   formatted?: string;
   formattedAddress?: string;
   address?: string;
@@ -213,6 +216,15 @@ const seededContacts: Guest[] = [
   { id: "c-john", name: "John Appleseed", phone: "888-555-5512" },
   { id: "c-kate", name: "Kate Bell", phone: "(555) 564-8583" }
 ];
+
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
 
 const minTicketPriceCents = 2500;
 const CONNECT_RETURN_URL =
@@ -449,31 +461,19 @@ function toEndDateTime(eventDate: string, eventTime: string, eventEndTime: strin
   return end;
 }
 
-function resolveLocationLabel(raw: unknown): string {
-  if (!raw) return "";
-  if (typeof raw === "string") {
-    return raw.trim();
-  }
-  if (typeof raw === "object") {
-    const record = raw as LocationRecord;
-    const candidates = [
-      record.formatted,
-      record.formattedAddress,
-      record.description,
-      record.address,
-      record.text,
-      record.name,
-      record.shortAddress
-    ];
-    const match = candidates.find(
-      (value) => typeof value === "string" && value.trim().length > 0
-    );
-    if (match) return match.trim();
-    if (typeof record.lat === "number" && typeof record.lng === "number") {
-      return `${record.lat}, ${record.lng}`;
-    }
-  }
-  return "";
+function formatAddressBlock(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.includes("\n")) return trimmed;
+
+  const parts = trimmed
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length <= 1) return trimmed;
+  return parts.join("\n");
 }
 
 function buildLocationPayload(
@@ -487,15 +487,20 @@ function buildLocationPayload(
   }
 
   const baseLabel =
+    record.label ??
     record.description ??
+    record.displayAddress ??
     record.formatted ??
     record.formattedAddress ??
     record.name ??
+    record.mainText ??
     record.text ??
     trimmedFallback;
 
   const payload: LocationRecord = {
+    label: record.label ?? baseLabel,
     description: record.description ?? baseLabel,
+    displayAddress: record.displayAddress ?? record.formattedAddress ?? record.formatted ?? baseLabel,
     formatted: record.formatted ?? record.formattedAddress ?? baseLabel,
     formattedAddress: record.formattedAddress ?? record.formatted ?? baseLabel,
     address: record.address ?? record.formattedAddress ?? baseLabel,
@@ -542,20 +547,12 @@ function requiresDiscoverableLocation(visibilityType: VisibilityType) {
 const OPEN_TAILGATE_LOCATION_ERROR =
   "Open tailgates need a location that can be placed on the map so they appear in Discover.";
 
-function buildMapEmbedUrl(
-  coords: LatLng,
-  mapsApiKey: string,
-  locationLabel?: string
-): string | null {
+function buildMapEmbedUrl(coords: LatLng, mapsApiKey: string): string | null {
   if (!mapsApiKey) return null;
   const query = `${coords.lat},${coords.lng}`;
   const url = new URL("https://www.google.com/maps/embed/v1/place");
   url.searchParams.set("key", mapsApiKey);
-  if (locationLabel?.trim()) {
-    url.searchParams.set("q", `${query} (${locationLabel.trim()})`);
-  } else {
-    url.searchParams.set("q", query);
-  }
+  url.searchParams.set("q", query);
   url.searchParams.set("zoom", "14");
   return url.toString();
 }
@@ -698,9 +695,10 @@ export default function CreateTailgateWizard() {
         ? "Invite Friends + Add-ons"
         : "Optional Add-ons"
       : wizardSteps[stepIndex].subtitle;
-  const mapUrl = locationCoords
-    ? buildMapEmbedUrl(locationCoords, MAPS_API_KEY, locationSummary)
-    : null;
+  const resolvedLocationDisplay = resolveLocationLabel(locationRecord);
+  const locationDisplayText =
+    formatAddressBlock(resolvedLocationDisplay ?? locationSummary) ?? locationSummary;
+  const mapUrl = locationCoords ? buildMapEmbedUrl(locationCoords, MAPS_API_KEY) : null;
   const selectedVisibility = visibilityOptions.find((option) => option.key === visibilityType);
   const currentQuizQuestion =
     quizQuestions[currentQuizQuestionIndex] ?? emptyQuizQuestionFallback;
@@ -886,24 +884,30 @@ export default function CreateTailgateWizard() {
         prev
           ? {
               ...prev,
+              label: prev.label ?? label,
               formatted: prev.formatted ?? label,
               formattedAddress: prev.formattedAddress ?? label,
+              displayAddress: prev.displayAddress ?? label,
               address: prev.address ?? label,
               text: prev.text ?? label,
               description: prev.description ?? label,
               name: prev.name ?? label,
+              mainText: prev.mainText ?? label,
               placeId: prev.placeId ?? first?.place_id,
               addressComponents: prev.addressComponents ?? first?.address_components,
               lat: next.lat,
               lng: next.lng
             }
           : {
+              label,
               description: label,
+              displayAddress: label,
               formatted: label,
               formattedAddress: label,
               address: label,
               text: label,
               name: label,
+              mainText: label,
               placeId: first?.place_id,
               addressComponents: first?.address_components,
               lat: next.lat,
@@ -937,7 +941,9 @@ export default function CreateTailgateWizard() {
     try {
       const resolved = await resolveLocationSuggestion(place);
       const locationPayload: LocationRecord = {
+        label: resolved?.label ?? place.primaryText,
         description: place.description,
+        displayAddress: resolved?.formattedAddress ?? place.description,
         formatted: resolved?.formattedAddress ?? place.description,
         formattedAddress: resolved?.formattedAddress,
         address: resolved?.formattedAddress ?? place.description,
@@ -962,7 +968,7 @@ export default function CreateTailgateWizard() {
         return;
       }
 
-      setLocationSummary(resolved.label);
+      setLocationSummary(resolveLocationLabel(locationPayload) || resolved.label);
       setLocationCoords({ lat: resolved.lat, lng: resolved.lng });
       clearFieldError("locationSummary");
       clearLocationSuggestions();
@@ -1683,6 +1689,21 @@ export default function CreateTailgateWizard() {
       console.warn("Cover images were selected, but Firestore is not configured.");
     }
 
+    let hostName = firstString(user.displayName) ?? "";
+    if (db) {
+      try {
+        const hostProfile = await getDoc(doc(db, "users", user.uid));
+        if (hostProfile.exists()) {
+          const hostData = hostProfile.data() as Record<string, unknown>;
+          hostName =
+            firstString(hostData.displayName, hostData.name, hostData.fullName, hostName) ??
+            hostName;
+        }
+      } catch (error) {
+        console.warn("Failed to resolve host profile for new tailgate", error);
+      }
+    }
+
     const payload: Record<string, unknown> = {
       eventName: eventName.trim(),
       name: eventName.trim(),
@@ -1704,16 +1725,17 @@ export default function CreateTailgateWizard() {
             name: guest.name,
             phone: guest.phone,
             status: "Pending"
-          }))
+        }))
         : [],
       hostUserId: user.uid,
       hostId: user.uid,
-      hostName: user.displayName ?? "",
+      hostName,
       hostEmail: user.email ?? "",
       eventTargetTime: startDateTime,
       timelineEnabled,
       schedulePublished: false,
       status: "upcoming",
+      createdVia: "web",
       metadata: {
         createdViaWebsite: true,
         createdPlatform: "website"
@@ -2086,6 +2108,12 @@ export default function CreateTailgateWizard() {
               : "Set MAPS_API_KEY to preview Google Maps."}
           </div>
         )}
+        {locationDisplayText ? (
+          <p className="create-wizard-location-preview-address">
+            <span>Address</span>
+            <strong className="create-wizard-address-block">{locationDisplayText}</strong>
+          </p>
+        ) : null}
       </div>
     </section>
   );
@@ -2818,7 +2846,7 @@ export default function CreateTailgateWizard() {
             </div>
             <div>
               <dt>Location</dt>
-              <dd>{locationSummary || "Not set"}</dd>
+              <dd className="create-wizard-address-block">{locationDisplayText || "Not set"}</dd>
             </div>
             <div>
               <dt>Tailgate Type</dt>
@@ -2905,6 +2933,12 @@ export default function CreateTailgateWizard() {
           ) : (
             <div className="create-wizard-map-placeholder">No map preview available yet.</div>
           )}
+          {locationDisplayText ? (
+            <p className="create-wizard-location-preview-address">
+              <span>Using address</span>
+              <strong className="create-wizard-address-block">{locationDisplayText}</strong>
+            </p>
+          ) : null}
         </div>
       </section>
     );

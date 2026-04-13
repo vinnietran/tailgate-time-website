@@ -1,6 +1,16 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { matchPath, useLocation } from "react-router-dom";
 import { trackPageView } from "../lib/firebase";
+
+declare global {
+  interface Window {
+    fbq?: (...args: unknown[]) => void;
+  }
+}
+
+const isMetaPixelEnabled =
+  import.meta.env.MODE === "tailgatetime-prod" &&
+  import.meta.env.VITE_FIREBASE_PROJECT_ID === "tailgatetime-prod";
 
 function getAnalyticsPageTitle(pathname: string) {
   const routes: Array<{ path: string; title: string }> = [
@@ -35,6 +45,7 @@ function getAnalyticsPageTitle(pathname: string) {
 
 export default function AnalyticsTracker() {
   const location = useLocation();
+  const initialMetaPixelPathRef = useRef<string | null>(null);
 
   useEffect(() => {
     const pagePath = `${location.pathname}${location.search}`;
@@ -42,6 +53,22 @@ export default function AnalyticsTracker() {
 
     document.title = pageTitle;
     trackPageView(pagePath);
+
+    if (!isMetaPixelEnabled || typeof window.fbq !== "function") {
+      return;
+    }
+
+    if (initialMetaPixelPathRef.current === null) {
+      initialMetaPixelPathRef.current = pagePath;
+      return;
+    }
+
+    if (initialMetaPixelPathRef.current === pagePath) {
+      return;
+    }
+
+    initialMetaPixelPathRef.current = pagePath;
+    window.fbq("track", "PageView");
   }, [location.hash, location.pathname, location.search]);
 
   return null;
