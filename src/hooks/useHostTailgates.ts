@@ -74,6 +74,22 @@ function pickDate(data: Record<string, unknown>) {
   return new Date(0);
 }
 
+function pickEndDate(data: Record<string, unknown>) {
+  const candidates: unknown[] = [
+    data.endDateTime,
+    data.endAt,
+    data.eventEndAt,
+    data.tailgateEndAt
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeDate(candidate);
+    if (normalized.getTime() > 0) return normalized;
+  }
+
+  return undefined;
+}
+
 function deriveVisibilityType(data: Record<string, unknown>): TailgateEvent["visibilityType"] {
   const raw = String(data.visibilityType ?? "").toLowerCase();
   if (raw === "private" || raw === "open_free" || raw === "open_paid") {
@@ -130,9 +146,17 @@ function deriveLocationSummary(data: Record<string, unknown>) {
 function deriveStatus(data: Record<string, unknown>) {
   const raw = String(data.status ?? data.eventStatus ?? "").toLowerCase();
   if (!raw) return undefined;
+  if (raw === "cancelled" || raw === "canceled" || raw.startsWith("cancel")) {
+    return "cancelled";
+  }
   if (raw === "completed") return "past";
   if (raw === "paid") return "past";
   return raw;
+}
+
+function isCancelledStatus(status: unknown) {
+  const raw = firstString(status)?.toLowerCase() ?? "";
+  return raw === "cancelled" || raw === "canceled" || raw.startsWith("cancel");
 }
 
 const PAYOUT_SENT_STATUSES = new Set([
@@ -235,6 +259,7 @@ function normalizeTailgate(id: string, data: Record<string, unknown>): TailgateE
     name: firstString(data.name, data.eventName, data.title) ?? "Untitled Tailgate",
     visibilityType: deriveVisibilityType(data),
     startDateTime: pickDate(data),
+    endDateTime: pickEndDate(data),
     locationSummary: deriveLocationSummary(data),
     capacity,
     ticketPriceCents:
@@ -356,8 +381,12 @@ export function useHostTailgates(hostUserId?: string) {
   }, [hostUserId]);
 
   const now = new Date();
-  const upcomingTailgates = tailgates.filter((tailgate) => tailgate.startDateTime >= now);
-  const pastTailgates = tailgates.filter((tailgate) => tailgate.startDateTime < now);
+  const upcomingTailgates = tailgates.filter(
+    (tailgate) => tailgate.startDateTime >= now && !isCancelledStatus(tailgate.status)
+  );
+  const pastTailgates = tailgates.filter(
+    (tailgate) => tailgate.startDateTime < now || isCancelledStatus(tailgate.status)
+  );
 
   const totalTicketsSold = tailgates.reduce(
     (sum, tailgate) => sum + (tailgate.ticketsSold ?? 0),

@@ -13,7 +13,7 @@ import { useAuth } from "../hooks/useAuth";
 import { db, functions as firebaseFunctions } from "../lib/firebase";
 import { mockTailgates } from "../data/mockTailgates";
 import { VisibilityType } from "../types";
-import { formatDateTime } from "../utils/format";
+import { formatDateTimeRange } from "../utils/format";
 
 type CheckInResponse = {
   ticketId: string;
@@ -35,6 +35,7 @@ type CheckinEventDetail = {
   id: string;
   eventName: string;
   startDateTime: Date | null;
+  endDateTime?: Date | null;
   hostId: string;
   coHostIds: string[];
   visibilityType: VisibilityType;
@@ -157,6 +158,12 @@ function toCheckinDetailFromFirestore(
       resolveDate(data.startAt) ??
       resolveDate(data.eventDateTime) ??
       null,
+    endDateTime:
+      resolveDate(data.endDateTime) ??
+      resolveDate(data.endAt) ??
+      resolveDate(data.eventEndAt) ??
+      resolveDate(data.tailgateEndAt) ??
+      null,
     hostId,
     coHostIds: Array.isArray(data.coHostIds)
       ? data.coHostIds.filter((value): value is string => typeof value === "string")
@@ -177,6 +184,7 @@ function toCheckinDetailFromMock(id: string): CheckinEventDetail | null {
     id: mock.id,
     eventName: mock.name,
     startDateTime: mock.startDateTime,
+    endDateTime: mock.endDateTime,
     hostId: mock.hostUserId,
     coHostIds: [],
     visibilityType: mock.visibilityType,
@@ -485,7 +493,7 @@ export default function TailgateCheckin() {
             </div>
             <div className="tailgate-checkin-event-meta">
               <strong>{detail.eventName}</strong>
-              <span>{detail.startDateTime ? formatDateTime(detail.startDateTime) : "Date TBD"}</span>
+              <span>{formatDateTimeRange(detail.startDateTime, detail.endDateTime)}</span>
             </div>
             {!isHostUser ? (
               <div className="error-banner">

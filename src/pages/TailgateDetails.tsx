@@ -43,7 +43,11 @@ import {
   getTailgateCrowdTag,
   getVisibilityLabel
 } from "../utils/tailgate";
-import { formatCurrencyFromCents, formatDateTime } from "../utils/format";
+import {
+  formatCurrencyFromCents,
+  formatDateTimeRange,
+  formatTimeRange
+} from "../utils/format";
 import { resolveLocationLabel } from "../utils/location";
 
 const MAPS_API_KEY = (
@@ -261,6 +265,7 @@ type TailgateDetail = {
   coHostIds: string[];
   coHostInvites: CoHostInviteRecord[];
   startDateTime: Date | null;
+  endDateTime?: Date | null;
   locationRaw: unknown;
   locationSummary?: string;
   locationCoords?: { lat: number; lng: number } | null;
@@ -854,15 +859,13 @@ function resolveExactPinCoords(locationRaw: unknown): { lat: number; lng: number
   return null;
 }
 
-function buildMapEmbedUrl(
-  coords: { lat: number; lng: number },
-  mapsApiKey: string
-): string | null {
+function buildMapEmbedUrl(query: string, mapsApiKey: string): string | null {
   if (!mapsApiKey) return null;
-  const query = `${coords.lat},${coords.lng}`;
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) return null;
   const url = new URL("https://www.google.com/maps/embed/v1/place");
   url.searchParams.set("key", mapsApiKey);
-  url.searchParams.set("q", query);
+  url.searchParams.set("q", trimmedQuery);
   url.searchParams.set("zoom", "14");
   return url.toString();
 }
@@ -1031,6 +1034,11 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     normalizeDate(data.startDateTime) ??
     normalizeDate(data.startAt) ??
     normalizeDate(data.createdAt);
+  const endDateTime =
+    normalizeDate(data.endDateTime) ??
+    normalizeDate(data.endAt) ??
+    normalizeDate(data.eventEndAt) ??
+    normalizeDate(data.tailgateEndAt);
   const visibilityType = resolveVisibilityType(data.visibilityType);
   const priceCents = coerceNumber(data.priceCents) ?? coerceNumber(data.ticketPriceCents);
   const ticketsSold =
@@ -1053,6 +1061,7 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
       : [],
     coHostInvites: resolveCoHostInvites(data.coHostInvites),
     startDateTime,
+    endDateTime,
     locationRaw: data.location,
     locationSummary:
       firstString(
@@ -1117,6 +1126,7 @@ function toDetailFromMock(event: TailgateEvent): TailgateDetail {
     coHostIds: [],
     coHostInvites: [],
     startDateTime: event.startDateTime,
+    endDateTime: event.endDateTime,
     locationRaw: event.locationSummary,
     locationSummary: event.locationSummary,
     locationCoords: null,
@@ -2113,27 +2123,29 @@ export default function TailgateDetails() {
     resolvedLocationText && !isCoordinateString(resolvedLocationText)
       ? resolvedLocationText
       : undefined;
-  const generalMeetupCoords = detail?.locationCoords ?? null;
-  const mapCoords = exactPinCoords ?? generalMeetupCoords;
+  const generalLocationQuery =
+    displayLocationLabel ??
+    (resolvedLocationText && !isCoordinateString(resolvedLocationText)
+      ? resolvedLocationText
+      : undefined);
+  const mapCoords = exactPinCoords;
   const locationLabel =
     displayLocationLabel ??
     (hasExactPin
       ? "Pin dropped. Tap map below to navigate."
-      : mapCoords
-      ? "General meetup area selected."
       : "Location not set");
   const meetUpSubtitle =
     displayLocationLabel ??
     (hasExactPin
       ? "Pin dropped. Tap map below to navigate."
-      : mapCoords
-      ? "General meetup area selected."
+      : generalLocationQuery
+      ? "Venue selected. Host can drop the exact in-lot pin later."
       : "Location coming soon.");
   const locationFallbackNote =
     displayLocationLabel ?? resolvedLocationText ?? "Location not set";
-  const locationDirectionQuery = mapCoords
+  const locationDirectionQuery = hasExactPin
     ? `${mapCoords.lat},${mapCoords.lng}`
-    : resolvedLocationText ?? "";
+    : generalLocationQuery ?? "";
   const canOpenMaps = locationDirectionQuery.trim().length > 0;
   const coverImageUrls = rawCoverImageUrls;
   const safeCoverIndex =
@@ -2169,9 +2181,7 @@ export default function TailgateDetails() {
     Boolean(activeCoverImageUrl) &&
     !activeCoverImageLoaded &&
     (!hasActiveCoverImageLoadError || isRecoveringActiveCoverImage);
-  const mapUrl = mapCoords
-    ? buildMapEmbedUrl(mapCoords, MAPS_API_KEY)
-    : null;
+  const mapUrl = canOpenMaps ? buildMapEmbedUrl(locationDirectionQuery, MAPS_API_KEY) : null;
   const checkoutResult = useMemo(() => {
     const params = new URLSearchParams(location.search);
     const value = params.get("checkout");
@@ -4359,7 +4369,7 @@ export default function TailgateDetails() {
                       <p className="tailgate-details-eyebrow">Event command center</p>
                       <h2>{detail.eventName}</h2>
                       <p className="tailgate-details-subtitle">
-                        {detail.startDateTime ? formatDateTime(detail.startDateTime) : "Date TBD"}
+                        {formatDateTimeRange(detail.startDateTime, detail.endDateTime)}
                       </p>
                     </div>
                     <div className="tailgate-details-status-wrap">
@@ -4449,7 +4459,9 @@ export default function TailgateDetails() {
                           : "Schedule drafted"
                         : "Schedule off"}
                     </span>
-                    <span className="chip chip-outline">{mapCoords ? "Map ready" : "No live pin"}</span>
+                    <span className="chip chip-outline">
+                      {hasExactPin ? "Live pin shared" : canOpenMaps ? "Venue mapped" : "No live pin"}
+                    </span>
                   </div>
                 </aside>
               </div>
@@ -4997,14 +5009,7 @@ export default function TailgateDetails() {
                       <strong>
                         {detail.startDateTime ? detail.startDateTime.toLocaleDateString() : "TBD"}
                       </strong>
-                      <span>
-                        {detail.startDateTime
-                          ? detail.startDateTime.toLocaleTimeString([], {
-                              hour: "numeric",
-                              minute: "2-digit"
-                            })
-                          : ""}
-                      </span>
+                      <span>{formatTimeRange(detail.startDateTime, detail.endDateTime)}</span>
                     </div>
                     <div className="tailgate-details-info-card">
                       <p>Where</p>
@@ -5047,7 +5052,7 @@ export default function TailgateDetails() {
                   <p className="tailgate-details-eyebrow">Tailgate details</p>
                   <h2>{detail.eventName}</h2>
                   <p className="tailgate-details-subtitle">
-                    {detail.startDateTime ? formatDateTime(detail.startDateTime) : "Date TBD"}
+                    {formatDateTimeRange(detail.startDateTime, detail.endDateTime)}
                   </p>
                 </div>
                 <div className="tailgate-details-status-wrap">
@@ -5306,14 +5311,7 @@ export default function TailgateDetails() {
               <div className="tailgate-details-info-card">
                 <p>When</p>
                 <strong>{detail.startDateTime ? detail.startDateTime.toLocaleDateString() : "TBD"}</strong>
-                <span>
-                  {detail.startDateTime
-                    ? detail.startDateTime.toLocaleTimeString([], {
-                        hour: "numeric",
-                        minute: "2-digit"
-                      })
-                    : ""}
-                </span>
+                <span>{formatTimeRange(detail.startDateTime, detail.endDateTime)}</span>
               </div>
               <div className="tailgate-details-info-card">
                 <p>Where</p>
@@ -6184,11 +6182,11 @@ export default function TailgateDetails() {
                 </p>
               </div>
             </div>
-            {mapCoords ? (
+            {hasExactPin || generalLocationQuery ? (
               <p className="tailgate-details-map-note">
                 {hasExactPin
                   ? "Exact in-lot pin shared by host."
-                  : `Showing general meetup area for ${locationFallbackNote}. Host can drop the exact in-lot pin later.`}
+                  : `Showing the venue for ${locationFallbackNote}. Host can drop the exact in-lot pin later.`}
               </p>
             ) : null}
             {mapUrl ? (

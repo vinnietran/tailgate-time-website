@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { TailgateEvent } from "../types";
-import { formatCurrencyFromCents, formatDateTime } from "../utils/format";
+import { formatCurrencyFromCents, formatDateTimeRange } from "../utils/format";
 import { estimateHostPayout, getEventStatus, getVisibilityLabel } from "../utils/tailgate";
 import { IconCalendar, IconExternal, IconLocation } from "./Icons";
 
@@ -80,7 +80,7 @@ export default function TailgateCard({
         <div className="card-left">
           <div className="meta-row">
             <IconCalendar />
-            <span>{formatDateTime(event.startDateTime)}</span>
+            <span>{formatDateTimeRange(event.startDateTime, event.endDateTime)}</span>
           </div>
           <div className="meta-row">
             <IconLocation />

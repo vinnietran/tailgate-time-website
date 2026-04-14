@@ -7,7 +7,7 @@ import { useAuth } from "../hooks/useAuth";
 import { useDashboardTailgates } from "../hooks/useDashboardTailgates";
 import { useDashboardSpotlight } from "../hooks/useDashboardSpotlight";
 import { useUserProfile } from "../hooks/useUserProfile";
-import { formatCurrencyFromCents, formatDateTime, getFirstName } from "../utils/format";
+import { formatCurrencyFromCents, formatDateTimeRange, getFirstName } from "../utils/format";
 import { getVisibilityLabel } from "../utils/tailgate";
 
 type TimeframeFilter = "upcoming" | "past";
@@ -157,7 +157,9 @@ export default function HostDashboard() {
           ) : nextTailgate ? (
             <>
               <h3>{nextTailgate.name}</h3>
-              <p className="dashboard-next-meta">{formatDateTime(nextTailgate.startDateTime)}</p>
+              <p className="dashboard-next-meta">
+                {formatDateTimeRange(nextTailgate.startDateTime, nextTailgate.endDateTime)}
+              </p>
               <p className="dashboard-next-meta">
                 {nextTailgate.locationSummary ?? "Location TBD"}
               </p>

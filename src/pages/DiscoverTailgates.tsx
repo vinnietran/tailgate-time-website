@@ -27,6 +27,7 @@ type DiscoverTailgateRecord = {
   id: string;
   eventName: string;
   startDateTime: Date | null;
+  endDateTime?: Date | null;
   visibilityType: "open_free" | "open_paid";
   coverImageUrl: string;
   description?: string;
@@ -462,6 +463,11 @@ function toDiscoverTailgateRecord(
     normalizeDate(data.eventDateTime) ??
     normalizeDate(data.eventDate) ??
     normalizeDate(data.createdAt);
+  const endDateTime =
+    normalizeDate(data.endDateTime) ??
+    normalizeDate(data.endAt) ??
+    normalizeDate(data.eventEndAt) ??
+    normalizeDate(data.tailgateEndAt);
 
   const priceCents =
     coerceNumber(data.ticketPriceCents) ??
@@ -474,6 +480,7 @@ function toDiscoverTailgateRecord(
     id,
     eventName: firstString(data.eventName, data.name, data.title) ?? "Untitled Tailgate",
     startDateTime,
+    endDateTime,
     visibilityType,
     coverImageUrl: resolveCoverImageUrl(data) ?? DEFAULT_TAILGATE_COVER_IMAGE,
     description: resolveDescription(data),
@@ -552,16 +559,39 @@ function haversineMiles(a: LatLng, b: LatLng) {
   return 2 * EARTH_RADIUS_MILES * Math.asin(Math.sqrt(h));
 }
 
-function formatDiscoverDate(date: Date | null) {
-  if (!date || Number.isNaN(date.getTime())) return "Time TBD";
+function formatDiscoverDate(startDate: Date | null, endDate?: Date | null) {
+  if (!startDate || Number.isNaN(startDate.getTime())) return "Time TBD";
 
-  return new Intl.DateTimeFormat("en-US", {
+  const fullFormatter = new Intl.DateTimeFormat("en-US", {
     weekday: "short",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit"
-  }).format(date);
+  });
+  if (!endDate || Number.isNaN(endDate.getTime()) || startDate.getTime() === endDate.getTime()) {
+    return fullFormatter.format(startDate);
+  }
+
+  const sameDay =
+    startDate.getFullYear() === endDate.getFullYear() &&
+    startDate.getMonth() === endDate.getMonth() &&
+    startDate.getDate() === endDate.getDate();
+  const dateLabel = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric"
+  }).format(startDate);
+  const timeFormatter = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit"
+  });
+
+  if (sameDay) {
+    return `${dateLabel} · ${timeFormatter.format(startDate)} - ${timeFormatter.format(endDate)}`;
+  }
+
+  return `${dateLabel} · ${timeFormatter.format(startDate)} - ${fullFormatter.format(endDate)}`;
 }
 
 function formatDistance(miles: number) {
@@ -1600,7 +1630,7 @@ export default function DiscoverTailgates() {
                             <span className="discover-map-result-index">{index + 1}</span>
                             <span className="discover-map-result-main">
                               <strong>{item.eventName}</strong>
-                              <small>{formatDiscoverDate(item.startDateTime)}</small>
+                              <small>{formatDiscoverDate(item.startDateTime, item.endDateTime)}</small>
                             </span>
                             <span className="discover-map-result-price">
                               {item.visibilityType === "open_paid"
@@ -1717,7 +1747,7 @@ export default function DiscoverTailgates() {
                           {item.visibilityType === "open_paid" ? "Open Paid" : "Open Free"}
                         </span>
                       </div>
-                      <p>{formatDiscoverDate(item.startDateTime)}</p>
+                      <p>{formatDiscoverDate(item.startDateTime, item.endDateTime)}</p>
                     </div>
                   </div>
                   <div className="discover-card-body">

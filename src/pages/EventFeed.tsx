@@ -16,7 +16,7 @@ import AppShell from "../components/AppShell";
 import { useAuth } from "../hooks/useAuth";
 import { useDialog } from "../hooks/useDialog";
 import { db, storage } from "../lib/firebase";
-import { formatDateTime } from "../utils/format";
+import { formatDateTimeRange } from "../utils/format";
 
 const placeholderAvatar =
   "https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y";
@@ -217,6 +217,7 @@ export default function EventFeed() {
 
   const [eventName, setEventName] = useState("Tailgate");
   const [eventStartAt, setEventStartAt] = useState<Date | null>(null);
+  const [eventEndAt, setEventEndAt] = useState<Date | null>(null);
   const [posts, setPosts] = useState<EventFeedPost[]>([]);
   const [feedLoading, setFeedLoading] = useState(true);
   const [feedError, setFeedError] = useState<string | null>(null);
@@ -305,6 +306,7 @@ export default function EventFeed() {
         if (!snapshot.exists()) {
           setEventName("Tailgate");
           setEventStartAt(null);
+          setEventEndAt(null);
           return;
         }
 
@@ -315,6 +317,13 @@ export default function EventFeed() {
             normalizeDate(data.eventTargetTime) ??
             normalizeDate(data.startDateTime) ??
             normalizeDate(data.startAt) ??
+            null
+        );
+        setEventEndAt(
+          normalizeDate(data.endDateTime) ??
+            normalizeDate(data.endAt) ??
+            normalizeDate(data.eventEndAt) ??
+            normalizeDate(data.tailgateEndAt) ??
             null
         );
       },
@@ -878,7 +887,7 @@ export default function EventFeed() {
             </button>
           </div>
           {eventStartAt ? (
-            <p className="meta-muted">Starts {formatDateTime(eventStartAt)}</p>
+            <p className="meta-muted">Starts {formatDateTimeRange(eventStartAt, eventEndAt)}</p>
           ) : null}
         </article>
 

@@ -1,16 +1,51 @@
-export function formatDateTime(date: Date) {
-  const datePart = new Intl.DateTimeFormat("en-US", {
+function isValidDate(value: Date | null | undefined): value is Date {
+  return Boolean(value) && !Number.isNaN(value.getTime());
+}
+
+function isSameDay(start: Date, end: Date) {
+  return (
+    start.getFullYear() === end.getFullYear() &&
+    start.getMonth() === end.getMonth() &&
+    start.getDate() === end.getDate()
+  );
+}
+
+function formatDateLabel(date: Date) {
+  return new Intl.DateTimeFormat("en-US", {
     weekday: "long",
     month: "short",
     day: "numeric"
   }).format(date);
+}
 
-  const timePart = new Intl.DateTimeFormat("en-US", {
+function formatTimeLabel(date: Date) {
+  return new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
     minute: "2-digit"
   }).format(date);
+}
 
-  return `${datePart} · ${timePart}`;
+export function formatDateTime(date: Date) {
+  return `${formatDateLabel(date)} · ${formatTimeLabel(date)}`;
+}
+
+export function formatTimeRange(startDate: Date | null | undefined, endDate?: Date | null) {
+  if (!isValidDate(startDate)) return "TBD";
+  if (!isValidDate(endDate) || startDate.getTime() === endDate.getTime()) {
+    return formatTimeLabel(startDate);
+  }
+  return `${formatTimeLabel(startDate)} - ${formatTimeLabel(endDate)}`;
+}
+
+export function formatDateTimeRange(startDate: Date | null | undefined, endDate?: Date | null) {
+  if (!isValidDate(startDate)) return "Date TBD";
+  if (!isValidDate(endDate) || startDate.getTime() === endDate.getTime()) {
+    return formatDateTime(startDate);
+  }
+  if (isSameDay(startDate, endDate)) {
+    return `${formatDateLabel(startDate)} · ${formatTimeRange(startDate, endDate)}`;
+  }
+  return `${formatDateTime(startDate)} - ${formatDateTime(endDate)}`;
 }
 
 export function formatCurrencyFromCents(valueCents?: number) {
