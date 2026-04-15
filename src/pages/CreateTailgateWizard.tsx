@@ -5,6 +5,28 @@ import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { useLocation, useNavigate } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import { IconLocation } from "../components/Icons";
+import {
+  formatPriceInput,
+  MIN_TICKET_PRICE_CENTS,
+  isPayoutReady,
+  parseCapacityInput,
+  parseGuestPlusLimitInput,
+  parsePriceInputToCents,
+  parseTicketSalesCutoffDaysInput,
+  resolveStripeConnectStatus,
+  type StripeConnectStatus
+} from "../features/create-event/ticketing";
+import {
+  MAX_TICKET_TYPES,
+  createDefaultTicketType,
+  hasRequiredTicketTypes,
+  limitTicketTypeDescriptionInput,
+  limitTicketTypeNameInput,
+  resolveLowestTicketTypePriceCents,
+  sanitizeTicketTypeDescription,
+  sanitizeTicketTypeName,
+  type EventTicketType
+} from "../features/ticketing/ticketTypes";
 import { useAuth } from "../hooks/useAuth";
 import { usePlacesAutocomplete } from "../hooks/usePlacesAutocomplete";
 import { db, functions as firebaseFunctions, storage } from "../lib/firebase";
@@ -20,7 +42,7 @@ import { resolveLocationLabel } from "../utils/location";
 import { estimateHostPayout } from "../utils/tailgate";
 
 type WizardStep = {
-  key: "type" | "details" | "location" | "invite" | "review";
+  key: "type" | "tickets" | "details" | "location" | "invite" | "review";
   title: string;
   subtitle: string;
 };
@@ -113,19 +135,27 @@ type LocationRecord = {
   addressComponents?: Array<Record<string, unknown>>;
 };
 
-type StripeConnectStatus = "not_started" | "pending" | "complete" | "restricted";
 type CoverImageDraft = {
   id: string;
   file: File;
   previewUrl: string;
 };
 
-const wizardSteps: WizardStep[] = [
+const baseWizardSteps: WizardStep[] = [
   { key: "type", title: "Step 1", subtitle: "Tailgate Type" },
   { key: "details", title: "Step 2", subtitle: "Event Details" },
   { key: "location", title: "Step 3", subtitle: "Event Location" },
   { key: "invite", title: "Step 4", subtitle: "Invite Friends" },
   { key: "review", title: "Step 5", subtitle: "Review and Create" }
+];
+
+const paidWizardSteps: WizardStep[] = [
+  { key: "type", title: "Step 1", subtitle: "Tailgate Type" },
+  { key: "tickets", title: "Step 2", subtitle: "Tickets & Pricing" },
+  { key: "details", title: "Step 3", subtitle: "Event Details" },
+  { key: "location", title: "Step 4", subtitle: "Event Location" },
+  { key: "invite", title: "Step 5", subtitle: "Optional Add-ons" },
+  { key: "review", title: "Step 6", subtitle: "Review and Create" }
 ];
 
 const visibilityOptions: Array<{
@@ -137,6 +167,33 @@ const visibilityOptions: Array<{
   { key: "open_free", label: "Open (Free)", description: "Discoverable and free to join." },
   { key: "open_paid", label: "Open (Paid)", description: "Discoverable with paid tickets." }
 ];
+
+const visibilityHowItWorks: Record<VisibilityType, { title: string; bullets: string[] }> = {
+  private: {
+    title: "Invite Only",
+    bullets: [
+      "Only people you invite can see and join this tailgate.",
+      "Best for friends, family, and private groups."
+    ]
+  },
+  open_free: {
+    title: "Open (Free)",
+    bullets: [
+      "Anyone nearby can discover and join your tailgate.",
+      "Great for growing your tailgate community.",
+      "You are not charging for entry."
+    ]
+  },
+  open_paid: {
+    title: "Open (Paid)",
+    bullets: [
+      "Anyone nearby can discover and buy tickets to your tailgate.",
+      "You earn money per ticket sold.",
+      `TailgateTime's standard platform fee is ${STANDARD_PLATFORM_FEE_PERCENT}%.`,
+      `Hosts who sell at least ${EARLY_ADOPTER_MIN_TICKETS_SOLD} tickets for a qualifying event before 10/1/2026 unlock ${EARLY_ADOPTER_PLATFORM_FEE_PERCENT}% immediately, with the promo lasting through one year after that event date.`
+    ]
+  }
+};
 
 const expectationGroups: Array<{
   key: string;
@@ -226,7 +283,6 @@ function firstString(...values: unknown[]) {
   return undefined;
 }
 
-const minTicketPriceCents = 2500;
 const CONNECT_RETURN_URL =
   import.meta.env.VITE_CONNECT_RETURN_URL ?? "https://tailgate-time.com/connect-return";
 const CONNECT_REFRESH_URL =
@@ -264,41 +320,11 @@ function formatPhone(text: string) {
   return `(${part1}) ${part2}-${part3}`;
 }
 
-function parsePriceToCents(value: string) {
-  const normalized = value.replace(/[^0-9.]/g, "");
-  if (!normalized) return null;
-  const parsed = Number(normalized);
-  if (!Number.isFinite(parsed)) return null;
-  return Math.round(parsed * 100);
-}
-
 function formatUsdFromCents(valueCents: number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD"
   }).format(valueCents / 100);
-}
-
-function parseCapacity(value: string) {
-  if (!value.trim()) return null;
-  const parsed = Number(value.trim());
-  if (!Number.isFinite(parsed) || parsed < 1) return null;
-  return Math.floor(parsed);
-}
-
-function parseTicketSalesCutoffDays(value: string) {
-  if (!value.trim()) return 0;
-  const parsed = Number(value.trim());
-  if (!Number.isFinite(parsed)) return null;
-  if (parsed < 0 || parsed > 365) return null;
-  return Math.floor(parsed);
-}
-
-function parseGuestPlusLimit(value: string) {
-  if (!value.trim()) return null;
-  const parsed = Number(value.trim());
-  if (!Number.isFinite(parsed) || parsed < 1) return null;
-  return Math.min(Math.floor(parsed), 12);
 }
 
 function createLocalId() {
@@ -557,24 +583,6 @@ function buildMapEmbedUrl(coords: LatLng, mapsApiKey: string): string | null {
   return url.toString();
 }
 
-function resolveStripeConnectStatus(data: Record<string, unknown> | null): StripeConnectStatus {
-  const raw = data?.stripeConnectStatus;
-  if (raw === "pending" || raw === "complete" || raw === "restricted") {
-    return raw;
-  }
-  return "not_started";
-}
-
-function isPayoutReady(data: Record<string, unknown> | null) {
-  if (!data) return false;
-  return (
-    typeof data.stripeConnectAccountId === "string" &&
-    data.stripeConnectAccountId.length > 0 &&
-    data.stripeConnectStatus === "complete" &&
-    data.payoutsEnabled === true
-  );
-}
-
 export default function CreateTailgateWizard() {
   const location = useLocation();
   const { user } = useAuth();
@@ -597,6 +605,7 @@ export default function CreateTailgateWizard() {
   const [hostPromoEndsAtMs, setHostPromoEndsAtMs] = useState<number | null>(null);
   const [payoutModalOpen, setPayoutModalOpen] = useState(false);
   const [paidFeeModalOpen, setPaidFeeModalOpen] = useState(false);
+  const [typeInfoVisible, setTypeInfoVisible] = useState<VisibilityType | null>(null);
   const [payoutSetupLoading, setPayoutSetupLoading] = useState(false);
   const [payoutSetupError, setPayoutSetupError] = useState<string | null>(null);
 
@@ -613,8 +622,7 @@ export default function CreateTailgateWizard() {
   const [locationInputFocused, setLocationInputFocused] = useState(false);
 
   const [visibilityType, setVisibilityType] = useState<VisibilityType>("private");
-  const [priceInput, setPriceInput] = useState("");
-  const [capacityInput, setCapacityInput] = useState("");
+  const [ticketTypes, setTicketTypes] = useState<EventTicketType[]>([]);
   const [ticketSalesCutoffDaysInput, setTicketSalesCutoffDaysInput] = useState("0");
   const [expectations, setExpectations] = useState<Expectations>(expectationsDefaults);
 
@@ -660,9 +668,62 @@ export default function CreateTailgateWizard() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const guestInvitesEnabled = visibilityType === "private";
   const quizCreationAllowed = visibilityType === "private";
-  const ticketPriceCents = useMemo(() => parsePriceToCents(priceInput), [priceInput]);
-  const ticketCapacity = useMemo(() => parseCapacity(capacityInput), [capacityInput]);
   const hostPlatformFeeRate = hostPlatformFeePercent / 100;
+  const activeTicketTypes = useMemo(
+    () => ticketTypes.filter((ticketType) => ticketType.isActive !== false),
+    [ticketTypes]
+  );
+  const hasTicketCapacities = useMemo(
+    () =>
+      activeTicketTypes.length > 0 &&
+      activeTicketTypes.every(
+        (ticketType) =>
+          typeof ticketType.quantityAvailable === "number" && ticketType.quantityAvailable > 0
+      ),
+    [activeTicketTypes]
+  );
+  const calculatedEventCapacity = useMemo(() => {
+    if (!hasTicketCapacities) {
+      return null;
+    }
+    return activeTicketTypes.reduce(
+      (sum, ticketType) => sum + (ticketType.quantityAvailable ?? 0),
+      0
+    );
+  }, [activeTicketTypes, hasTicketCapacities]);
+  const minimumTicketTypePriceCents = useMemo(
+    () => resolveLowestTicketTypePriceCents(activeTicketTypes),
+    [activeTicketTypes]
+  );
+
+  const createEditableTicketType = useCallback(
+    (overrides?: Partial<EventTicketType>): EventTicketType => {
+      const now = new Date();
+      const base = createDefaultTicketType({
+        eventId: null,
+        priceCents: MIN_TICKET_PRICE_CENTS,
+        currency: "USD",
+        now
+      });
+      return {
+        ...base,
+        id: overrides?.id ?? createLocalId(),
+        sortOrder: overrides?.sortOrder ?? base.sortOrder,
+        name: overrides?.name ?? base.name,
+        description: overrides?.description ?? base.description,
+        priceCents: overrides?.priceCents ?? base.priceCents,
+        currency: overrides?.currency ?? base.currency,
+        quantityAvailable:
+          overrides?.quantityAvailable === undefined
+            ? base.quantityAvailable
+            : overrides.quantityAvailable,
+        isActive: overrides?.isActive ?? true,
+        createdAt: overrides?.createdAt ?? now,
+        updatedAt: overrides?.updatedAt ?? now
+      };
+    },
+    []
+  );
 
   const filteredContacts = useMemo(() => {
     const query = contactSearch.trim().toLowerCase();
@@ -672,29 +733,25 @@ export default function CreateTailgateWizard() {
     );
   }, [contactSearch]);
 
-  const pricingInvalid = useMemo(() => {
-    if (visibilityType !== "open_paid") return false;
-    return !ticketPriceCents || ticketPriceCents < minTicketPriceCents;
-  }, [ticketPriceCents, visibilityType]);
-
-  const capacityInvalid = useMemo(() => {
-    if (visibilityType !== "open_paid") return false;
-    if (!capacityInput.trim()) return false;
-    return parseCapacity(capacityInput) === null;
-  }, [capacityInput, visibilityType]);
-
   const ticketSalesCutoffInvalid = useMemo(() => {
     if (visibilityType !== "open_paid") return false;
-    return parseTicketSalesCutoffDays(ticketSalesCutoffDaysInput) === null;
+    return parseTicketSalesCutoffDaysInput(ticketSalesCutoffDaysInput) === null;
   }, [ticketSalesCutoffDaysInput, visibilityType]);
 
-  const progressLabel = `${stepIndex + 1} / ${wizardSteps.length}`;
+  const activeWizardSteps = visibilityType === "open_paid" ? paidWizardSteps : baseWizardSteps;
+  const currentStep = activeWizardSteps[stepIndex] ?? activeWizardSteps[0];
+  const currentStepKey = currentStep.key;
+  const stepNumberFor = useCallback(
+    (key: WizardStep["key"]) => activeWizardSteps.findIndex((step) => step.key === key) + 1,
+    [activeWizardSteps]
+  );
+  const progressLabel = `${stepIndex + 1} / ${activeWizardSteps.length}`;
   const stepSubtitle =
-    stepIndex === 3
+    currentStepKey === "invite"
       ? guestInvitesEnabled
         ? "Invite Friends + Add-ons"
         : "Optional Add-ons"
-      : wizardSteps[stepIndex].subtitle;
+      : currentStep.subtitle;
   const resolvedLocationDisplay = resolveLocationLabel(locationRecord);
   const locationDisplayText =
     formatAddressBlock(resolvedLocationDisplay ?? locationSummary) ?? locationSummary;
@@ -705,36 +762,75 @@ export default function CreateTailgateWizard() {
   const currentQuizErrors = quizErrors[currentQuizQuestionIndex] ?? {};
   const paidTicketEstimate = useMemo(() => {
     if (visibilityType !== "open_paid") return null;
-    if (!ticketPriceCents || ticketPriceCents < minTicketPriceCents) return null;
+    const validTicketTypes = activeTicketTypes.filter(
+      (ticketType) =>
+        Number.isFinite(ticketType.priceCents) &&
+        ticketType.priceCents >= MIN_TICKET_PRICE_CENTS
+    );
+    if (validTicketTypes.length === 0) {
+      return null;
+    }
 
-    const estimate = estimateHostPayout({
-      ticketsSold: 1,
-      ticketPriceCents,
-      platformFeeRate: hostPlatformFeeRate,
-      stripeFeePercent: 0,
-      stripeFeeFixed: 0
-    });
-    const totalFee = Math.round(estimate.platformFee);
-    const selloutEstimate =
-      ticketCapacity && ticketCapacity > 0
+    const perTicketType = validTicketTypes.map((ticketType) => {
+      const singleEstimate = estimateHostPayout({
+        ticketsSold: 1,
+        ticketPriceCents: ticketType.priceCents,
+        platformFeeRate: hostPlatformFeeRate,
+        stripeFeePercent: 0,
+        stripeFeeFixed: 0
+      });
+
+      const ticketQuantity =
+        typeof ticketType.quantityAvailable === "number" && ticketType.quantityAvailable > 0
+          ? ticketType.quantityAvailable
+          : null;
+      const selloutEstimate = ticketQuantity
         ? estimateHostPayout({
-            ticketsSold: ticketCapacity,
-            ticketPriceCents,
+            ticketsSold: ticketQuantity,
+            ticketPriceCents: ticketType.priceCents,
             platformFeeRate: hostPlatformFeeRate,
             stripeFeePercent: 0,
             stripeFeeFixed: 0
           })
         : null;
-    const selloutGross = selloutEstimate ? Math.round(selloutEstimate.gross) : null;
-    const selloutTotalFee = selloutEstimate ? Math.round(selloutEstimate.platformFee) : null;
+
+      return {
+        id: ticketType.id,
+        name: ticketType.name,
+        priceCents: ticketType.priceCents,
+        quantityAvailable: ticketQuantity,
+        totalFee: Math.round(singleEstimate.platformFee),
+        payout: Math.round(singleEstimate.payout),
+        selloutGross: selloutEstimate ? Math.round(selloutEstimate.gross) : null,
+        selloutTotalFee: selloutEstimate ? Math.round(selloutEstimate.platformFee) : null,
+        selloutPayout: selloutEstimate ? Math.round(selloutEstimate.payout) : null
+      };
+    });
+
+    const fees = perTicketType.map((ticketType) => ticketType.totalFee);
+    const payouts = perTicketType.map((ticketType) => ticketType.payout);
+    const selloutGrossValues = perTicketType
+      .map((ticketType) => ticketType.selloutGross)
+      .filter((value): value is number => value !== null);
+    const selloutFeeValues = perTicketType
+      .map((ticketType) => ticketType.selloutTotalFee)
+      .filter((value): value is number => value !== null);
 
     return {
-      totalFee,
-      payout: Math.round(estimate.payout),
-      selloutGross,
-      selloutTotalFee
+      ticketTypeCount: perTicketType.length,
+      minPriceCents: Math.min(...perTicketType.map((ticketType) => ticketType.priceCents)),
+      maxPriceCents: Math.max(...perTicketType.map((ticketType) => ticketType.priceCents)),
+      minFee: Math.min(...fees),
+      maxFee: Math.max(...fees),
+      minPayout: Math.min(...payouts),
+      maxPayout: Math.max(...payouts),
+      selloutGrossMin: selloutGrossValues.length > 0 ? Math.min(...selloutGrossValues) : null,
+      selloutGrossMax: selloutGrossValues.length > 0 ? Math.max(...selloutGrossValues) : null,
+      selloutFeeMin: selloutFeeValues.length > 0 ? Math.min(...selloutFeeValues) : null,
+      selloutFeeMax: selloutFeeValues.length > 0 ? Math.max(...selloutFeeValues) : null,
+      perTicketType
     };
-  }, [hostPlatformFeeRate, ticketCapacity, ticketPriceCents, visibilityType]);
+  }, [activeTicketTypes, hostPlatformFeeRate, visibilityType]);
   const hostPromoEndsLabel = useMemo(() => {
     if (!hostPromoEndsAtMs) {
       return null;
@@ -756,8 +852,61 @@ export default function CreateTailgateWizard() {
   } = usePlacesAutocomplete({
     mapsApiKey: MAPS_API_KEY,
     value: locationSummary,
-    enabled: stepIndex === 2
+    enabled: currentStepKey === "location"
   });
+
+  const updateTicketType = useCallback((ticketTypeId: string, patch: Partial<EventTicketType>) => {
+    setTicketTypes((previous) =>
+      previous.map((ticketType, index) =>
+        ticketType.id === ticketTypeId
+          ? {
+              ...ticketType,
+              ...patch,
+              sortOrder: index,
+              updatedAt: new Date()
+            }
+          : { ...ticketType, sortOrder: index }
+      )
+    );
+  }, []);
+
+  const addTicketType = useCallback(() => {
+    setTicketTypes((previous) => {
+      if (previous.length >= MAX_TICKET_TYPES) {
+        return previous;
+      }
+      const nextType = createEditableTicketType({
+        id: createLocalId(),
+        sortOrder: previous.length,
+        name: "",
+        description: "",
+        priceCents:
+          minimumTicketTypePriceCents && minimumTicketTypePriceCents >= MIN_TICKET_PRICE_CENTS
+            ? minimumTicketTypePriceCents
+            : MIN_TICKET_PRICE_CENTS
+      });
+      return [...previous, nextType].map((ticketType, index) => ({
+        ...ticketType,
+        sortOrder: index
+      }));
+    });
+    setErrors((prev) => ({ ...prev, ticketTypes: "" }));
+  }, [createEditableTicketType, minimumTicketTypePriceCents]);
+
+  const removeTicketType = useCallback((ticketTypeId: string) => {
+    setTicketTypes((previous) => {
+      if (previous.length <= 1) {
+        return previous;
+      }
+      return previous
+        .filter((ticketType) => ticketType.id !== ticketTypeId)
+        .map((ticketType, index) => ({
+          ...ticketType,
+          sortOrder: index,
+          updatedAt: new Date()
+        }));
+    });
+  }, []);
 
   const refreshPayoutStatus = useCallback(async (): Promise<boolean> => {
     if (!user?.uid || !db) {
@@ -806,6 +955,34 @@ export default function CreateTailgateWizard() {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [refreshPayoutStatus]);
+
+  useEffect(() => {
+    if (stepIndex < activeWizardSteps.length) return;
+    setStepIndex(Math.max(activeWizardSteps.length - 1, 0));
+  }, [activeWizardSteps.length, stepIndex]);
+
+  useEffect(() => {
+    if (visibilityType === "open_paid") {
+      if (ticketTypes.length === 0) {
+        setTicketTypes([createEditableTicketType()]);
+      }
+      return;
+    }
+
+    if (ticketSalesCutoffDaysInput !== "0") {
+      setTicketSalesCutoffDaysInput("0");
+      setErrors((prev) => ({
+        ...prev,
+        ticketSalesCutoffDaysInput: "",
+        ticketTypes: ""
+      }));
+    }
+  }, [
+    createEditableTicketType,
+    ticketSalesCutoffDaysInput,
+    ticketTypes.length,
+    visibilityType
+  ]);
 
   useEffect(() => {
     if (!editingTimelineId && timelineSteps.length === 0 && eventTime) {
@@ -1377,28 +1554,60 @@ export default function CreateTailgateWizard() {
     }
   };
 
-  const validateStep = (index: number) => {
+  const validateTicketTypesForForm = () => {
+    const nextErrors: Record<string, string> = {};
+    if (ticketTypes.length < 1) {
+      nextErrors.ticketTypes = "Add at least 1 ticket type.";
+      return nextErrors;
+    }
+    if (ticketTypes.length > MAX_TICKET_TYPES) {
+      nextErrors.ticketTypes = `You can add up to ${MAX_TICKET_TYPES} ticket types.`;
+      return nextErrors;
+    }
+
+    ticketTypes.forEach((ticketType, index) => {
+      const typeName = sanitizeTicketTypeName(ticketType.name);
+      if (!typeName) {
+        nextErrors[`ticketTypeName_${ticketType.id}`] = "Ticket type name is required.";
+      }
+      if (
+        !Number.isFinite(ticketType.priceCents) ||
+        ticketType.priceCents < MIN_TICKET_PRICE_CENTS
+      ) {
+        nextErrors[`ticketTypePrice_${ticketType.id}`] = "Minimum price is $25.00";
+      }
+      if (
+        typeof ticketType.quantityAvailable !== "number" ||
+        !Number.isFinite(ticketType.quantityAvailable) ||
+        ticketType.quantityAvailable < 1
+      ) {
+        nextErrors[`ticketTypeCapacity_${ticketType.id}`] = "Ticket capacity is required.";
+      }
+      if (index >= MAX_TICKET_TYPES) {
+        nextErrors.ticketTypes = `You can add up to ${MAX_TICKET_TYPES} ticket types.`;
+      }
+    });
+
+    return nextErrors;
+  };
+
+  const validateStep = (stepKey: WizardStep["key"]) => {
     const nextErrors: Record<string, string> = {};
 
-    if (index === 0) {
+    if (stepKey === "type") {
       if (visibilityType === "open_paid" && !payoutReady) {
         nextErrors.visibilityType = "Set up payouts to host paid tailgates.";
       }
-      if (visibilityType === "open_paid") {
-        const cents = parsePriceToCents(priceInput);
-        if (!cents || cents < minTicketPriceCents) {
-          nextErrors.priceInput = "Minimum price is $25.00";
-        }
-        if (capacityInput.trim() && parseCapacity(capacityInput) === null) {
-          nextErrors.capacityInput = "Capacity must be at least 1.";
-        }
-        if (parseTicketSalesCutoffDays(ticketSalesCutoffDaysInput) === null) {
-          nextErrors.ticketSalesCutoffDaysInput = "Use a whole number from 0 to 365.";
-        }
+    }
+
+    if (stepKey === "tickets" && visibilityType === "open_paid") {
+      Object.assign(nextErrors, validateTicketTypesForForm());
+      if (parseTicketSalesCutoffDaysInput(ticketSalesCutoffDaysInput) === null) {
+        nextErrors.ticketSalesCutoffDaysInput = "Use a whole number from 0 to 365.";
       }
     }
 
-    if (index === 1) {
+    if (stepKey === "details") {
       if (!eventName.trim()) nextErrors.eventName = "Event name is required.";
       if (!eventDate) nextErrors.eventDate = "Date is required.";
       if (!eventTime) nextErrors.eventTime = "Time is required.";
@@ -1412,13 +1621,13 @@ export default function CreateTailgateWizard() {
       }
     }
 
-    if (index === 2) {
+    if (stepKey === "location") {
       if (!locationSummary.trim()) nextErrors.locationSummary = "Location is required.";
     }
 
-    if (index === 3) {
+    if (stepKey === "invite") {
       if (visibilityType === "private" && allowGuestPlusOnInvite) {
-        const parsedLimit = parseGuestPlusLimit(maxAdditionalGuestsPerInvite);
+        const parsedLimit = parseGuestPlusLimitInput(maxAdditionalGuestsPerInvite);
         if (!parsedLimit) {
           nextErrors.guestPlusLimit = "Enter at least 1 additional guest.";
         }
@@ -1443,9 +1652,9 @@ export default function CreateTailgateWizard() {
 
   const handleNext = async () => {
     setSuccessMessage(null);
-    if (!validateStep(stepIndex)) return;
+    if (!validateStep(currentStepKey)) return;
 
-    if (stepIndex === 2 && !locationCoords) {
+    if (currentStepKey === "location" && !locationCoords) {
       const resolvedCoords = await resolveAddressToCoords();
       if (requiresDiscoverableLocation(visibilityType) && !resolvedCoords) {
         setErrors((prev) => ({
@@ -1456,7 +1665,7 @@ export default function CreateTailgateWizard() {
       }
     }
 
-    setStepIndex((current) => Math.min(current + 1, wizardSteps.length - 1));
+    setStepIndex((current) => Math.min(current + 1, activeWizardSteps.length - 1));
   };
 
   const handleBack = () => {
@@ -1594,7 +1803,8 @@ export default function CreateTailgateWizard() {
   };
 
   const handleCreateTailgate = async () => {
-    const stepValidity = [0, 1, 2, 3].map((index) => validateStep(index));
+    const stepsToValidate = activeWizardSteps.filter((step) => step.key !== "review");
+    const stepValidity = stepsToValidate.map((step) => validateStep(step.key));
     const firstInvalidStep = stepValidity.findIndex((isValid) => !isValid);
     if (firstInvalidStep !== -1) {
       setStepIndex(firstInvalidStep);
@@ -1643,8 +1853,7 @@ export default function CreateTailgateWizard() {
       return;
     }
 
-    const priceCents = ticketPriceCents;
-    const capacity = ticketCapacity;
+    const capacity = calculatedEventCapacity;
     const trimmedLocation = locationSummary.trim();
     const locationPayload = buildLocationPayload(locationRecord, trimmedLocation, resolvedCoords);
     const normalizedLocationSummary = resolveLocationLabel(locationPayload) || trimmedLocation;
@@ -1744,7 +1953,7 @@ export default function CreateTailgateWizard() {
     };
 
     if (visibilityType === "private") {
-      const parsedPlusLimit = parseGuestPlusLimit(maxAdditionalGuestsPerInvite);
+      const parsedPlusLimit = parseGuestPlusLimitInput(maxAdditionalGuestsPerInvite);
       payload.allowGuestPlusOnInvite = allowGuestPlusOnInvite;
       payload.maxAdditionalGuestsPerInvite = allowGuestPlusOnInvite
         ? parsedPlusLimit ?? 1
@@ -1770,14 +1979,61 @@ export default function CreateTailgateWizard() {
     }
 
     if (visibilityType === "open_paid") {
-      const ticketSalesCloseDaysBefore = parseTicketSalesCutoffDays(ticketSalesCutoffDaysInput) ?? 0;
+      const ticketTypeValidationErrors = validateTicketTypesForForm();
+      if (Object.keys(ticketTypeValidationErrors).length > 0) {
+        setErrors((prev) => ({ ...prev, ...ticketTypeValidationErrors }));
+        setSaving(false);
+        return;
+      }
+
+      const now = new Date();
+      const normalizedTicketTypes = ticketTypes
+        .slice(0, MAX_TICKET_TYPES)
+        .map((ticketType, index) => ({
+          ...ticketType,
+          id: ticketType.id || createLocalId(),
+          name: sanitizeTicketTypeName(ticketType.name),
+          description: sanitizeTicketTypeDescription(ticketType.description),
+          priceCents: ticketType.priceCents,
+          currency: (ticketType.currency || "USD").toUpperCase(),
+          quantityAvailable: ticketType.quantityAvailable ?? null,
+          sortOrder: index,
+          isActive: ticketType.isActive !== false,
+          createdAt: ticketType.createdAt ?? now,
+          updatedAt: now
+        }));
+
+      if (!hasRequiredTicketTypes(normalizedTicketTypes)) {
+        setErrors((prev) => ({
+          ...prev,
+          ticketTypes: "Add at least 1 ticket type before publishing."
+        }));
+        setSaving(false);
+        return;
+      }
+
+      const lowestPriceCents = resolveLowestTicketTypePriceCents(normalizedTicketTypes);
+      if (!lowestPriceCents || lowestPriceCents < MIN_TICKET_PRICE_CENTS) {
+        setErrors((prev) => ({
+          ...prev,
+          ticketTypes: "Each ticket type must be priced at $25 or more."
+        }));
+        setSaving(false);
+        return;
+      }
+
+      const ticketSalesCloseDaysBefore =
+        parseTicketSalesCutoffDaysInput(ticketSalesCutoffDaysInput) ?? 0;
       const ticketSalesCloseAt = new Date(
         startDateTime.getTime() - ticketSalesCloseDaysBefore * 24 * 60 * 60 * 1000
       );
-      payload.priceCents = priceCents;
-      payload.ticketPriceCents = priceCents;
+      payload.ticketTypes = normalizedTicketTypes;
+      payload.priceCents = lowestPriceCents;
       payload.currency = "USD";
-      payload.capacity = capacity;
+      payload.platformFeePercent = hostPlatformFeePercent;
+      if (capacity) {
+        payload.capacity = capacity;
+      }
       payload.visibilityRequiresPayment = true;
       payload.ticketSalesCloseDaysBefore = ticketSalesCloseDaysBefore;
       payload.ticketSalesCutoffDays = ticketSalesCloseDaysBefore;
@@ -1850,7 +2106,7 @@ export default function CreateTailgateWizard() {
     <section className="create-wizard-stack">
       <div className="create-wizard-card">
         <div className="create-wizard-card-header">
-          <h2>Step 2: Event Details</h2>
+          <h2>{`Step ${stepNumberFor("details")}: Event Details`}</h2>
         </div>
 
         <label className="input-label" htmlFor="event-name">Tailgate Event Name</label>
@@ -2022,7 +2278,7 @@ export default function CreateTailgateWizard() {
   const renderStepLocation = () => (
     <section className="create-wizard-card">
       <div className="create-wizard-card-header">
-        <h2>Step 3: Event Location</h2>
+        <h2>{`Step ${stepNumberFor("location")}: Event Location`}</h2>
       </div>
 
       <label className="input-label" htmlFor="location-summary">Location</label>
@@ -2122,7 +2378,7 @@ export default function CreateTailgateWizard() {
     <section className="create-wizard-stack">
       <div className="create-wizard-card">
         <div className="create-wizard-card-header">
-          <h2>Step 1: Tailgate Type</h2>
+          <h2>{`Step ${stepNumberFor("type")}: Tailgate Type`}</h2>
         </div>
         <div className="create-wizard-radio-list">
           {visibilityOptions.map((option) => (
@@ -2132,8 +2388,21 @@ export default function CreateTailgateWizard() {
                 checked={visibilityType === option.key}
                 onChange={() => handleVisibilitySelect(option.key)}
               />
-              <span>
-                <strong>{option.label}</strong>
+              <span className="create-wizard-radio-copy">
+                <span className="create-wizard-radio-title-row">
+                  <strong>{option.label}</strong>
+                  <button
+                    type="button"
+                    className="link-button create-wizard-radio-link"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setTypeInfoVisible(option.key);
+                    }}
+                  >
+                    How it works
+                  </button>
+                </span>
                 <span className="create-wizard-radio-help">{option.description}</span>
                 {option.key === "open_paid" && !payoutReady ? (
                   <span className="create-wizard-radio-warning">Requires payout setup</span>
@@ -2150,77 +2419,224 @@ export default function CreateTailgateWizard() {
             Payout status: {connectStatus.replace("_", " ")}
           </p>
         ) : null}
-
-        {visibilityType === "open_paid" ? (
-          <div className="create-wizard-inline-grid">
-            <div>
-              <label className="input-label" htmlFor="ticket-price">Ticket Price (USD)</label>
-              <div className="create-wizard-input-with-prefix">
-                <span className="create-wizard-input-prefix" aria-hidden="true">$</span>
-                <input
-                  id="ticket-price"
-                  className="text-input create-wizard-input"
-                  value={priceInput}
-                  onChange={(event) => {
-                    setPriceInput(event.target.value.replace(/[^0-9.]/g, ""));
-                    clearFieldError("priceInput");
-                  }}
-                  placeholder="25.00"
-                  inputMode="decimal"
-                />
-              </div>
-              {errors.priceInput || pricingInvalid ? (
-                <p className="create-wizard-error">
-                  {errors.priceInput ?? "Minimum price is $25.00"}
-                </p>
-              ) : null}
-            </div>
-              <div>
-                <label className="input-label" htmlFor="ticket-capacity">Capacity (optional)</label>
-                <input
-                id="ticket-capacity"
-                className="text-input create-wizard-input"
-                value={capacityInput}
-                onChange={(event) => {
-                  setCapacityInput(event.target.value.replace(/\D/g, ""));
-                  clearFieldError("capacityInput");
-                }}
-                placeholder="100"
-              />
-              {errors.capacityInput || capacityInvalid ? (
-                <p className="create-wizard-error">
-                  {errors.capacityInput ?? "Capacity must be at least 1."}
-                </p>
-                ) : null}
-              </div>
-              <div>
-                <label className="input-label" htmlFor="ticket-sales-cutoff-days">
-                  Stop selling tickets (days before)
-                </label>
-                <input
-                  id="ticket-sales-cutoff-days"
-                  className="text-input create-wizard-input"
-                  value={ticketSalesCutoffDaysInput}
-                  onChange={(event) => {
-                    setTicketSalesCutoffDaysInput(event.target.value.replace(/\D/g, ""));
-                    clearFieldError("ticketSalesCutoffDaysInput");
-                  }}
-                  placeholder="0"
-                  inputMode="numeric"
-                />
-                <p className="meta-muted">Set to 0 to allow sales until event start.</p>
-                {errors.ticketSalesCutoffDaysInput || ticketSalesCutoffInvalid ? (
-                  <p className="create-wizard-error">
-                    {errors.ticketSalesCutoffDaysInput ?? "Use a whole number from 0 to 365."}
-                  </p>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-
-        {visibilityType === "open_paid" ? renderPaidTicketSummaryCard() : null}
       </div>
 
+    </section>
+  );
+
+  const renderStepTickets = () => (
+    <section className="create-wizard-stack">
+      <div className="create-wizard-card">
+        <div className="create-wizard-card-header">
+          <h2>{`Step ${stepNumberFor("tickets")}: Tickets & Pricing`}</h2>
+        </div>
+        <div className="create-wizard-ticket-section">
+          <div className="create-wizard-ticket-toolbar">
+            <div>
+              <h3>Ticket types</h3>
+              <p>Build the lineup guests will choose from at checkout.</p>
+            </div>
+          </div>
+          <p className="create-wizard-ticket-count">
+            {ticketTypes.length} of {MAX_TICKET_TYPES} ticket types configured
+          </p>
+          {errors.ticketTypes ? <p className="create-wizard-error">{errors.ticketTypes}</p> : null}
+          <div className="create-wizard-ticket-list">
+            {ticketTypes.map((ticketType, index) => (
+              <div key={ticketType.id} className="create-wizard-ticket-card">
+                <div className="create-wizard-ticket-card-header">
+                  <div>
+                    <h4>
+                      {ticketType.name.trim() ? ticketType.name.trim() : `Ticket type ${index + 1}`}
+                    </h4>
+                    <p>Visible to guests during checkout.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => removeTicketType(ticketType.id)}
+                    disabled={ticketTypes.length <= 1}
+                  >
+                    Remove
+                  </button>
+                </div>
+                <div>
+                  <label className="input-label" htmlFor={`ticket-type-name-${ticketType.id}`}>
+                    Ticket type name
+                  </label>
+                  <input
+                    id={`ticket-type-name-${ticketType.id}`}
+                    className="text-input create-wizard-input"
+                    value={ticketType.name}
+                    onChange={(event) => {
+                      updateTicketType(ticketType.id, {
+                        name: limitTicketTypeNameInput(event.target.value)
+                      });
+                      setErrors((prev) => ({
+                        ...prev,
+                        ticketTypes: "",
+                        [`ticketTypeName_${ticketType.id}`]: ""
+                      }));
+                    }}
+                    placeholder="VIP, Parking Pass, Kids Ticket..."
+                  />
+                  {errors[`ticketTypeName_${ticketType.id}`] ? (
+                    <p className="create-wizard-error">{errors[`ticketTypeName_${ticketType.id}`]}</p>
+                  ) : null}
+                </div>
+                <div>
+                  <label className="input-label" htmlFor={`ticket-type-description-${ticketType.id}`}>
+                    Description (optional)
+                  </label>
+                  <textarea
+                    id={`ticket-type-description-${ticketType.id}`}
+                    className="text-input create-wizard-input create-wizard-textarea create-wizard-ticket-description"
+                    value={ticketType.description || ""}
+                    onChange={(event) =>
+                      updateTicketType(ticketType.id, {
+                        description: limitTicketTypeDescriptionInput(event.target.value)
+                      })
+                    }
+                    placeholder="Tell guests what this ticket includes."
+                  />
+                </div>
+                <div className="create-wizard-ticket-price-row">
+                  <div>
+                    <label className="input-label" htmlFor={`ticket-type-price-${ticketType.id}`}>
+                      Price (USD)
+                    </label>
+                    <div className="create-wizard-input-with-prefix">
+                      <span className="create-wizard-input-prefix" aria-hidden="true">$</span>
+                      <input
+                        id={`ticket-type-price-${ticketType.id}`}
+                        className="text-input create-wizard-input"
+                        value={formatPriceInput(ticketType.priceCents)}
+                        onChange={(event) => {
+                          const cleaned = event.target.value.replace(/[^0-9.]/g, "");
+                          updateTicketType(ticketType.id, {
+                            priceCents: parsePriceInputToCents(cleaned) ?? 0
+                          });
+                          setErrors((prev) => ({
+                            ...prev,
+                            ticketTypes: "",
+                            [`ticketTypePrice_${ticketType.id}`]: ""
+                          }));
+                        }}
+                        placeholder="25.00"
+                        inputMode="decimal"
+                      />
+                    </div>
+                    {errors[`ticketTypePrice_${ticketType.id}`] ? (
+                      <p className="create-wizard-error">
+                        {errors[`ticketTypePrice_${ticketType.id}`]}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="create-wizard-ticket-currency-pill">
+                    <span>USD</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="input-label" htmlFor={`ticket-type-capacity-${ticketType.id}`}>
+                    Capacity for this ticket type
+                  </label>
+                  <input
+                    id={`ticket-type-capacity-${ticketType.id}`}
+                    className="text-input create-wizard-input"
+                    value={
+                      typeof ticketType.quantityAvailable === "number"
+                        ? String(ticketType.quantityAvailable)
+                        : ""
+                    }
+                    onChange={(event) => {
+                      const cleaned = event.target.value.replace(/\D/g, "");
+                      updateTicketType(ticketType.id, {
+                        quantityAvailable: cleaned ? parseCapacityInput(cleaned) : null
+                      });
+                      setErrors((prev) => ({
+                        ...prev,
+                        [`ticketTypeCapacity_${ticketType.id}`]: ""
+                      }));
+                    }}
+                    placeholder="50"
+                    inputMode="numeric"
+                  />
+                  <p className="meta-muted">
+                    This ticket type sells up to this many tickets.
+                  </p>
+                  {errors[`ticketTypeCapacity_${ticketType.id}`] ? (
+                    <p className="create-wizard-error">
+                      {errors[`ticketTypeCapacity_${ticketType.id}`]}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="create-wizard-ticket-add-card"
+              onClick={addTicketType}
+              disabled={ticketTypes.length >= MAX_TICKET_TYPES}
+            >
+              <strong>
+                {ticketTypes.length >= MAX_TICKET_TYPES
+                  ? "Ticket type limit reached"
+                  : "Add another ticket type"}
+              </strong>
+              <span>
+                {ticketTypes.length >= MAX_TICKET_TYPES
+                  ? `You can add up to ${MAX_TICKET_TYPES} ticket types.`
+                  : "Use this for VIP, parking, early entry, or any other tier you want to offer."}
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="create-wizard-card">
+        <div className="create-wizard-card-header">
+          <h2>Sales Settings</h2>
+        </div>
+        <div className="create-wizard-ticket-settings">
+          <div>
+            <label className="input-label" htmlFor="ticket-sales-cutoff-days">
+              Stop selling tickets (days before)
+            </label>
+            <input
+              id="ticket-sales-cutoff-days"
+              className="text-input create-wizard-input"
+              value={ticketSalesCutoffDaysInput}
+              onChange={(event) => {
+                setTicketSalesCutoffDaysInput(event.target.value.replace(/\D/g, ""));
+                clearFieldError("ticketSalesCutoffDaysInput");
+              }}
+              placeholder="0"
+              inputMode="numeric"
+            />
+            <p className="meta-muted">Set to 0 to allow sales until event start.</p>
+            {errors.ticketSalesCutoffDaysInput || ticketSalesCutoffInvalid ? (
+              <p className="create-wizard-error">
+                {errors.ticketSalesCutoffDaysInput ?? "Use a whole number from 0 to 365."}
+              </p>
+            ) : null}
+          </div>
+          <div>
+            <label className="input-label" htmlFor="ticket-capacity">Calculated event capacity</label>
+            <input
+              id="ticket-capacity"
+              className="text-input create-wizard-input"
+              value={calculatedEventCapacity ? String(calculatedEventCapacity) : ""}
+              placeholder="Add capacities above"
+              readOnly
+            />
+            <p className="meta-muted">
+              This total is calculated from the sum of all ticket type capacities.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {renderPaidTicketSummaryCard()}
     </section>
   );
 
@@ -2244,33 +2660,33 @@ export default function CreateTailgateWizard() {
           </button>
         </div>
         {paidTicketEstimate ? (
-          <div className="create-wizard-fee-grid">
-            <div>
-              <span>Ticket price</span>
-              <strong>{formatUsdFromCents(ticketPriceCents ?? 0)}</strong>
+          <>
+            <div className="create-wizard-fee-tier-list">
+              {paidTicketEstimate.perTicketType.map((ticketType) => (
+                <div key={ticketType.id} className="create-wizard-fee-tier-row">
+                  <div>
+                    <strong>{ticketType.name}</strong>
+                    <span>{formatUsdFromCents(ticketType.priceCents)} ticket</span>
+                  </div>
+                  <div>
+                    <strong>{formatUsdFromCents(ticketType.totalFee)} fee</strong>
+                    <span>Host gets {formatUsdFromCents(ticketType.payout)}</span>
+                    {ticketType.selloutPayout !== null && ticketType.quantityAvailable !== null ? (
+                      <span>
+                        At {ticketType.quantityAvailable} sold: Host gets{" "}
+                        {formatUsdFromCents(ticketType.selloutPayout)}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
             </div>
-            <div>
-              <span>TailgateTime fee est.</span>
-              <strong>{formatUsdFromCents(paidTicketEstimate.totalFee)}</strong>
-            </div>
-            <div>
-              <span>Host gets est.</span>
-              <strong>{formatUsdFromCents(paidTicketEstimate.payout)}</strong>
-            </div>
-          </div>
+          </>
         ) : (
           <p className="create-wizard-fee-empty">
-            Enter a valid ticket price to preview the fee breakdown.
+            Add at least one valid ticket type to preview the fee breakdown.
           </p>
         )}
-        {paidTicketEstimate?.selloutGross && paidTicketEstimate.selloutTotalFee !== null ? (
-          <p className="create-wizard-fee-footnote">
-            At capacity, gross sales would be{" "}
-            <strong>{formatUsdFromCents(paidTicketEstimate.selloutGross)}</strong> and the
-            TailgateTime fee would be{" "}
-            <strong>{formatUsdFromCents(paidTicketEstimate.selloutTotalFee)}</strong>.
-          </p>
-        ) : null}
       </div>
     );
   }
@@ -2280,7 +2696,7 @@ export default function CreateTailgateWizard() {
       {guestInvitesEnabled ? (
         <div className="create-wizard-card">
           <div className="create-wizard-card-header">
-            <h2>Step 4: Invite Friends</h2>
+            <h2>{`Step ${stepNumberFor("invite")}: Invite Friends`}</h2>
             <button
               type="button"
               className="secondary-button"
@@ -2397,7 +2813,7 @@ export default function CreateTailgateWizard() {
       ) : (
         <div className="create-wizard-card">
           <div className="create-wizard-card-header">
-            <h2>Step 4: Optional Add-ons</h2>
+            <h2>{`Step ${stepNumberFor("invite")}: Optional Add-ons`}</h2>
           </div>
           <p className="meta-muted">
             Open tailgates do not support manual guest invites.
@@ -2775,8 +3191,8 @@ export default function CreateTailgateWizard() {
               type="button"
               className="primary-button"
               onClick={() => {
-                if (!validateStep(3)) return;
-                setStepIndex(4);
+                if (!validateStep("invite")) return;
+                setStepIndex(activeWizardSteps.findIndex((step) => step.key === "review"));
               }}
             >
               Review and Save
@@ -2803,28 +3219,21 @@ export default function CreateTailgateWizard() {
     const enabledExpectations = expectationOptions
       .filter((option) => expectations[option.key])
       .map((option) => option.label);
+    const parsedGuestPlusLimit = parseGuestPlusLimitInput(maxAdditionalGuestsPerInvite) ?? 1;
     const guestPlusSummary =
       visibilityType === "private"
         ? allowGuestPlusOnInvite
-          ? `Enabled | Up to ${parseGuestPlusLimit(maxAdditionalGuestsPerInvite) ?? 1} additional guest${
-              (parseGuestPlusLimit(maxAdditionalGuestsPerInvite) ?? 1) === 1 ? "" : "s"
+          ? `Enabled | Up to ${parsedGuestPlusLimit} additional guest${
+              parsedGuestPlusLimit === 1 ? "" : "s"
             } per invite`
           : "Disabled"
         : "Not applicable";
-    const ticketSummary =
-      visibilityType === "open_paid"
-        ? `Paid | $${((ticketPriceCents ?? 0) / 100).toFixed(2)} | Fee ${hostPlatformFeePercent}%${
-            capacityInput.trim() ? ` | Cap ${capacityInput}` : ""
-          } | Sales stop ${parseTicketSalesCutoffDays(ticketSalesCutoffDaysInput) ?? 0}d before`
-        : visibilityType === "open_free"
-        ? "Open (Free)"
-        : "Invite Only";
 
     return (
       <section className="create-wizard-stack">
         <div className="create-wizard-card">
           <div className="create-wizard-card-header">
-            <h2>Step 5: Review and Create</h2>
+            <h2>{`Step ${stepNumberFor("review")}: Review and Create`}</h2>
           </div>
 
           <dl className="create-wizard-review-grid">
@@ -2851,10 +3260,6 @@ export default function CreateTailgateWizard() {
             <div>
               <dt>Tailgate Type</dt>
               <dd>{selectedVisibility?.label ?? "Invite Only"}</dd>
-            </div>
-            <div>
-              <dt>Tickets</dt>
-              <dd>{ticketSummary}</dd>
             </div>
             {guestInvitesEnabled ? (
               <div>
@@ -2959,8 +3364,8 @@ export default function CreateTailgateWizard() {
             <p>{stepSubtitle}</p>
             <span>{progressLabel}</span>
           </div>
-          <div className="create-wizard-progress-bars" role="progressbar" aria-valuemin={1} aria-valuemax={wizardSteps.length} aria-valuenow={stepIndex + 1}>
-            {wizardSteps.map((step, index) => (
+          <div className="create-wizard-progress-bars" role="progressbar" aria-valuemin={1} aria-valuemax={activeWizardSteps.length} aria-valuenow={stepIndex + 1}>
+            {activeWizardSteps.map((step, index) => (
               <div
                 key={step.key}
                 className={`create-wizard-progress-segment ${index <= stepIndex ? "active" : ""}`}
@@ -2970,11 +3375,12 @@ export default function CreateTailgateWizard() {
         </div>
 
         <div className="create-wizard-body">
-          {stepIndex === 0 ? renderStepType() : null}
-          {stepIndex === 1 ? renderStepDetails() : null}
-          {stepIndex === 2 ? renderStepLocation() : null}
-          {stepIndex === 3 ? renderStepInvite() : null}
-          {stepIndex === 4 ? renderStepReview() : null}
+          {currentStepKey === "type" ? renderStepType() : null}
+          {currentStepKey === "tickets" ? renderStepTickets() : null}
+          {currentStepKey === "details" ? renderStepDetails() : null}
+          {currentStepKey === "location" ? renderStepLocation() : null}
+          {currentStepKey === "invite" ? renderStepInvite() : null}
+          {currentStepKey === "review" ? renderStepReview() : null}
         </div>
 
         {errors.submit ? <p className="create-wizard-error global">{errors.submit}</p> : null}
@@ -2989,13 +3395,17 @@ export default function CreateTailgateWizard() {
           >
             Back
           </button>
-          {stepIndex < wizardSteps.length - 1 ? (
+          {stepIndex < activeWizardSteps.length - 1 ? (
             <button type="button" className="primary-button" onClick={() => void handleNext()}>
-              {stepIndex === 0
+              {currentStepKey === "type"
+                ? visibilityType === "open_paid"
+                  ? "Next: Tickets & Pricing"
+                  : "Next: Event Details"
+                : currentStepKey === "tickets"
                 ? "Next: Event Details"
-                : stepIndex === 1
+                : currentStepKey === "details"
                 ? "Next: Event Location"
-                : stepIndex === 2
+                : currentStepKey === "location"
                 ? guestInvitesEnabled
                   ? "Next: Invite + Add-ons"
                   : "Next: Optional Add-ons"
@@ -3055,6 +3465,38 @@ export default function CreateTailgateWizard() {
             <button type="button" className="primary-button" onClick={applySelectedContacts}>
               Okay
             </button>
+          </div>
+        </div>
+      ) : null}
+
+      {typeInfoVisible ? (
+        <div className="create-wizard-modal-overlay" role="dialog" aria-modal="true">
+          <div className="create-wizard-modal create-wizard-payout-modal">
+            <div className="create-wizard-modal-header">
+              <h3>{visibilityHowItWorks[typeInfoVisible].title}</h3>
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => setTypeInfoVisible(null)}
+              >
+                Close
+              </button>
+            </div>
+            <p className="create-wizard-payout-copy">How it works</p>
+            <ul className="create-wizard-type-info-list">
+              {visibilityHowItWorks[typeInfoVisible].bullets.map((bullet) => (
+                <li key={bullet}>{bullet}</li>
+              ))}
+            </ul>
+            <div className="create-wizard-payout-actions">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => setTypeInfoVisible(null)}
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
@@ -3119,23 +3561,32 @@ export default function CreateTailgateWizard() {
               year after the qualifying event date.
             </p>
             {paidTicketEstimate ? (
-              <div className="create-wizard-fee-grid create-wizard-fee-grid-modal">
-                <div>
-                  <span>Ticket price</span>
-                  <strong>{formatUsdFromCents(ticketPriceCents ?? 0)}</strong>
+              <>
+                <div className="create-wizard-fee-tier-list">
+                  {paidTicketEstimate.perTicketType.map((ticketType) => (
+                    <div key={ticketType.id} className="create-wizard-fee-tier-row">
+                      <div>
+                        <strong>{ticketType.name}</strong>
+                        <span>{formatUsdFromCents(ticketType.priceCents)} ticket</span>
+                      </div>
+                      <div>
+                        <strong>{formatUsdFromCents(ticketType.totalFee)} fee</strong>
+                        <span>Host gets {formatUsdFromCents(ticketType.payout)}</span>
+                        {ticketType.selloutPayout !== null &&
+                        ticketType.quantityAvailable !== null ? (
+                          <span>
+                            At {ticketType.quantityAvailable} sold: Host gets{" "}
+                            {formatUsdFromCents(ticketType.selloutPayout)}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <div>
-                  <span>TailgateTime fee est.</span>
-                  <strong>{formatUsdFromCents(paidTicketEstimate.totalFee)}</strong>
-                </div>
-                <div>
-                  <span>Host gets est.</span>
-                  <strong>{formatUsdFromCents(paidTicketEstimate.payout)}</strong>
-                </div>
-              </div>
+              </>
             ) : (
               <p className="create-wizard-fee-empty">
-                Enter a ticket price after continuing to preview the full fee breakdown.
+                Add a valid ticket type after continuing to preview the full fee breakdown.
               </p>
             )}
             <div className="create-wizard-payout-actions">

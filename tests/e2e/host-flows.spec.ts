@@ -60,6 +60,8 @@ test.describe("Host flows", () => {
       page.getByRole("heading", { name: /step 5: review and create/i })
     ).toBeVisible();
     await expect(page.getByText("Codex Private Tailgate")).toBeVisible();
-    await expect(page.getByText("Pittsburgh, PA, USA")).toBeVisible();
+    await expect(
+      page.getByRole("definition").filter({ hasText: /Pittsburgh\s+PA\s+USA/ }).first()
+    ).toBeVisible();
   });
 });

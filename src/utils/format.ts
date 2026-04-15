@@ -1,5 +1,5 @@
 function isValidDate(value: Date | null | undefined): value is Date {
-  return Boolean(value) && !Number.isNaN(value.getTime());
+  return value instanceof Date && !Number.isNaN(value.getTime());
 }
 
 function isSameDay(start: Date, end: Date) {

@@ -6247,6 +6247,23 @@ a {
   display: block;
 }
 
+.create-wizard-radio-copy {
+  flex: 1;
+}
+
+.create-wizard-radio-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.create-wizard-radio-link {
+  flex-shrink: 0;
+  color: var(--gold-400);
+  font-size: 0.82rem;
+}
+
 .create-wizard-radio-help {
   display: block;
   margin-top: 4px;
@@ -6267,6 +6284,146 @@ a {
   font-size: 0.82rem;
   color: var(--muted);
   text-transform: capitalize;
+}
+
+.create-wizard-helper-card {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(242, 201, 76, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.create-wizard-helper-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.create-wizard-helper-card p {
+  margin: 8px 0 0;
+  color: var(--muted-strong);
+  line-height: 1.45;
+}
+
+.create-wizard-ticket-section {
+  display: grid;
+  gap: 14px;
+}
+
+.create-wizard-ticket-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.create-wizard-ticket-toolbar h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.create-wizard-ticket-toolbar p {
+  margin: 6px 0 0;
+  color: var(--muted-strong);
+  max-width: 42ch;
+}
+
+.create-wizard-ticket-count {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.create-wizard-ticket-list {
+  display: grid;
+  gap: 12px;
+}
+
+.create-wizard-ticket-add-card {
+  width: 100%;
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px dashed rgba(242, 201, 76, 0.5);
+  background: rgba(242, 201, 76, 0.08);
+  color: var(--white);
+  text-align: left;
+  cursor: pointer;
+}
+
+.create-wizard-ticket-add-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.create-wizard-ticket-add-card strong {
+  font-size: 0.96rem;
+}
+
+.create-wizard-ticket-add-card span {
+  color: var(--muted-strong);
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.create-wizard-ticket-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.create-wizard-ticket-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.create-wizard-ticket-card-header h4 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.create-wizard-ticket-card-header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.create-wizard-ticket-description {
+  min-height: 88px;
+}
+
+.create-wizard-ticket-price-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.create-wizard-ticket-currency-pill {
+  min-height: 46px;
+  padding: 0 14px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--muted-strong);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.create-wizard-ticket-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .create-wizard-switch-row {
@@ -6574,6 +6731,34 @@ a {
   color: var(--white);
 }
 
+.create-wizard-ticket-review-list {
+  display: grid;
+  gap: 10px;
+}
+
+.create-wizard-ticket-review-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.create-wizard-ticket-review-title {
+  margin: 0;
+  font-weight: 700;
+}
+
+.create-wizard-ticket-review-copy {
+  margin: 6px 0 0;
+  color: var(--muted-strong);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
 .create-wizard-guest-tooltip {
   position: relative;
   display: inline-flex;
@@ -6748,6 +6933,19 @@ a {
   font-size: 1.75rem;
   font-family: "Space Grotesk", sans-serif;
   color: #1f3049;
+}
+
+.create-wizard-type-info-list {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 10px;
+  color: var(--muted-strong);
+  line-height: 1.45;
+}
+
+.create-wizard-type-info-list li::marker {
+  color: var(--gold-400);
 }
 
 .create-wizard-contact-list {
@@ -6950,6 +7148,40 @@ a {
   margin-top: 4px;
 }
 
+.create-wizard-fee-tier-list {
+  display: grid;
+  gap: 10px;
+}
+
+.create-wizard-fee-tier-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.create-wizard-fee-tier-row > div {
+  display: grid;
+  gap: 4px;
+}
+
+.create-wizard-fee-tier-row > div:last-child {
+  text-align: right;
+}
+
+.create-wizard-fee-tier-row strong {
+  color: var(--white);
+  font-size: 0.92rem;
+}
+
+.create-wizard-fee-tier-row span {
+  color: var(--muted-strong);
+  font-size: 0.82rem;
+}
+
 .create-wizard-fee-empty,
 .create-wizard-fee-footnote {
   margin: 0;
@@ -6963,6 +7195,30 @@ a {
 
 @media (max-width: 640px) {
   .create-wizard-fee-header {
+    flex-direction: column;
+  }
+
+  .create-wizard-fee-tier-row {
+    flex-direction: column;
+  }
+
+  .create-wizard-fee-tier-row > div:last-child {
+    text-align: left;
+  }
+
+  .create-wizard-ticket-toolbar,
+  .create-wizard-ticket-card-header,
+  .create-wizard-ticket-review-row {
+    flex-direction: column;
+  }
+
+  .create-wizard-ticket-settings,
+  .create-wizard-ticket-price-row {
+    grid-template-columns: 1fr;
+  }
+
+  .create-wizard-radio-title-row {
+    align-items: flex-start;
     flex-direction: column;
   }
 }

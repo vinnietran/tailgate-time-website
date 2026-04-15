@@ -2143,7 +2143,7 @@ export default function TailgateDetails() {
       : "Location coming soon.");
   const locationFallbackNote =
     displayLocationLabel ?? resolvedLocationText ?? "Location not set";
-  const locationDirectionQuery = hasExactPin
+  const locationDirectionQuery = mapCoords
     ? `${mapCoords.lat},${mapCoords.lng}`
     : generalLocationQuery ?? "";
   const canOpenMaps = locationDirectionQuery.trim().length > 0;
