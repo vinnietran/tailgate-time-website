@@ -11,8 +11,19 @@ import { auth, db } from "../lib/firebase";
 import { PublicTopNav } from "../components/PublicTopNav";
 import SiteFooter from "../components/SiteFooter";
 import { useAuth } from "../hooks/useAuth";
+import {
+  consumeClientRateLimit,
+  formatRateLimitRetryAfter,
+  resetClientRateLimit
+} from "../utils/abuseGuard";
 import { debugAuthLog } from "../utils/debug";
 import tailgateTimeLogo from "../../ttnobg.png";
+
+const AUTH_RATE_LIMIT_OPTIONS = {
+  maxAttempts: 5,
+  windowMs: 60 * 1000,
+  blockMs: 10 * 60 * 1000
+} as const;
 
 function resolveRedirectPath(value: string | null) {
   if (!value) return "/dashboard";
@@ -256,6 +267,15 @@ export default function Login() {
 
     setFieldErrors({});
 
+    const authRateLimitKey = isCreating ? "auth-signup" : "auth-login";
+    const authBudget = consumeClientRateLimit(authRateLimitKey, AUTH_RATE_LIMIT_OPTIONS);
+    if (!authBudget.allowed) {
+      setError(
+        `Too many ${isCreating ? "sign-up" : "sign-in"} attempts from this browser. Wait ${formatRateLimitRetryAfter(authBudget.retryAfterMs)} and try again.`
+      );
+      return;
+    }
+
     try {
       setLoading(true);
       debugAuthLog(isCreating ? "login:create-email" : "login:email", { email: trimmedEmail });
@@ -283,6 +303,7 @@ export default function Login() {
           emailFallback: trimmedEmail
         });
       }
+      resetClientRateLimit(authRateLimitKey);
     } catch (err) {
       setError(normalizeAuthError(err, isCreating));
     } finally {

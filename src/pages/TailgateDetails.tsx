@@ -33,6 +33,7 @@ import {
   app as firebaseApp,
   db,
   functions as firebaseFunctions,
+  getAppCheckTokenValue,
   storage as firebaseStorage
 } from "../lib/firebase";
 import { mockTailgates } from "../data/mockTailgates";
@@ -48,6 +49,11 @@ import {
   formatDateTimeRange,
   formatTimeRange
 } from "../utils/format";
+import {
+  consumeClientRateLimit,
+  formatRateLimitRetryAfter,
+  resetClientRateLimit
+} from "../utils/abuseGuard";
 import { resolveLocationLabel } from "../utils/location";
 
 const MAPS_API_KEY = (
@@ -65,6 +71,11 @@ const firebaseProjectId =
 const submitInviteRsvpPublicUrl = firebaseProjectId
   ? `https://us-central1-${firebaseProjectId}.cloudfunctions.net/submitInviteRsvpPublic`
   : "";
+const PUBLIC_RSVP_RATE_LIMIT_OPTIONS = {
+  maxAttempts: 5,
+  windowMs: 5 * 60 * 1000,
+  blockMs: 15 * 60 * 1000
+} as const;
 const MAX_TICKET_QUANTITY = 8;
 const MAX_HOST_BROADCAST_MESSAGE_LENGTH = 320;
 const MAX_CONTACT_HOST_MESSAGE_LENGTH = 1200;
@@ -579,15 +590,30 @@ async function submitInviteRsvpViaHttp(payload: InviteRsvpPayload): Promise<void
     throw new Error("Missing Firebase project configuration for RSVP endpoint.");
   }
 
+  const rateLimitKey = `public-rsvp:${payload.eventId}:${payload.guestId ?? "guest"}`;
+  const rsvpBudget = consumeClientRateLimit(rateLimitKey, PUBLIC_RSVP_RATE_LIMIT_OPTIONS);
+  if (!rsvpBudget.allowed) {
+    throw new Error(
+      `Too many RSVP attempts from this browser. Wait ${formatRateLimitRetryAfter(rsvpBudget.retryAfterMs)} and try again.`
+    );
+  }
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json"
+  };
+  const appCheckToken = await getAppCheckTokenValue();
+  if (appCheckToken) {
+    headers["X-Firebase-AppCheck"] = appCheckToken;
+  }
+
   const response = await fetch(submitInviteRsvpPublicUrl, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers,
     body: JSON.stringify(payload)
   });
 
   if (response.ok) {
+    resetClientRateLimit(rateLimitKey);
     return;
   }
 

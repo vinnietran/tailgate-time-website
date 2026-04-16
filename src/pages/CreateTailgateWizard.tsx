@@ -487,6 +487,36 @@ function toEndDateTime(eventDate: string, eventTime: string, eventEndTime: strin
   return end;
 }
 
+function floorToMinute(value: Date) {
+  const next = new Date(value);
+  next.setSeconds(0, 0);
+  return next;
+}
+
+function formatDateInputValue(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatTimeInputValue(value: Date) {
+  const hours = String(value.getHours()).padStart(2, "0");
+  const minutes = String(value.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function getStartDateTimeError(eventDate: string, eventTime: string, now = new Date()) {
+  const startDateTime = toStartDateTime(eventDate, eventTime);
+  if (!startDateTime) {
+    return "Start time is invalid.";
+  }
+  if (startDateTime < floorToMinute(now)) {
+    return "Start time must be in the future.";
+  }
+  return null;
+}
+
 function formatAddressBlock(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
@@ -752,6 +782,10 @@ export default function CreateTailgateWizard() {
         ? "Invite Friends + Add-ons"
         : "Optional Add-ons"
       : currentStep.subtitle;
+  const minimumEventDateTime = floorToMinute(new Date());
+  const minimumEventDate = formatDateInputValue(minimumEventDateTime);
+  const minimumEventTime =
+    eventDate === minimumEventDate ? formatTimeInputValue(minimumEventDateTime) : undefined;
   const resolvedLocationDisplay = resolveLocationLabel(locationRecord);
   const locationDisplayText =
     formatAddressBlock(resolvedLocationDisplay ?? locationSummary) ?? locationSummary;
@@ -1613,7 +1647,13 @@ export default function CreateTailgateWizard() {
       if (!eventTime) nextErrors.eventTime = "Time is required.";
       if (!eventEndTime) nextErrors.eventEndTime = "End time is required.";
       if (!eventDescription.trim()) nextErrors.eventDescription = "Description is required.";
-      if (eventDate && eventTime && eventEndTime) {
+      if (eventDate && eventTime) {
+        const startDateTimeError = getStartDateTimeError(eventDate, eventTime);
+        if (startDateTimeError) {
+          nextErrors.eventTime = startDateTimeError;
+        }
+      }
+      if (eventDate && eventTime && eventEndTime && !nextErrors.eventTime) {
         const endDateTime = toEndDateTime(eventDate, eventTime, eventEndTime);
         if (!endDateTime) {
           nextErrors.eventEndTime = "End time is invalid.";
@@ -1816,6 +1856,16 @@ export default function CreateTailgateWizard() {
       return;
     }
 
+    const startDateTimeError = getStartDateTimeError(eventDate, eventTime);
+    if (startDateTimeError) {
+      setErrors((prev) => ({
+        ...prev,
+        eventTime: startDateTimeError,
+        submit: "Fix the event start time before creating the tailgate."
+      }));
+      setStepIndex(activeWizardSteps.findIndex((step) => step.key === "details"));
+      return;
+    }
     const startDateTime = toStartDateTime(eventDate, eventTime);
     if (!startDateTime) {
       setErrors((prev) => ({ ...prev, submit: "Date/time is invalid." }));
@@ -2129,10 +2179,12 @@ export default function CreateTailgateWizard() {
               id="event-date"
               className="text-input create-wizard-input"
               type="date"
+              min={minimumEventDate}
               value={eventDate}
               onChange={(event) => {
                 setEventDate(event.target.value);
                 clearFieldError("eventDate");
+                clearFieldError("eventTime");
               }}
             />
             {errors.eventDate ? <p className="create-wizard-error">{errors.eventDate}</p> : null}
@@ -2143,6 +2195,7 @@ export default function CreateTailgateWizard() {
               id="event-time"
               className="text-input create-wizard-input"
               type="time"
+              min={minimumEventTime}
               value={eventTime}
               onChange={(event) => {
                 setEventTime(event.target.value);
