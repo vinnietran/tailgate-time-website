@@ -267,6 +267,21 @@ function normalizeTailgate(id: string, data: Record<string, unknown>): TailgateE
       coerceNumber(data.priceCents) ??
       coerceNumber(data.ticketPrice),
     ticketsSold,
+    grossRevenueCents:
+      coerceNumber(data.grossRevenueCents) != null
+        ? Math.max(0, Math.round(coerceNumber(data.grossRevenueCents) ?? 0))
+        : undefined,
+    platformFeeRevenueCents:
+      coerceNumber(data.platformFeeRevenueCents) != null
+        ? Math.max(0, Math.round(coerceNumber(data.platformFeeRevenueCents) ?? 0))
+        : undefined,
+    purchaseCount:
+      coerceNumber(data.purchaseCount) != null
+        ? Math.max(0, Math.round(coerceNumber(data.purchaseCount) ?? 0))
+        : coerceNumber(data.confirmedPurchaseCount) != null
+        ? Math.max(0, Math.round(coerceNumber(data.confirmedPurchaseCount) ?? 0))
+        : undefined,
+    ticketTypes: data.ticketTypes,
     rsvpsConfirmed,
     rsvpsPending,
     status: deriveStatus(data),

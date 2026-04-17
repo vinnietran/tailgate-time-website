@@ -7,12 +7,15 @@ import AppShell from "../components/AppShell";
 import { PublicTopNav } from "../components/PublicTopNav";
 import SiteFooter from "../components/SiteFooter";
 import { mockTailgates } from "../data/mockTailgates";
+import {
+  getActiveEventTicketTypes,
+  summarizeTicketPricing
+} from "../features/ticketing/ticketTypes";
 import { useAuth } from "../hooks/useAuth";
 import { usePlacesAutocomplete } from "../hooks/usePlacesAutocomplete";
 import { db, storage as firebaseStorage } from "../lib/firebase";
 import { loadGoogleMapsSdk } from "../lib/googleMapsSdk";
-import { formatCurrencyFromCents } from "../utils/format";
-import { buildEventSizeSummary } from "../utils/tailgate";
+import { buildEventSizeSummary, formatTicketPricingLabel } from "../utils/tailgate";
 import { resolveLocationLabel } from "../utils/location";
 
 type ViewMode = "list" | "map";
@@ -34,10 +37,13 @@ type DiscoverTailgateRecord = {
   locationSummary?: string;
   coords?: LatLng | null;
   priceCents?: number;
+  capacity?: number | null;
   ticketSalesCloseAt?: Date | null;
   currency: string;
   confirmedAttendanceCount: number;
   eventSizeSummary: string;
+  priceLabel: string;
+  isSoldOut: boolean;
 };
 
 type DiscoverTailgate = DiscoverTailgateRecord & {
@@ -447,6 +453,15 @@ function resolveConfirmedAttendanceCount(
   );
 }
 
+function resolveCapacity(value: unknown): number | null {
+  const capacity = coerceNumber(value);
+  if (typeof capacity !== "number" || capacity <= 0) {
+    return null;
+  }
+
+  return Math.floor(capacity);
+}
+
 function toDiscoverTailgateRecord(
   id: string,
   data: Record<string, unknown>
@@ -473,8 +488,24 @@ function toDiscoverTailgateRecord(
     coerceNumber(data.ticketPriceCents) ??
     coerceNumber(data.priceCents) ??
     coerceNumber(data.ticketPrice);
+  const ticketTypes = getActiveEventTicketTypes({
+    visibilityType,
+    eventId: id,
+    priceCents,
+    currency: firstString(data.currency, data.ticketCurrency) ?? "USD",
+    capacity: data.capacity,
+    ticketTypes: data.ticketTypes
+  });
+  const pricingSummary = summarizeTicketPricing(ticketTypes, priceCents);
+  const priceLabel =
+    visibilityType === "open_paid"
+      ? formatTicketPricingLabel(pricingSummary, ticketTypes.length > 1 ? "from" : "single") ??
+        "Paid"
+      : "Free";
   const ticketSalesCloseAt = resolveTicketSalesCloseAt(data, startDateTime);
   const confirmedAttendanceCount = resolveConfirmedAttendanceCount(data, visibilityType);
+  const capacity = resolveCapacity(data.capacity);
+  const isSoldOut = capacity !== null && confirmedAttendanceCount >= capacity;
 
   return {
     id,
@@ -487,13 +518,17 @@ function toDiscoverTailgateRecord(
     locationSummary: resolveLocationSummary(data),
     coords: resolveLocationCoords(data.location, data.locationCoords),
     priceCents,
+    capacity,
     ticketSalesCloseAt,
     currency: firstString(data.currency, data.ticketCurrency) ?? "USD",
     confirmedAttendanceCount,
+    priceLabel,
+    isSoldOut,
     eventSizeSummary: buildEventSizeSummary({
       visibilityType,
       confirmedCount: confirmedAttendanceCount,
-      ticketPriceCents: priceCents
+      ticketPriceCents: priceCents,
+      ticketTypes
     })
   };
 }
@@ -519,6 +554,22 @@ function fromMockTailgates(): DiscoverTailgateRecord[] {
         item.visibilityType === "open_paid"
           ? item.ticketsSold ?? item.rsvpsConfirmed ?? 0
           : item.rsvpsConfirmed ?? 0;
+      const ticketTypes = getActiveEventTicketTypes({
+        visibilityType,
+        eventId: item.id,
+        priceCents: item.ticketPriceCents,
+        currency: item.currency ?? "USD",
+        capacity: item.capacity,
+        ticketTypes: item.ticketTypes
+      });
+      const pricingSummary = summarizeTicketPricing(ticketTypes, item.ticketPriceCents);
+      const priceLabel =
+        visibilityType === "open_paid"
+          ? formatTicketPricingLabel(pricingSummary, ticketTypes.length > 1 ? "from" : "single") ??
+            "Paid"
+          : "Free";
+      const capacity = resolveCapacity(item.capacity);
+      const isSoldOut = capacity !== null && confirmedAttendanceCount >= capacity;
       return {
         id: item.id,
         eventName: item.name,
@@ -528,12 +579,16 @@ function fromMockTailgates(): DiscoverTailgateRecord[] {
         locationSummary: item.locationSummary,
         coords: MOCK_COORDS[index % MOCK_COORDS.length],
         priceCents: item.ticketPriceCents,
+        capacity,
         currency: "USD",
         confirmedAttendanceCount,
+        priceLabel,
+        isSoldOut,
         eventSizeSummary: buildEventSizeSummary({
           visibilityType,
           confirmedCount: confirmedAttendanceCount,
-          ticketPriceCents: item.ticketPriceCents
+          ticketPriceCents: item.ticketPriceCents,
+          ticketTypes
         })
       };
     });
@@ -1633,11 +1688,7 @@ export default function DiscoverTailgates() {
                               <small>{formatDiscoverDate(item.startDateTime, item.endDateTime)}</small>
                             </span>
                             <span className="discover-map-result-price">
-                              {item.visibilityType === "open_paid"
-                                ? item.priceCents
-                                  ? formatCurrencyFromCents(item.priceCents)
-                                  : "Paid"
-                                : "Free"}
+                              {item.priceLabel}
                             </span>
                           </button>
                         );
@@ -1674,7 +1725,7 @@ export default function DiscoverTailgates() {
               return (
                 <article
                   key={item.id}
-                  className="discover-card"
+                  className={`discover-card${item.isSoldOut ? " is-sold-out" : ""}`}
                   role="button"
                   tabIndex={0}
                   onClick={() => handleOpenDetails(item.id)}
@@ -1735,6 +1786,11 @@ export default function DiscoverTailgates() {
                           handleDiscoverCoverImageError(rawCoverImageUrl, renderedCoverImageUrl)
                         }
                       />
+                      {item.isSoldOut ? (
+                        <span className="discover-card-watermark" aria-hidden="true">
+                          Sold Out
+                        </span>
+                      ) : null}
                     </div>
                     <div>
                       <div className="discover-card-heading">
@@ -1758,11 +1814,7 @@ export default function DiscoverTailgates() {
                     </div>
                     <div className="discover-card-meta">
                       <strong>
-                        {item.visibilityType === "open_paid"
-                          ? item.priceCents
-                            ? `${formatCurrencyFromCents(item.priceCents)} / person`
-                            : "Paid"
-                          : "Free"}
+                        {item.priceLabel}
                       </strong>
                       <span>
                         {item.confirmedAttendanceCount} confirmed

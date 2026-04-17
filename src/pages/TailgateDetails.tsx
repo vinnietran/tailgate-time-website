@@ -27,6 +27,12 @@ import {
   IconUser
 } from "../components/Icons";
 import { PublicTopNav } from "../components/PublicTopNav";
+import {
+  getActiveEventTicketTypes,
+  resolveLowestTicketTypePriceCents,
+  summarizeTicketPricing,
+  type EventTicketType
+} from "../features/ticketing/ticketTypes";
 import { useAuth } from "../hooks/useAuth";
 import { useDialog } from "../hooks/useDialog";
 import {
@@ -40,6 +46,7 @@ import { mockTailgates } from "../data/mockTailgates";
 import { TailgateEvent, TailgateStatus, VisibilityType } from "../types";
 import {
   buildEventSizeSummary,
+  formatTicketPricingLabel,
   estimateHostPayout,
   getTailgateCrowdTag,
   getVisibilityLabel
@@ -76,7 +83,6 @@ const PUBLIC_RSVP_RATE_LIMIT_OPTIONS = {
   windowMs: 5 * 60 * 1000,
   blockMs: 15 * 60 * 1000
 } as const;
-const MAX_TICKET_QUANTITY = 8;
 const MAX_HOST_BROADCAST_MESSAGE_LENGTH = 320;
 const MAX_CONTACT_HOST_MESSAGE_LENGTH = 1200;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -255,6 +261,15 @@ type HostTextToAttendeesResponse = {
   successfulPhones?: unknown;
 };
 
+type TicketTypeSelectOption = {
+  id: string;
+  name: string;
+  description?: string;
+  priceLabel: string;
+  availabilityLabel?: string | null;
+  disabled?: boolean;
+};
+
 type ContactEventHostInput = {
   eventId: string;
   message: string;
@@ -286,9 +301,14 @@ type TailgateDetail = {
   maxAdditionalGuestsPerInvite?: number;
   capacity?: number;
   ticketPriceCents?: number;
+  ticketTypes: EventTicketType[];
   ticketSalesCloseAt?: Date | null;
   currency: string;
+  ticketTypeConfirmedSoldCount: Record<string, number>;
   ticketsSold?: number;
+  grossRevenueCents?: number;
+  platformFeeRevenueCents?: number;
+  purchaseCount?: number;
   checkedInCount?: number;
   status?: string;
   cancelledAt?: Date | null;
@@ -359,6 +379,245 @@ function isConfirmedPaidTicketStatus(status: string): boolean {
   return status === "valid" || status === "checked_in" || status === "confirmed";
 }
 
+function resolveTicketTypeIdFromRecord(data: Record<string, unknown>): string | null {
+  const qrPayload =
+    typeof data.qrPayload === "string" && data.qrPayload.trim().length > 0
+      ? (() => {
+          try {
+            const parsed = JSON.parse(data.qrPayload) as Record<string, unknown>;
+            return parsed && typeof parsed === "object" ? parsed : null;
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+  return (
+    firstString(
+      data.ticketTypeId,
+      data.ticket_type_id,
+      data.typeId,
+      asRecord(data.ticketType)?.id,
+      asRecord(data.ticketType)?.ticketTypeId,
+      asRecord(data.ticket)?.ticketTypeId,
+      asRecord(data.purchase)?.ticketTypeId,
+      asRecord(data.metadata)?.ticketTypeId,
+      qrPayload?.ticketTypeId
+    ) ?? null
+  );
+}
+
+function resolveTicketRecordQuantity(data: Record<string, unknown>): number {
+  const parsed = coerceNumber(data.quantity);
+  if (typeof parsed === "number" && Number.isFinite(parsed) && parsed > 0) {
+    return Math.max(1, Math.round(parsed));
+  }
+  return 1;
+}
+
+function normalizeTicketTypeLookupKey(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function resolveTicketTypeNameFromRecord(data: Record<string, unknown>): string | null {
+  const qrPayload =
+    typeof data.qrPayload === "string" && data.qrPayload.trim().length > 0
+      ? (() => {
+          try {
+            const parsed = JSON.parse(data.qrPayload) as Record<string, unknown>;
+            return parsed && typeof parsed === "object" ? parsed : null;
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+  return (
+    firstString(
+      data.ticketTypeName,
+      data.ticket_type_name,
+      asRecord(data.ticketType)?.name,
+      asRecord(data.ticket)?.ticketTypeName,
+      asRecord(data.purchase)?.ticketTypeName,
+      asRecord(data.metadata)?.ticketTypeName,
+      qrPayload?.ticketTypeName
+    ) ?? null
+  );
+}
+
+function resolveEventTicketTypeIdFromRecord(
+  data: Record<string, unknown>,
+  eventTicketTypes: EventTicketType[]
+): string | null {
+  const ticketTypeId = resolveTicketTypeIdFromRecord(data);
+  if (ticketTypeId) {
+    return ticketTypeId;
+  }
+
+  const ticketTypeNameKey = normalizeTicketTypeLookupKey(
+    resolveTicketTypeNameFromRecord(data)
+  );
+  if (!ticketTypeNameKey) {
+    return null;
+  }
+
+  const matchedTicketType = eventTicketTypes.find(
+    (ticketType) => normalizeTicketTypeLookupKey(ticketType.name) === ticketTypeNameKey
+  );
+  return matchedTicketType?.id ?? null;
+}
+
+function formatTicketTypeAvailabilityMessage(remaining: number | null): string | null {
+  if (remaining === null) {
+    return null;
+  }
+  if (remaining <= 0) {
+    return "Sold out";
+  }
+  if (remaining < 15) {
+    return `Only ${remaining} remaining!`;
+  }
+  return null;
+}
+
+function TicketTypeSelect({
+  id,
+  label,
+  value,
+  options,
+  onChange,
+  compact = false,
+  openUpwards = false
+}: {
+  id: string;
+  label: string;
+  value: string;
+  options: TicketTypeSelectOption[];
+  onChange: (nextValue: string) => void;
+  compact?: boolean;
+  openUpwards?: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const selectedOption = options.find((option) => option.id === value) ?? options[0] ?? null;
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    setIsOpen(false);
+  }, [value]);
+
+  if (!selectedOption) {
+    return null;
+  }
+
+  return (
+    <div
+      className={`tailgate-details-ticket-picker${compact ? " is-compact" : ""}${
+        openUpwards ? " is-upward" : ""
+      }`}
+      ref={containerRef}
+    >
+      <span className="tailgate-details-sticky-cart-field-label">{label}</span>
+      <button
+        type="button"
+        id={id}
+        className={`tailgate-details-ticket-picker-trigger${isOpen ? " is-open" : ""}`}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        aria-controls={`${id}-listbox`}
+        onClick={() => setIsOpen((current) => !current)}
+      >
+        <span className="tailgate-details-ticket-picker-trigger-copy">
+          <strong>{selectedOption.name}</strong>
+          <span>{selectedOption.priceLabel}</span>
+          {selectedOption.availabilityLabel ? (
+            <span className="tailgate-details-ticket-picker-trigger-chip">
+              {selectedOption.availabilityLabel}
+            </span>
+          ) : null}
+        </span>
+        <span
+          className={`tailgate-details-ticket-picker-chevron${isOpen ? " is-open" : ""}`}
+          aria-hidden="true"
+        />
+      </button>
+      {isOpen ? (
+        <div
+          id={`${id}-listbox`}
+          role="listbox"
+          aria-labelledby={id}
+          className="tailgate-details-ticket-picker-menu"
+        >
+          {options.map((option) => {
+            const isSelected = option.id === selectedOption.id;
+            const isDisabled = option.disabled === true;
+            return (
+              <button
+                key={option.id}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                aria-disabled={isDisabled}
+                disabled={isDisabled}
+                className={`tailgate-details-ticket-picker-option${
+                  isSelected ? " is-selected" : ""
+                }${isDisabled ? " is-disabled" : ""}`}
+                onClick={() => {
+                  if (isDisabled) {
+                    return;
+                  }
+                  onChange(option.id);
+                  setIsOpen(false);
+                }}
+              >
+                <div className="tailgate-details-ticket-picker-option-copy">
+                  <div className="tailgate-details-ticket-picker-option-copy-top">
+                    <strong>{option.name}</strong>
+                    <span>{option.priceLabel}</span>
+                    {option.availabilityLabel || isSelected ? (
+                      <span className="tailgate-details-ticket-picker-option-badges">
+                        {option.availabilityLabel ? (
+                          <span className="tailgate-details-ticket-picker-option-chip">
+                            {option.availabilityLabel}
+                          </span>
+                        ) : null}
+                        {isSelected ? (
+                          <span className="tailgate-details-ticket-picker-option-check">Current</span>
+                        ) : null}
+                      </span>
+                    ) : null}
+                  </div>
+                  {!compact && option.description ? <p>{option.description}</p> : null}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return null;
@@ -424,6 +683,25 @@ function coerceNumber(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+function resolveTicketTypeConfirmedSoldCountMap(
+  value: unknown
+): Record<string, number> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.entries(value as Record<string, unknown>).reduce<Record<string, number>>(
+    (accumulator, [ticketTypeId, rawCount]) => {
+      const count = coerceNumber(rawCount);
+      if (typeof count === "number" && Number.isFinite(count) && count > 0) {
+        accumulator[ticketTypeId] = Math.max(0, Math.round(count));
+      }
+      return accumulator;
+    },
+    {}
+  );
 }
 
 function normalizeDate(value: unknown): Date | null {
@@ -1067,8 +1345,25 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     normalizeDate(data.tailgateEndAt);
   const visibilityType = resolveVisibilityType(data.visibilityType);
   const priceCents = coerceNumber(data.priceCents) ?? coerceNumber(data.ticketPriceCents);
+  const currency = firstString(data.currency) ?? "USD";
+  const ticketTypes = getActiveEventTicketTypes({
+    visibilityType,
+    eventId: id,
+    priceCents,
+    currency,
+    capacity: data.capacity,
+    ticketTypes: data.ticketTypes
+  });
+  const ticketTypeConfirmedSoldCount = resolveTicketTypeConfirmedSoldCountMap(
+    data.ticketTypeConfirmedSoldCount
+  );
+  const ticketTypeConfirmedSoldTotal = Object.values(ticketTypeConfirmedSoldCount).reduce(
+    (sum, count) => sum + count,
+    0
+  );
   const ticketsSold =
     coerceNumber(data.confirmedPaidCount) ??
+    (ticketTypeConfirmedSoldTotal > 0 ? ticketTypeConfirmedSoldTotal : undefined) ??
     coerceNumber(data.ticketsSold) ??
     coerceNumber(data.rsvpsConfirmed) ??
     0;
@@ -1105,9 +1400,15 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     maxAdditionalGuestsPerInvite: coerceNumber(data.maxAdditionalGuestsPerInvite),
     capacity: coerceNumber(data.capacity),
     ticketPriceCents: priceCents,
+    ticketTypes,
     ticketSalesCloseAt,
-    currency: firstString(data.currency) ?? "USD",
+    currency,
+    ticketTypeConfirmedSoldCount,
     ticketsSold,
+    grossRevenueCents: coerceNumber(data.grossRevenueCents),
+    platformFeeRevenueCents: coerceNumber(data.platformFeeRevenueCents),
+    purchaseCount:
+      coerceNumber(data.purchaseCount) ?? coerceNumber(data.confirmedPurchaseCount),
     checkedInCount: coerceNumber(data.checkedInCount),
     status: firstString(data.status, data.eventStatus),
     cancelledAt: normalizeDate(data.cancelledAt),
@@ -1121,6 +1422,14 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
 }
 
 function toDetailFromMock(event: TailgateEvent): TailgateDetail {
+  const ticketTypes = getActiveEventTicketTypes({
+    visibilityType: event.visibilityType,
+    eventId: event.id,
+    priceCents: event.ticketPriceCents,
+    currency: event.currency ?? "USD",
+    capacity: event.capacity,
+    ticketTypes: event.ticketTypes
+  });
   const attendees: AttendeeRecord[] = [];
   attendees.push({
     id: `host-${event.hostUserId}`,
@@ -1162,9 +1471,14 @@ function toDetailFromMock(event: TailgateEvent): TailgateDetail {
     maxAdditionalGuestsPerInvite: undefined,
     capacity: event.capacity,
     ticketPriceCents: event.ticketPriceCents,
+    ticketTypes,
     ticketSalesCloseAt: null,
-    currency: "USD",
+    currency: event.currency ?? "USD",
+    ticketTypeConfirmedSoldCount: {},
     ticketsSold: event.ticketsSold ?? event.rsvpsConfirmed ?? 0,
+    grossRevenueCents: event.grossRevenueCents,
+    platformFeeRevenueCents: event.platformFeeRevenueCents,
+    purchaseCount: event.purchaseCount,
     checkedInCount: undefined,
     status: event.status,
     cancelledAt: null,
@@ -1212,10 +1526,12 @@ export default function TailgateDetails() {
   const [openFreePartySize, setOpenFreePartySize] = useState(1);
   const [pinning, setPinning] = useState(false);
   const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
+  const [selectedTicketTypeId, setSelectedTicketTypeId] = useState<string | null>(null);
   const [ticketQuantity, setTicketQuantity] = useState(1);
   const [ticketCheckState, setTicketCheckState] = useState<TicketCheckState>("loading");
   const [hasConfirmedTicket, setHasConfirmedTicket] = useState(false);
   const [confirmedTicketCount, setConfirmedTicketCount] = useState(0);
+  const [confirmedTicketCountByType, setConfirmedTicketCountByType] = useState<Record<string, number>>({});
   const [liveCheckedInCount, setLiveCheckedInCount] = useState<number | null>(null);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [checkoutPurchaseStatus, setCheckoutPurchaseStatus] =
@@ -1963,22 +2279,57 @@ export default function TailgateDetails() {
   }, [detail?.id]);
 
   useEffect(() => {
+    if (!detail || detail.visibilityType !== "open_paid" || detail.ticketTypes.length === 0) {
+      setSelectedTicketTypeId(null);
+      return;
+    }
+
+    const availableTicketTypes = detail.ticketTypes.filter((ticketType) => {
+      const quantityAvailable =
+        typeof ticketType.quantityAvailable === "number" && ticketType.quantityAvailable > 0
+          ? ticketType.quantityAvailable
+          : null;
+      if (quantityAvailable === null) {
+        return true;
+      }
+
+      const soldCount = detail.ticketTypeConfirmedSoldCount[ticketType.id] ?? 0;
+      return Math.max(0, quantityAvailable - soldCount) > 0;
+    });
+
+    setSelectedTicketTypeId((current) => {
+      if (current && availableTicketTypes.some((ticketType) => ticketType.id === current)) {
+        return current;
+      }
+      if (availableTicketTypes.length > 0) {
+        return availableTicketTypes[0]?.id ?? null;
+      }
+      return detail.ticketTypes[0]?.id ?? null;
+    });
+  }, [detail]);
+
+  useEffect(() => {
     if (!detail || detail.visibilityType !== "open_paid" || isHostUser) {
       setHasConfirmedTicket(true);
       setTicketCheckState("confirmed");
       setConfirmedTicketCount(0);
+      setConfirmedTicketCountByType({});
       return;
     }
     if (!user?.uid || !db) {
       setHasConfirmedTicket(false);
       setTicketCheckState("missing");
       setConfirmedTicketCount(0);
+      setConfirmedTicketCountByType({});
       return;
     }
 
+    const eventTicketTypes = detail.ticketTypes ?? [];
     setTicketCheckState("loading");
     let newTicketCount = 0;
     let legacyConfirmedCount = 0;
+    let newTicketCountByType: Record<string, number> = {};
+    let legacyConfirmedCountByType: Record<string, number> = {};
     let hasNewSnapshot = false;
     let hasLegacySnapshot = false;
 
@@ -1992,6 +2343,7 @@ export default function TailgateDetails() {
         setHasConfirmedTicket(true);
         setTicketCheckState("confirmed");
         setConfirmedTicketCount(newTicketCount);
+        setConfirmedTicketCountByType(newTicketCountByType);
         return;
       }
 
@@ -1999,11 +2351,13 @@ export default function TailgateDetails() {
         setHasConfirmedTicket(true);
         setTicketCheckState("confirmed");
         setConfirmedTicketCount(legacyConfirmedCount);
+        setConfirmedTicketCountByType(legacyConfirmedCountByType);
         return;
       }
       setHasConfirmedTicket(false);
       setTicketCheckState("missing");
       setConfirmedTicketCount(0);
+      setConfirmedTicketCountByType({});
     };
 
     const newTicketsQuery = query(
@@ -2020,42 +2374,63 @@ export default function TailgateDetails() {
     const unsubscribeNew = onSnapshot(
       newTicketsQuery,
       (snapshot) => {
-        const tickets = snapshot.docs.map((docSnap) => {
+        newTicketCount = 0;
+        newTicketCountByType = {};
+
+        snapshot.forEach((docSnap) => {
           const data = docSnap.data() as Record<string, unknown>;
           const ticketStatus = normalizeTicketLifecycleStatus(data.status);
-          return {
-            ticketId: docSnap.id,
-            isConfirmedTicket: isConfirmedPaidTicketStatus(ticketStatus)
-          };
-        });
+          if (!isConfirmedPaidTicketStatus(ticketStatus)) {
+            return;
+          }
 
-        newTicketCount = tickets.filter((ticket) => ticket.isConfirmedTicket).length;
+          const quantity = resolveTicketRecordQuantity(data);
+          const ticketTypeId = resolveEventTicketTypeIdFromRecord(data, eventTicketTypes);
+          newTicketCount += quantity;
+          if (ticketTypeId) {
+            newTicketCountByType[ticketTypeId] =
+              (newTicketCountByType[ticketTypeId] ?? 0) + quantity;
+          }
+        });
         hasNewSnapshot = true;
         applyTicketState();
       },
       (snapshotError) => {
         console.error("Ticket lookup failed", snapshotError);
         hasNewSnapshot = true;
+        newTicketCount = 0;
+        newTicketCountByType = {};
         applyTicketState();
       }
     );
     const unsubscribeLegacy = onSnapshot(
       legacyTicketsQuery,
       (snapshot) => {
-        legacyConfirmedCount = snapshot.docs.reduce((sum, docSnap) => {
-          const data = docSnap.data() || {};
-          if (data?.status !== "confirmed") {
-            return sum;
+        legacyConfirmedCount = 0;
+        legacyConfirmedCountByType = {};
+
+        snapshot.forEach((docSnap) => {
+          const data = (docSnap.data() ?? {}) as Record<string, unknown>;
+          if (data.status !== "confirmed") {
+            return;
           }
-          const quantity = Number(data?.quantity);
-          return sum + (Number.isFinite(quantity) && quantity > 0 ? quantity : 1);
-        }, 0);
+
+          const quantity = resolveTicketRecordQuantity(data);
+          const ticketTypeId = resolveEventTicketTypeIdFromRecord(data, eventTicketTypes);
+          legacyConfirmedCount += quantity;
+          if (ticketTypeId) {
+            legacyConfirmedCountByType[ticketTypeId] =
+              (legacyConfirmedCountByType[ticketTypeId] ?? 0) + quantity;
+          }
+        });
         hasLegacySnapshot = true;
         applyTicketState();
       },
       (snapshotError) => {
         console.error("Legacy ticket lookup failed", snapshotError);
         hasLegacySnapshot = true;
+        legacyConfirmedCount = 0;
+        legacyConfirmedCountByType = {};
         applyTicketState();
       }
     );
@@ -2065,6 +2440,8 @@ export default function TailgateDetails() {
       unsubscribeLegacy();
     };
   }, [detail, isHostUser, user?.uid]);
+
+
 
   useEffect(() => {
     if (!detail || !db || !isHostUser || detail.visibilityType !== "open_paid") {
@@ -2468,46 +2845,99 @@ export default function TailgateDetails() {
       .map((key) => expectationChipMap[key]);
   }, [detail?.expectations]);
 
+  const eventTicketTypes = detail?.ticketTypes ?? [];
+  const ticketPricingSummary = summarizeTicketPricing(eventTicketTypes, detail?.ticketPriceCents);
+  const hasMultipleTicketTypes = eventTicketTypes.length > 1;
+  const selectedTicketType =
+    eventTicketTypes.find((ticketType) => ticketType.id === selectedTicketTypeId) ??
+    eventTicketTypes[0] ??
+    null;
+  const selectedTicketPriceCents = selectedTicketType?.priceCents ?? detail?.ticketPriceCents ?? 0;
+  const lowestTicketPriceCents =
+    resolveLowestTicketTypePriceCents(eventTicketTypes) ?? detail?.ticketPriceCents ?? 0;
+  const selectedTicketTypeCapacity =
+    typeof selectedTicketType?.quantityAvailable === "number" &&
+    selectedTicketType.quantityAvailable > 0
+      ? selectedTicketType.quantityAvailable
+      : null;
   const ticketPriceCents = detail?.ticketPriceCents ?? 0;
   const isPaidTailgate = detail?.visibilityType === "open_paid";
-  const ticketsSold = detail?.ticketsSold ?? attendeeCounts.going;
+  const detailTicketTypeConfirmedSoldCount = detail?.ticketTypeConfirmedSoldCount ?? {};
+  const quantitySoldByTicketType = Object.fromEntries(
+    Array.from(
+      new Set([
+        ...Object.keys(detailTicketTypeConfirmedSoldCount),
+        ...Object.keys(confirmedTicketCountByType)
+      ])
+    ).map((ticketTypeId) => [
+      ticketTypeId,
+      Math.max(
+        detailTicketTypeConfirmedSoldCount[ticketTypeId] ?? 0,
+        confirmedTicketCountByType[ticketTypeId] ?? 0
+      )
+    ])
+  );
+  const ticketsSoldFromTypes = Object.values(quantitySoldByTicketType).reduce(
+    (sum, count) => sum + count,
+    0
+  );
+  const ticketsSold = Math.max(
+    ticketsSoldFromTypes,
+    detail?.ticketsSold ?? attendeeCounts.going
+  );
+  const selectedTicketTypeSoldCount =
+    selectedTicketType ? quantitySoldByTicketType[selectedTicketType.id] ?? 0 : 0;
+  const selectedTicketTypeRemaining =
+    selectedTicketTypeCapacity !== null
+      ? Math.max(0, selectedTicketTypeCapacity - selectedTicketTypeSoldCount)
+      : null;
   const checkedInCountForHost = liveCheckedInCount ?? detail?.checkedInCount;
   const payout = estimateHostPayout({
     ticketsSold,
-    ticketPriceCents
+    ticketPriceCents,
+    grossRevenueCents: detail?.grossRevenueCents,
+    purchaseCount: detail?.purchaseCount,
+    platformFeeCents: detail?.platformFeeRevenueCents
   });
   const capacity =
     typeof detail?.capacity === "number" && detail.capacity > 0
       ? detail.capacity
       : null;
   const confirmedPaidCount =
-    typeof detail?.ticketsSold === "number" && detail.ticketsSold >= 0
-      ? detail.ticketsSold
-      : 0;
+    detail?.visibilityType === "open_paid" ? Math.max(0, Math.round(ticketsSold)) : 0;
   const capacityRemaining =
     capacity !== null ? Math.max(0, capacity - confirmedPaidCount) : null;
   const isSoldOut = capacityRemaining !== null && capacityRemaining <= 0;
+  const isSelectedTicketTypeSoldOut =
+    selectedTicketTypeRemaining !== null && selectedTicketTypeRemaining <= 0;
   const isTicketSalesClosed =
     detail?.visibilityType === "open_paid" &&
     detail.ticketSalesCloseAt instanceof Date &&
     detail.ticketSalesCloseAt.getTime() <= Date.now();
+  const ticketQuantityLimitCandidates = [capacityRemaining, selectedTicketTypeRemaining].filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0
+  );
   const maxSelectableQuantity =
-    capacityRemaining !== null
-      ? Math.max(1, Math.min(MAX_TICKET_QUANTITY, capacityRemaining))
-      : MAX_TICKET_QUANTITY;
+    isSoldOut || isSelectedTicketTypeSoldOut
+      ? 1
+      : ticketQuantityLimitCandidates.length > 0
+      ? Math.max(1, Math.min(...ticketQuantityLimitCandidates))
+      : Number.POSITIVE_INFINITY;
   const showTicketPurchase =
     detail?.visibilityType === "open_paid" &&
     !isHostUser &&
     status !== "cancelled";
   const canPurchaseTickets =
     showTicketPurchase &&
+    Boolean(selectedTicketType) &&
     Boolean(user) &&
     (ticketCheckState === "missing" || ticketCheckState === "confirmed") &&
     !isSoldOut &&
+    !isSelectedTicketTypeSoldOut &&
     !isTicketSalesClosed;
   const totalTicketCents =
-    typeof detail?.ticketPriceCents === "number"
-      ? detail.ticketPriceCents * ticketQuantity
+    typeof selectedTicketPriceCents === "number"
+      ? selectedTicketPriceCents * ticketQuantity
       : null;
   const ticketTotalLabel =
     typeof totalTicketCents === "number"
@@ -2520,17 +2950,24 @@ export default function TailgateDetails() {
     ? buildEventSizeSummary({
         visibilityType: detail.visibilityType,
         confirmedCount: eventSizeBaseCount,
-        ticketPriceCents: detail.ticketPriceCents
+        ticketPriceCents: lowestTicketPriceCents,
+        ticketTypes: eventTicketTypes
       })
     : null;
   const purchaseCtaLabel = isSoldOut
     ? "Sold out"
+    : isSelectedTicketTypeSoldOut
+    ? "Choose another ticket type"
     : hasConfirmedTicket
     ? "Buy more tickets"
-    : "Purchase ticket";
+    : "Buy tickets";
   const ticketStatusMessage =
-    isSoldOut
+    !selectedTicketType && showTicketPurchase
+      ? "Ticket options are not configured for this event yet."
+      : isSoldOut
       ? "This tailgate is sold out."
+      : isSelectedTicketTypeSoldOut
+      ? "This ticket type is sold out. Choose another option to continue."
       : isTicketSalesClosed
       ? "Ticket sales are closed for this event."
       : !user && showTicketPurchase
@@ -2542,6 +2979,40 @@ export default function TailgateDetails() {
         ? `You already have ${confirmedTicketCount} ticket${confirmedTicketCount === 1 ? "" : "s"}.`
         : "Your tickets are confirmed."
       : "Continue to checkout to purchase tickets.";
+  const ticketInfoLabel =
+    formatTicketPricingLabel(ticketPricingSummary, hasMultipleTicketTypes ? "from" : "single") ??
+    `${formatCurrencyFromCents(selectedTicketPriceCents)} per person`;
+  const ticketInfoMeta = hasMultipleTicketTypes
+    ? `${eventTicketTypes.length} ticket types`
+    : detail?.capacity
+    ? `${detail.capacity} max tickets`
+    : null;
+  const selectedTicketTypeUrgency = formatTicketTypeAvailabilityMessage(
+    selectedTicketTypeRemaining
+  );
+  const selectedTicketTypeAvailabilityMessage =
+    selectedTicketType && selectedTicketTypeUrgency
+      ? `${selectedTicketType.name}: ${selectedTicketTypeUrgency}`
+      : null;
+  const ticketTypeSelectOptions = eventTicketTypes.map((ticketType) => {
+    const ticketTypeRemaining =
+      typeof ticketType.quantityAvailable === "number" && ticketType.quantityAvailable > 0
+        ? Math.max(0, ticketType.quantityAvailable - (quantitySoldByTicketType[ticketType.id] ?? 0))
+        : null;
+    return {
+      id: ticketType.id,
+      name: ticketType.name,
+      description: ticketType.description,
+      priceLabel: formatCurrencyFromCents(ticketType.priceCents),
+      availabilityLabel: formatTicketTypeAvailabilityMessage(ticketTypeRemaining),
+      disabled: ticketTypeRemaining !== null && ticketTypeRemaining <= 0
+    } satisfies TicketTypeSelectOption;
+  });
+  const checkoutAlertTitle = checkoutError
+    ? checkoutError.toLowerCase().includes("left") || checkoutError.toLowerCase().includes("sold out")
+      ? "Availability updated"
+      : "Checkout issue"
+    : null;
   const timelineBaseEventTime = detail?.startDateTime ?? detail?.eventTargetTime ?? null;
   const hasTimelineSteps = timelineSteps.length > 0;
   const timelineEnabledForEvent =
@@ -3050,6 +3521,10 @@ export default function TailgateDetails() {
     if (!detail || !canPurchaseTickets || isCheckoutLoading) {
       return;
     }
+    if (!selectedTicketType) {
+      setCheckoutError("Select a ticket type to continue.");
+      return;
+    }
     if (!user) {
       setCheckoutError("Please sign in to purchase tickets.");
       return;
@@ -3068,7 +3543,9 @@ export default function TailgateDetails() {
 
     const sanitizedQuantity = Math.max(
       1,
-      Math.min(ticketQuantity, MAX_TICKET_QUANTITY)
+      Number.isFinite(maxSelectableQuantity)
+        ? Math.min(ticketQuantity, maxSelectableQuantity)
+        : ticketQuantity
     );
     if (sanitizedQuantity !== ticketQuantity) {
       setTicketQuantity(sanitizedQuantity);
@@ -3093,6 +3570,7 @@ export default function TailgateDetails() {
       );
       const result = await createSession({
         tailgateId: detail.id,
+        ticketTypeId: selectedTicketType.id,
         quantity: sanitizedQuantity,
         channel: "web",
         successUrl,
@@ -3114,8 +3592,34 @@ export default function TailgateDetails() {
         checkoutFailure instanceof Error
           ? checkoutFailure.message
           : "Unable to start checkout right now.";
+      const errorDetails =
+        checkoutFailure && typeof checkoutFailure === "object" && "details" in checkoutFailure
+          ? (checkoutFailure as { details?: Record<string, unknown> }).details
+          : undefined;
+      const remainingFromError =
+        typeof errorDetails?.remaining === "number" && Number.isFinite(errorDetails.remaining)
+          ? Math.max(0, Math.floor(errorDetails.remaining))
+          : null;
+      const limitedTicketTypeName =
+        typeof errorDetails?.ticketTypeName === "string" && errorDetails.ticketTypeName.trim().length > 0
+          ? errorDetails.ticketTypeName.trim()
+          : selectedTicketType?.name ?? "this ticket type";
 
-      if (message.includes("SOLD_OUT")) {
+      if (message.includes("TICKET_TYPE_LIMIT_EXCEEDED")) {
+        if (remainingFromError !== null) {
+          setCheckoutError(
+            remainingFromError === 0
+              ? `${limitedTicketTypeName} is sold out.`
+              : `Only ${remainingFromError} ${limitedTicketTypeName} ticket${
+                  remainingFromError === 1 ? "" : "s"
+                } left.`
+          );
+        } else {
+          setCheckoutError(`Availability changed for ${limitedTicketTypeName}.`);
+        }
+      } else if (message.includes("TICKET_TYPE_SOLD_OUT")) {
+        setCheckoutError("This ticket type is sold out.");
+      } else if (message.includes("SOLD_OUT")) {
         setCheckoutError("This tailgate is sold out.");
       } else if (message.includes("SALES_CLOSED")) {
         setCheckoutError("Ticket sales are closed for this event.");
@@ -4237,7 +4741,16 @@ export default function TailgateDetails() {
           <p>Tailgate {id} was not found.</p>
         </section>
       ) : (
-        <section className={`tailgate-details-stack${isHostUser ? " tailgate-host-command-layout" : ""}`}>
+        <section
+          className={`tailgate-details-stack${isHostUser ? " tailgate-host-command-layout" : ""}${
+            showTicketPurchase &&
+            Boolean(selectedTicketType) &&
+            !isSoldOut &&
+            !isTicketSalesClosed
+              ? " has-sticky-cart"
+              : ""
+          }`}
+        >
           {checkoutResult === "success" ? (
             <section
               className={`tailgate-details-checkout-banner${
@@ -5050,7 +5563,7 @@ export default function TailgateDetails() {
                       <p>Type</p>
                       <strong>{getVisibilityLabel(detail.visibilityType)}</strong>
                       {detail.visibilityType === "open_paid" ? (
-                        <span>{formatCurrencyFromCents(detail.ticketPriceCents)} per person</span>
+                        <span>{ticketInfoLabel}</span>
                       ) : (
                         <span>
                           {detail.capacity ? `${detail.capacity} max guests` : "No capacity limit"}
@@ -5352,7 +5865,7 @@ export default function TailgateDetails() {
                 <p>Type</p>
                 <strong>{getVisibilityLabel(detail.visibilityType)}</strong>
                 {detail.visibilityType === "open_paid" ? (
-                  <span>{formatCurrencyFromCents(detail.ticketPriceCents)} per person</span>
+                  <span>{ticketInfoLabel}</span>
                 ) : (
                   <span>{detail.capacity ? `${detail.capacity} max guests` : "No capacity limit"}</span>
                 )}
@@ -5631,68 +6144,67 @@ export default function TailgateDetails() {
             {showTicketPurchase ? (
               <div className="tailgate-details-ticket-block">
                 <div className="tailgate-details-ticket-row">
-                  <p className="tailgate-details-ticket-title">Tickets</p>
-                  <span className="chip chip-upcoming">
-                    {formatCurrencyFromCents(detail.ticketPriceCents)} per person
-                  </span>
+                  <p className="tailgate-details-ticket-title">Buy tickets</p>
+                  <span className="chip chip-upcoming">{ticketInfoLabel}</span>
                 </div>
-                <p className="tailgate-details-ticket-copy">{ticketStatusMessage}</p>
-                {!user && !isSoldOut && !isTicketSalesClosed ? (
-                  <button
-                    type="button"
-                    className="primary-button"
-                    onClick={() =>
-                      navigate(
-                        `/login?mode=login&redirect=${encodeURIComponent(
-                          `/tailgates/${encodeURIComponent(detail.id)}`
-                        )}`
-                      )
-                    }
-                  >
-                    Sign in to purchase
-                  </button>
+                <p className="tailgate-details-ticket-copy">
+                  Review the ticket options below. Quantity and checkout stay pinned at the
+                  bottom while you browse.
+                </p>
+                {ticketInfoMeta ? (
+                  <p className="tailgate-details-ticket-copy tailgate-details-ticket-copy-secondary">
+                    {ticketInfoMeta}
+                  </p>
                 ) : null}
-                {canPurchaseTickets ? (
-                  <div className="tailgate-details-ticket-controls">
-                    <div className="tailgate-details-ticket-qty">
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() =>
-                          setTicketQuantity((current) => Math.max(1, current - 1))
-                        }
-                        disabled={ticketQuantity <= 1}
-                      >
-                        -
-                      </button>
-                      <strong>{ticketQuantity}</strong>
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() =>
-                          setTicketQuantity((current) =>
-                            Math.min(maxSelectableQuantity, current + 1)
-                          )
-                        }
-                        disabled={ticketQuantity >= maxSelectableQuantity}
-                      >
-                        +
-                      </button>
-                    </div>
-                    {ticketTotalLabel ? (
-                      <p className="tailgate-details-ticket-total">Total {ticketTotalLabel}</p>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="primary-button"
-                      onClick={() => void handleCheckoutPress()}
-                      disabled={isCheckoutLoading || isSoldOut}
+                <div className="tailgate-details-ticket-type-list">
+                  {ticketTypeSelectOptions.map((ticketTypeOption) => (
+                    <div
+                      key={ticketTypeOption.id}
+                      className={`tailgate-details-ticket-type-card${
+                        ticketTypeOption.id === selectedTicketType?.id ? " is-selected" : ""
+                      }`}
                     >
-                      {isCheckoutLoading ? "Preparing checkout..." : purchaseCtaLabel}
-                    </button>
+                      <div className="tailgate-details-ticket-type-card-copy">
+                        <div className="tailgate-details-ticket-type-card-title-row">
+                          <strong>{ticketTypeOption.name}</strong>
+                          {ticketTypeOption.availabilityLabel ? (
+                            <span className="tailgate-details-ticket-type-card-chip">
+                              {ticketTypeOption.availabilityLabel}
+                            </span>
+                          ) : null}
+                        </div>
+                        <span>
+                          {ticketTypeOption.description?.trim() ||
+                            "Choose this option from the checkout bar to continue."}
+                        </span>
+                      </div>
+                      <div className="tailgate-details-ticket-type-card-meta">
+                        <strong>{ticketTypeOption.priceLabel}</strong>
+                        {ticketTypeOption.id === selectedTicketType?.id ? (
+                          <span>Selected in checkout</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {selectedTicketType && !isSoldOut ? (
+                  <div className="tailgate-details-ticket-selected">
+                    <div className="tailgate-details-ticket-selected-copy">
+                      <strong>Checkout selection</strong>
+                      <span>
+                        {selectedTicketType.name} · {formatCurrencyFromCents(selectedTicketPriceCents)}
+                      </span>
+                    </div>
+                    <div className="tailgate-details-ticket-selected-meta">
+                      <strong>Use the sticky bar</strong>
+                      <span>Change ticket type and quantity below.</span>
+                    </div>
                   </div>
                 ) : null}
-                {checkoutError ? <p className="tailgate-details-ticket-error">{checkoutError}</p> : null}
+                <p className="tailgate-details-ticket-copy">{ticketStatusMessage}</p>
+                {ticketTotalLabel && !isSoldOut ? (
+                  <p className="tailgate-details-ticket-total">Current total {ticketTotalLabel}</p>
+                ) : null}
               </div>
             ) : null}
           </article>
@@ -6406,11 +6918,138 @@ export default function TailgateDetails() {
         </section>
       );
 
+  const stickyCartBar =
+    !isEmbeddedMapPanel &&
+    showTicketPurchase &&
+    Boolean(selectedTicketType) &&
+    !isSoldOut &&
+    !isTicketSalesClosed ? (
+      <div
+        className={`tailgate-details-sticky-cart${user ? " is-app-shell" : " is-public-shell"}`}
+      >
+        <div className="tailgate-details-sticky-cart-inner">
+          <div className="tailgate-details-sticky-cart-controls">
+            <div className="tailgate-details-sticky-cart-field">
+              <TicketTypeSelect
+                id="sticky-ticket-type-select"
+                label="Ticket type"
+                value={selectedTicketType?.id ?? ""}
+                options={ticketTypeSelectOptions}
+                compact
+                openUpwards
+                onChange={(nextValue) => {
+                  setSelectedTicketTypeId(nextValue);
+                  setCheckoutError(null);
+                }}
+              />
+            </div>
+            <div className="tailgate-details-sticky-cart-field tailgate-details-sticky-cart-field-quantity">
+              <span className="tailgate-details-sticky-cart-field-label">Quantity</span>
+              <div className="tailgate-details-ticket-qty tailgate-details-sticky-cart-qty">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  aria-label="Decrease ticket quantity"
+                  onClick={() =>
+                    setTicketQuantity((current) => Math.max(1, current - 1))
+                  }
+                  disabled={ticketQuantity <= 1}
+                >
+                  -
+                </button>
+                <strong>{ticketQuantity}</strong>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  aria-label="Increase ticket quantity"
+                  onClick={() =>
+                    setTicketQuantity((current) =>
+                      Math.min(maxSelectableQuantity, current + 1)
+                    )
+                  }
+                  disabled={ticketQuantity >= maxSelectableQuantity}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+          {selectedTicketTypeAvailabilityMessage ? (
+            <div className="tailgate-details-ticket-availability tailgate-details-sticky-cart-availability" aria-live="polite">
+              {selectedTicketTypeAvailabilityMessage}
+            </div>
+          ) : null}
+          <div className="tailgate-details-sticky-cart-summary">
+            <div className="tailgate-details-sticky-cart-copy">
+              <p className="tailgate-details-sticky-cart-kicker">Ready to checkout</p>
+              <strong>{ticketTotalLabel ?? formatCurrencyFromCents(selectedTicketPriceCents)}</strong>
+              <span>
+                {selectedTicketType.name} · {formatCurrencyFromCents(selectedTicketPriceCents)} each
+              </span>
+              {selectedTicketTypeUrgency ? (
+                <p className="tailgate-details-sticky-cart-urgency">{selectedTicketTypeUrgency}</p>
+              ) : null}
+            </div>
+            <div className="tailgate-details-sticky-cart-action">
+              {!user ? (
+                <button
+                  type="button"
+                  className="primary-button tailgate-details-sticky-cart-button"
+                  onClick={() =>
+                    navigate(
+                      `/login?mode=login&redirect=${encodeURIComponent(
+                        `/tailgates/${encodeURIComponent(detail.id)}`
+                      )}`
+                    )
+                  }
+                >
+                  Sign in to buy tickets
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="primary-button tailgate-details-sticky-cart-button"
+                  onClick={() => void handleCheckoutPress()}
+                  disabled={
+                    isCheckoutLoading || isSoldOut || isTicketSalesClosed || !canPurchaseTickets
+                  }
+                >
+                  {isCheckoutLoading ? "Preparing checkout..." : purchaseCtaLabel}
+                </button>
+              )}
+            </div>
+          </div>
+          {checkoutError ? (
+            <div
+              className="tailgate-details-sticky-cart-alert"
+              role="alert"
+              aria-live="assertive"
+            >
+              <p className="tailgate-details-sticky-cart-alert-title">{checkoutAlertTitle}</p>
+              <p className="tailgate-details-ticket-error tailgate-details-sticky-cart-error">
+                {checkoutError}
+              </p>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    ) : null;
+
+  const checkoutLoadingOverlay = isCheckoutLoading ? (
+    <div className="page-loading-overlay" aria-live="polite" aria-busy="true">
+      <div className="page-loading-overlay-card">
+        <div className="page-loading-spinner" aria-hidden="true" />
+        <p>Preparing Stripe checkout...</p>
+      </div>
+    </div>
+  ) : null;
+
   if (isEmbeddedMapPanel) {
     return (
       <main className="tailgate-details-embedded">
         {pageContent}
         {cancelTailgateModal}
+        {checkoutLoadingOverlay}
       </main>
     );
   }
@@ -6422,7 +7061,9 @@ export default function TailgateDetails() {
         <main className="tailgate-details-public-shell">
           {pageContent}
           {cancelTailgateModal}
+          {checkoutLoadingOverlay}
         </main>
+        {stickyCartBar}
       </>
     );
   }
@@ -6431,6 +7072,8 @@ export default function TailgateDetails() {
     <AppShell header={<div className="simple-header"><h1>Tailgate Details</h1></div>}>
       {pageContent}
       {cancelTailgateModal}
+      {stickyCartBar}
+      {checkoutLoadingOverlay}
     </AppShell>
   );
 }

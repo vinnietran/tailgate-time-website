@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { httpsCallable } from "firebase/functions";
-import { addDoc, collection, doc, getDoc, updateDoc } from "firebase/firestore";
+import { addDoc, collection, updateDoc } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { useLocation, useNavigate } from "react-router-dom";
 import AppShell from "../components/AppShell";
@@ -8,13 +8,10 @@ import { IconLocation } from "../components/Icons";
 import {
   formatPriceInput,
   MIN_TICKET_PRICE_CENTS,
-  isPayoutReady,
   parseCapacityInput,
   parseGuestPlusLimitInput,
   parsePriceInputToCents,
-  parseTicketSalesCutoffDaysInput,
-  resolveStripeConnectStatus,
-  type StripeConnectStatus
+  parseTicketSalesCutoffDaysInput
 } from "../features/create-event/ticketing";
 import {
   MAX_TICKET_TYPES,
@@ -29,12 +26,12 @@ import {
 } from "../features/ticketing/ticketTypes";
 import { useAuth } from "../hooks/useAuth";
 import { usePlacesAutocomplete } from "../hooks/usePlacesAutocomplete";
+import { useStripeConnectAccount } from "../hooks/useStripeConnectAccount";
 import { db, functions as firebaseFunctions, storage } from "../lib/firebase";
 import { VisibilityType } from "../types";
 import {
   EARLY_ADOPTER_MIN_TICKETS_SOLD,
   EARLY_ADOPTER_PLATFORM_FEE_PERCENT,
-  resolveHostPlatformFeeSummary,
   STANDARD_PLATFORM_FEE_PERCENT
 } from "../utils/platformFees";
 import { buildConnectCallbackUrl } from "../utils/connectCallbacks";
@@ -627,12 +624,6 @@ export default function CreateTailgateWizard() {
   const [stepIndex, setStepIndex] = useState(0);
   const [saving, setSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [payoutReady, setPayoutReady] = useState(false);
-  const [connectStatus, setConnectStatus] = useState<StripeConnectStatus>("not_started");
-  const [hostPlatformFeePercent, setHostPlatformFeePercent] = useState(
-    STANDARD_PLATFORM_FEE_PERCENT
-  );
-  const [hostPromoEndsAtMs, setHostPromoEndsAtMs] = useState<number | null>(null);
   const [payoutModalOpen, setPayoutModalOpen] = useState(false);
   const [paidFeeModalOpen, setPaidFeeModalOpen] = useState(false);
   const [typeInfoVisible, setTypeInfoVisible] = useState<VisibilityType | null>(null);
@@ -687,12 +678,19 @@ export default function CreateTailgateWizard() {
   const [coverImageDrafts, setCoverImageDrafts] = useState<CoverImageDraft[]>([]);
   const coverImageInputRef = useRef<HTMLInputElement | null>(null);
   const coverImageDraftsRef = useRef<CoverImageDraft[]>([]);
+  const {
+    ready: payoutReady,
+    status: connectStatus,
+    loading: payoutAccountLoading,
+    hostPlatformFeePercent,
+    hostPromoEndsAtMs
+  } = useStripeConnectAccount(user?.uid);
   const reconcileHostPromoEligibility = useMemo(
     () =>
       firebaseFunctions
         ? httpsCallable(firebaseFunctions, "reconcileHostEarlyAdopterPromoEligibility")
         : null,
-    []
+    [firebaseFunctions]
   );
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -942,53 +940,15 @@ export default function CreateTailgateWizard() {
     });
   }, []);
 
-  const refreshPayoutStatus = useCallback(async (): Promise<boolean> => {
-    if (!user?.uid || !db) {
-      setPayoutReady(false);
-      setConnectStatus("not_started");
-      setHostPlatformFeePercent(STANDARD_PLATFORM_FEE_PERCENT);
-      setHostPromoEndsAtMs(null);
-      return false;
+  useEffect(() => {
+    if (!reconcileHostPromoEligibility || !user?.uid) {
+      return;
     }
 
-    try {
-      try {
-        if (reconcileHostPromoEligibility) {
-          await reconcileHostPromoEligibility({});
-        }
-      } catch (promoError) {
-        console.warn("[CreateTailgateWizard] Failed to reconcile promo eligibility", promoError);
-      }
-      const userSnap = await getDoc(doc(db, "users", user.uid));
-      const data = userSnap.exists() ? (userSnap.data() as Record<string, unknown>) : null;
-      const ready = isPayoutReady(data);
-      const feeSummary = resolveHostPlatformFeeSummary(data);
-      setPayoutReady(ready);
-      setConnectStatus(resolveStripeConnectStatus(data));
-      setHostPlatformFeePercent(feeSummary.feePercent);
-      setHostPromoEndsAtMs(feeSummary.promoEndsAtMs);
-      return ready;
-    } catch (error) {
-      console.error("Failed to refresh Stripe payout status", error);
-      setPayoutReady(false);
-      setConnectStatus("not_started");
-      setHostPlatformFeePercent(STANDARD_PLATFORM_FEE_PERCENT);
-      setHostPromoEndsAtMs(null);
-      return false;
-    }
+    void reconcileHostPromoEligibility({}).catch((promoError) => {
+      console.warn("[CreateTailgateWizard] Failed to reconcile promo eligibility", promoError);
+    });
   }, [reconcileHostPromoEligibility, user?.uid]);
-
-  useEffect(() => {
-    void refreshPayoutStatus();
-  }, [refreshPayoutStatus]);
-
-  useEffect(() => {
-    const onFocus = () => {
-      void refreshPayoutStatus();
-    };
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [refreshPayoutStatus]);
 
   useEffect(() => {
     if (stepIndex < activeWizardSteps.length) return;
@@ -1538,6 +1498,13 @@ export default function CreateTailgateWizard() {
 
   const handleVisibilitySelect = (next: VisibilityType) => {
     clearFieldError("visibilityType");
+    if (next === "open_paid" && payoutAccountLoading && visibilityType !== "open_paid") {
+      setErrors((prev) => ({
+        ...prev,
+        visibilityType: "Checking payout setup. Try again in a moment."
+      }));
+      return;
+    }
     if (next === "open_paid" && !payoutReady && visibilityType !== "open_paid") {
       setPayoutSetupError(null);
       setPayoutModalOpen(true);
@@ -1629,7 +1596,9 @@ export default function CreateTailgateWizard() {
     const nextErrors: Record<string, string> = {};
 
     if (stepKey === "type") {
-      if (visibilityType === "open_paid" && !payoutReady) {
+      if (visibilityType === "open_paid" && payoutAccountLoading) {
+        nextErrors.visibilityType = "Still checking payout setup. Try again in a moment.";
+      } else if (visibilityType === "open_paid" && !payoutReady) {
         nextErrors.visibilityType = "Set up payouts to host paid tailgates.";
       }
     }
@@ -1881,8 +1850,15 @@ export default function CreateTailgateWizard() {
     clearFieldError("submit");
 
     if (visibilityType === "open_paid") {
-      const ready = await refreshPayoutStatus();
-      if (!ready) {
+      if (payoutAccountLoading) {
+        setErrors((prev) => ({
+          ...prev,
+          submit: "Still checking payout setup. Try again in a moment."
+        }));
+        setSaving(false);
+        return;
+      }
+      if (!payoutReady) {
         setPayoutSetupError("Set up payouts to create a paid tailgate.");
         setPayoutModalOpen(true);
         setSaving(false);
@@ -2457,8 +2433,14 @@ export default function CreateTailgateWizard() {
                   </button>
                 </span>
                 <span className="create-wizard-radio-help">{option.description}</span>
-                {option.key === "open_paid" && !payoutReady ? (
-                  <span className="create-wizard-radio-warning">Requires payout setup</span>
+                {option.key === "open_paid" ? (
+                  payoutAccountLoading ? (
+                    <span className="create-wizard-radio-warning">
+                      Checking payout setup...
+                    </span>
+                  ) : !payoutReady ? (
+                    <span className="create-wizard-radio-warning">Requires payout setup</span>
+                  ) : null
                 ) : null}
               </span>
             </label>
@@ -3401,6 +3383,24 @@ export default function CreateTailgateWizard() {
       </section>
     );
   };
+
+  if (user?.uid && payoutAccountLoading) {
+    return (
+      <AppShell
+        header={
+          <div className="create-wizard-shell-header">
+            <h1>Create Tailgate Event</h1>
+            <p>Set the vibe, lock in your lot, and build a game-day setup guests will remember.</p>
+          </div>
+        }
+      >
+        <section className="page-loading-state" aria-live="polite" aria-busy="true">
+          <div className="page-loading-spinner" aria-hidden="true" />
+          <p>Loading Stripe account...</p>
+        </section>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell

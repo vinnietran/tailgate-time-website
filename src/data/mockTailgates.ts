@@ -15,6 +15,47 @@ export const mockTailgates: TailgateEvent[] = [
     capacity: 120,
     ticketPriceCents: 3500,
     ticketsSold: 84,
+    grossRevenueCents: 357000,
+    purchaseCount: 52,
+    currency: "USD",
+    ticketTypes: [
+      {
+        id: "tg-001-ga",
+        name: "General Admission",
+        description: "Classic game-day access with the full tailgate spread.",
+        priceCents: 3500,
+        currency: "USD",
+        quantityAvailable: 90,
+        sortOrder: 0,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        id: "tg-001-vip",
+        name: "VIP Lounge",
+        description: "Reserved seating, premium drinks, and first-pour access.",
+        priceCents: 6500,
+        currency: "USD",
+        quantityAvailable: 20,
+        sortOrder: 1,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        id: "tg-001-crew",
+        name: "Crew Bundle",
+        description: "Best fit for groups locking in their own setup zone.",
+        priceCents: 5000,
+        currency: "USD",
+        quantityAvailable: 10,
+        sortOrder: 2,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now
+      }
+    ],
     rsvpsConfirmed: 84,
     rsvpsPending: 12,
     status: "upcoming",
@@ -45,5 +86,49 @@ export const mockTailgates: TailgateEvent[] = [
     rsvpsConfirmed: 42,
     rsvpsPending: 0,
     status: "past"
+  },
+  {
+    id: "tg-004",
+    hostUserId: "guest-host-004",
+    name: "Prime Lot All-Access",
+    visibilityType: "open_paid",
+    startDateTime: new Date(now.getTime() + day * 4),
+    endDateTime: new Date(now.getTime() + day * 4 + 5 * 60 * 60 * 1000),
+    locationSummary: "Champions Lot C, Pittsburgh, PA",
+    capacity: 60,
+    ticketPriceCents: 4500,
+    ticketsSold: 18,
+    grossRevenueCents: 102000,
+    purchaseCount: 14,
+    currency: "USD",
+    ticketTypes: [
+      {
+        id: "tg-004-ga",
+        name: "General Admission",
+        description: "Standard entry with access to the full tailgate footprint.",
+        priceCents: 4500,
+        currency: "USD",
+        quantityAvailable: 40,
+        sortOrder: 0,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        id: "tg-004-club",
+        name: "Club Deck",
+        description: "Elevated seating and upgraded food and drink service.",
+        priceCents: 8000,
+        currency: "USD",
+        quantityAvailable: 12,
+        sortOrder: 1,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now
+      }
+    ],
+    rsvpsConfirmed: 18,
+    rsvpsPending: 4,
+    status: "upcoming"
   }
 ];

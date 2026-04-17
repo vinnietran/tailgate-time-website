@@ -7,8 +7,12 @@ import { useAuth } from "../hooks/useAuth";
 import { useDashboardTailgates } from "../hooks/useDashboardTailgates";
 import { useDashboardSpotlight } from "../hooks/useDashboardSpotlight";
 import { useUserProfile } from "../hooks/useUserProfile";
-import { formatCurrencyFromCents, formatDateTimeRange, getFirstName } from "../utils/format";
-import { getVisibilityLabel } from "../utils/tailgate";
+import { formatDateTimeRange, getFirstName } from "../utils/format";
+import {
+  buildTailgatePricingSummary,
+  formatTicketPricingLabel,
+  getVisibilityLabel
+} from "../utils/tailgate";
 
 type TimeframeFilter = "upcoming" | "past";
 type QuickFilter = "all" | "hosting" | "paidOut" | "attending";
@@ -36,7 +40,7 @@ export default function HostDashboard() {
   const [spotlightIndex, setSpotlightIndex] = useState(0);
   const timeframeTailgates = useMemo(
     () => (timeframeFilter === "upcoming" ? upcomingTailgates : pastTailgates),
-    [pastTailgates, timeframeFilter, upcomingTailgates]
+    [pastTailgates, upcomingTailgates, timeframeFilter]
   );
 
   const quickFilterCounts = useMemo(
@@ -94,10 +98,12 @@ export default function HostDashboard() {
     if (!nextTailgate) return "";
     if (nextTailgate.visibilityType === "open_paid") {
       const sold = nextTailgate.ticketsSold ?? 0;
-      const priceLabel = nextTailgate.ticketPriceCents
-        ? ` · ${formatCurrencyFromCents(nextTailgate.ticketPriceCents)} each`
-        : "";
-      return `${sold} tickets sold${priceLabel}`;
+      const pricingSummary = buildTailgatePricingSummary(nextTailgate);
+      const priceLabel = formatTicketPricingLabel(
+        pricingSummary,
+        pricingSummary?.hasVariablePricing ? "range" : "single"
+      );
+      return `${sold} tickets sold${priceLabel ? ` · ${priceLabel}` : ""}`;
     }
     return `${nextTailgate.rsvpsConfirmed ?? 0} confirmed · ${
       nextTailgate.rsvpsPending ?? 0

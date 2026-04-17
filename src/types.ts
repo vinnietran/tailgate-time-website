@@ -14,8 +14,13 @@ export type TailgateEvent = {
   capacity?: number;
   ticketPriceCents?: number;
   ticketsSold?: number;
+  grossRevenueCents?: number;
+  platformFeeRevenueCents?: number;
+  purchaseCount?: number;
   rsvpsConfirmed?: number;
   rsvpsPending?: number;
+  currency?: string;
+  ticketTypes?: unknown;
   status?: TailgateStatus | string;
   payoutStatus?: "pending" | "sent";
 };

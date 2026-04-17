@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { signOut } from "firebase/auth";
 import { updateProfile as updateAuthProfile } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
-import { doc, onSnapshot, setDoc } from "firebase/firestore";
+import { doc, setDoc } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import AppShell from "../components/AppShell";
@@ -13,6 +13,7 @@ import {
 } from "../components/Icons";
 import { useAuth } from "../hooks/useAuth";
 import { useDialog } from "../hooks/useDialog";
+import { useStripeConnectAccount } from "../hooks/useStripeConnectAccount";
 import { useUserProfile } from "../hooks/useUserProfile";
 import { auth, db, functions as firebaseFunctions, storage } from "../lib/firebase";
 import {
@@ -21,17 +22,7 @@ import {
 } from "../services/account";
 import { buildConnectCallbackUrl } from "../utils/connectCallbacks";
 import { formatCurrencyFromCentsExact } from "../utils/format";
-
-type StripeConnectStatus = "not_started" | "pending" | "complete" | "restricted";
-
-type PayoutAccountState = {
-  status: StripeConnectStatus;
-  payoutsEnabled: boolean;
-  accountId: string | null;
-  requirementsDueCount: number;
-  loading: boolean;
-  error: string | null;
-};
+import { type StripeConnectStatus } from "../features/create-event/ticketing";
 
 type HostPayoutSummary = {
   paidTailgatesCount: number;
@@ -62,13 +53,6 @@ function toNonNegativeWholeNumber(value: unknown): number {
   return Math.max(0, Math.round(parsed));
 }
 
-function normalizeConnectStatus(value: unknown): StripeConnectStatus {
-  if (value === "pending" || value === "complete" || value === "restricted") {
-    return value;
-  }
-  return "not_started";
-}
-
 function statusLabel(status: StripeConnectStatus) {
   if (status === "not_started") return "Not started";
   if (status === "pending") return "Pending setup";
@@ -82,17 +66,9 @@ export default function AccountPayouts() {
   const dialog = useDialog();
   const { user } = useAuth();
   const { profile } = useUserProfile(user?.uid);
+  const account = useStripeConnectAccount(user?.uid);
   const displayName = profile?.displayName ?? user?.displayName ?? null;
   const email = profile?.email ?? user?.email ?? null;
-
-  const [account, setAccount] = useState<PayoutAccountState>({
-    status: "not_started",
-    payoutsEnabled: false,
-    accountId: null,
-    requirementsDueCount: 0,
-    loading: true,
-    error: null
-  });
   const [setupLoading, setSetupLoading] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [profileDisplayName, setProfileDisplayName] = useState(displayName ?? "");
@@ -132,69 +108,7 @@ export default function AccountPayouts() {
     CONNECT_REFRESH_URL,
     connectRedirectPath
   );
-
-  useEffect(() => {
-    if (!user?.uid) {
-      setAccount({
-        status: "not_started",
-        payoutsEnabled: false,
-        accountId: null,
-        requirementsDueCount: 0,
-        loading: false,
-        error: null
-      });
-      return;
-    }
-
-    if (!db) {
-      setAccount((previous) => ({ ...previous, loading: false, error: null }));
-      return;
-    }
-
-    const userRef = doc(db, "users", user.uid);
-    setAccount((previous) => ({ ...previous, loading: true, error: null }));
-
-    const unsubscribe = onSnapshot(
-      userRef,
-      (snapshot) => {
-        const data = snapshot.exists()
-          ? (snapshot.data() as Record<string, unknown>)
-          : {};
-        const requirements = data.stripeConnectRequirements as
-          | { currently_due?: unknown[] }
-          | undefined;
-
-        setAccount({
-          status: normalizeConnectStatus(data.stripeConnectStatus),
-          payoutsEnabled: data.payoutsEnabled === true,
-          accountId:
-            typeof data.stripeConnectAccountId === "string"
-              ? data.stripeConnectAccountId
-              : null,
-          requirementsDueCount: Array.isArray(requirements?.currently_due)
-            ? requirements.currently_due.length
-            : 0,
-          loading: false,
-          error: null
-        });
-      },
-      (snapshotError) => {
-        console.error("Failed to load payout account", snapshotError);
-        setAccount((previous) => ({
-          ...previous,
-          loading: false,
-          error: "Unable to load payout account."
-        }));
-      }
-    );
-
-    return () => unsubscribe();
-  }, [user?.uid]);
-
-  const payoutReady =
-    account.status === "complete" &&
-    account.payoutsEnabled &&
-    Boolean(account.accountId);
+  const payoutReady = account.ready;
 
   useEffect(() => {
     if (!user?.uid || !firebaseFunctions) {
@@ -530,6 +444,17 @@ export default function AccountPayouts() {
       setPhotoUploading(false);
     }
   };
+
+  if (user?.uid && account.loading) {
+    return (
+      <AppShell header={<div className="simple-header"><h1>Account & Payouts</h1></div>}>
+        <section className="page-loading-state" aria-live="polite" aria-busy="true">
+          <div className="page-loading-spinner" aria-hidden="true" />
+          <p>Loading Stripe account...</p>
+        </section>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell header={<div className="simple-header"><h1>Account & Payouts</h1></div>}>

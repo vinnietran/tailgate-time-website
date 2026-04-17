@@ -1,7 +1,13 @@
 import { useNavigate } from "react-router-dom";
 import { TailgateEvent } from "../types";
 import { formatCurrencyFromCents, formatDateTimeRange } from "../utils/format";
-import { estimateHostPayout, getEventStatus, getVisibilityLabel } from "../utils/tailgate";
+import {
+  buildTailgatePricingSummary,
+  estimateHostPayout,
+  formatTicketPricingLabel,
+  getEventStatus,
+  getVisibilityLabel
+} from "../utils/tailgate";
 import { IconCalendar, IconExternal, IconLocation } from "./Icons";
 
 export default function TailgateCard({
@@ -16,10 +22,17 @@ export default function TailgateCard({
   const navigate = useNavigate();
   const status = getEventStatus(event);
   const visibilityLabel = getVisibilityLabel(event.visibilityType);
+  const pricingSummary = buildTailgatePricingSummary(event);
   const payout = estimateHostPayout({
     ticketsSold: event.ticketsSold,
-    ticketPriceCents: event.ticketPriceCents
+    ticketPriceCents: event.ticketPriceCents,
+    grossRevenueCents: event.grossRevenueCents,
+    purchaseCount: event.purchaseCount,
+    platformFeeCents: event.platformFeeRevenueCents
   });
+  const ticketPricingLabel =
+    formatTicketPricingLabel(pricingSummary, pricingSummary?.hasVariablePricing ? "range" : "single") ??
+    "Ticket pricing unavailable";
   const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
 
   const showEdit = isHost === true && (status === "upcoming" || status === "live");
@@ -99,7 +112,7 @@ export default function TailgateCard({
                 <p className="info-value">
                   {event.ticketsSold ?? 0} / {event.capacity ?? "--"} sold
                 </p>
-                <p className="info-meta">{formatCurrencyFromCents(event.ticketPriceCents)} per person</p>
+                <p className="info-meta">{ticketPricingLabel}</p>
                 <p className="info-highlight">
                   {event.payoutStatus === "sent"
                     ? "Payout sent"

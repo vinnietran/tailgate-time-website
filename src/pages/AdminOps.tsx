@@ -120,7 +120,7 @@ function PayoutAlertRow({ item }: { item: OpsPayoutAlert }) {
       <p className="admin-ops-list-note">{item.reason}</p>
       <div className="admin-ops-list-meta">
         <span>{formatDateTime(item.startDateTime)}</span>
-        <span>{formatCurrencyFromCents(item.ticketPriceCents)} per ticket</span>
+        <span>{item.pricingLabel}</span>
       </div>
       <Link className="admin-ops-inline-link" to={`/tailgates/${item.tailgateId}`}>
         Open paid tailgate

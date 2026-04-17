@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "../lib/firebase";
+import { buildTailgatePricingSummary, formatTicketPricingLabel } from "../utils/tailgate";
+import {
+  isSuccessfulTicketPurchase,
+  resolveTicketPurchaseQuantity
+} from "../utils/ticketPurchases";
 
 type OpsMetric = {
   label: string;
@@ -37,7 +42,7 @@ export type OpsPayoutAlert = {
   hostUserId: string;
   hostLabel: string;
   startDateTime: Date;
-  ticketPriceCents: number;
+  pricingLabel: string;
   connectStatus: string;
   payoutsEnabled: boolean;
   reason: string;
@@ -77,6 +82,7 @@ type TailgateRecord = {
   status: string;
   startDateTime: Date;
   ticketPriceCents: number;
+  ticketTypes?: unknown;
   ticketsSold: number;
   cancelledAt: Date | null;
 };
@@ -87,6 +93,7 @@ type PurchaseRecord = {
   tailgateName: string;
   purchaserLabel: string;
   amountCents: number;
+  quantity: number;
   status: string;
   createdAt: Date | null;
   updatedAt: Date | null;
@@ -276,13 +283,7 @@ function resolvePurchaserLabel(data: Record<string, unknown>) {
 }
 
 function isPurchaseSuccess(status: string) {
-  return (
-    status === "confirmed" ||
-    status === "paid" ||
-    status === "succeeded" ||
-    status === "completed" ||
-    status === "purchase_succeeded"
-  );
+  return isSuccessfulTicketPurchase(status);
 }
 
 function isPurchaseIssue(status: string) {
@@ -336,6 +337,7 @@ function normalizeTailgate(data: Record<string, unknown>, id: string): TailgateR
     status,
     startDateTime: pickTailgateDate(data),
     ticketPriceCents: Math.max(0, Math.round(ticketPriceCents)),
+    ticketTypes: data.ticketTypes,
     ticketsSold: Math.max(0, Math.round(ticketsSold)),
     cancelledAt:
       normalizeDate(data.cancelledAt) ??
@@ -367,6 +369,7 @@ function normalizePurchase(
     tailgateName: resolveTailgateName(data) || linkedTailgate?.name || "Unknown tailgate",
     purchaserLabel: resolvePurchaserLabel(data),
     amountCents: resolvePurchaseAmountCents(data),
+    quantity: resolveTicketPurchaseQuantity(data),
     status: resolvePurchaseStatus(data),
     createdAt: resolvePurchaseCreatedAt(data),
     updatedAt: resolvePurchaseUpdatedAt(data)
@@ -506,15 +509,13 @@ export function useAdminOpsDashboard() {
       (sum, purchase) => sum + Math.max(0, purchase.amountCents),
       0
     );
-    const lifetimePaidTailgates = tailgateList.filter(
-      (tailgate) => tailgate.visibilityType === "open_paid" && tailgate.ticketPriceCents > 0
-    );
-    const lifetimeTicketsSold = lifetimePaidTailgates.reduce(
-      (sum, tailgate) => sum + tailgate.ticketsSold,
+    const successfulPurchases = purchases.filter((purchase) => isPurchaseSuccess(purchase.status));
+    const lifetimeTicketsSold = successfulPurchases.reduce(
+      (sum, purchase) => sum + purchase.quantity,
       0
     );
-    const revenueLifetimeCents = lifetimePaidTailgates.reduce(
-      (sum, tailgate) => sum + tailgate.ticketPriceCents * tailgate.ticketsSold,
+    const revenueLifetimeCents = successfulPurchases.reduce(
+      (sum, purchase) => sum + Math.max(0, purchase.amountCents),
       0
     );
 
@@ -560,7 +561,16 @@ export function useAdminOpsDashboard() {
           hostUserId: tailgate.hostUserId,
           hostLabel: host?.displayName || host?.email || tailgate.hostUserId || "Unknown host",
           startDateTime: tailgate.startDateTime,
-          ticketPriceCents: tailgate.ticketPriceCents,
+          pricingLabel:
+            formatTicketPricingLabel(
+              buildTailgatePricingSummary({
+                ticketTypes: tailgate.ticketTypes,
+                ticketPriceCents: tailgate.ticketPriceCents
+              }),
+              Array.isArray(tailgate.ticketTypes) && tailgate.ticketTypes.length > 1
+                ? "range"
+                : "single"
+            ) ?? "Paid tickets",
           connectStatus,
           payoutsEnabled,
           reason:

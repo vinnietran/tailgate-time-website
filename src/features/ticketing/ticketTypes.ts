@@ -16,10 +16,24 @@ export type EventTicketType = {
   updatedAt: unknown;
 };
 
+export type TicketPricingSummary = {
+  activeTypeCount: number;
+  distinctPriceCount: number;
+  minPriceCents: number;
+  maxPriceCents: number;
+  hasVariablePricing: boolean;
+};
+
 type TicketTypeLike = Partial<EventTicketType> & {
   priceCents?: unknown;
   currency?: unknown;
   quantityAvailable?: unknown;
+  availableQuantity?: unknown;
+  capacity?: unknown;
+  quantity?: unknown;
+  ticketCapacity?: unknown;
+  maxTickets?: unknown;
+  totalAvailable?: unknown;
   sortOrder?: unknown;
   isActive?: unknown;
 };
@@ -110,10 +124,21 @@ export const normalizeTicketTypeRecord = (
     coercePositiveInteger(raw.priceCents) ??
     coercePositiveInteger(fallback.priceCents) ??
     0;
+  const quantityCandidates = [
+    raw.quantityAvailable,
+    raw.availableQuantity,
+    raw.capacity,
+    raw.quantity,
+    raw.ticketCapacity,
+    raw.maxTickets,
+    raw.totalAvailable
+  ];
   const quantityAvailable =
-    raw.quantityAvailable === null
+    quantityCandidates.some((value) => value === null)
       ? null
-      : coercePositiveInteger(raw.quantityAvailable) ??
+      : quantityCandidates
+            .map((value) => coercePositiveInteger(value))
+            .find((value): value is number => typeof value === "number") ??
         fallback.quantityAvailable ??
         null;
   return {
@@ -181,6 +206,38 @@ export const resolveLowestTicketTypePriceCents = (
     return null;
   }
   return Math.min(...prices);
+};
+
+export const summarizeTicketPricing = (
+  ticketTypes: EventTicketType[],
+  fallbackPriceCents?: number | null
+): TicketPricingSummary | null => {
+  const prices = ticketTypes
+    .filter((ticketType) => ticketType.isActive !== false)
+    .map((ticketType) => ticketType.priceCents)
+    .filter((price): price is number => Number.isFinite(price) && price >= 0);
+
+  if (prices.length === 0) {
+    if (typeof fallbackPriceCents !== "number" || !Number.isFinite(fallbackPriceCents)) {
+      return null;
+    }
+    return {
+      activeTypeCount: fallbackPriceCents > 0 ? 1 : 0,
+      distinctPriceCount: 1,
+      minPriceCents: fallbackPriceCents,
+      maxPriceCents: fallbackPriceCents,
+      hasVariablePricing: false
+    };
+  }
+
+  const distinctPrices = Array.from(new Set(prices)).sort((left, right) => left - right);
+  return {
+    activeTypeCount: prices.length,
+    distinctPriceCount: distinctPrices.length,
+    minPriceCents: distinctPrices[0] ?? 0,
+    maxPriceCents: distinctPrices[distinctPrices.length - 1] ?? distinctPrices[0] ?? 0,
+    hasVariablePricing: distinctPrices.length > 1
+  };
 };
 
 export const hasRequiredTicketTypes = (ticketTypes: EventTicketType[]): boolean =>

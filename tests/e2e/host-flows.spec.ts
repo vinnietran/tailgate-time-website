@@ -26,6 +26,26 @@ test.describe("Host flows", () => {
     await expect(page.getByRole("heading", { name: "Meet-up Spot" })).toBeVisible();
   });
 
+  test("paid event details render multiple ticket types", async ({ page }) => {
+    await page.goto("/#/tailgates/tg-004");
+
+    await expect(page.getByRole("combobox", { name: /ticket type/i })).toBeVisible();
+    await expect(page.getByText("Quantity").first()).toBeVisible();
+    const increaseQuantityButton = page.getByRole("button", {
+      name: /increase ticket quantity/i
+    });
+    for (let step = 0; step < 8; step += 1) {
+      await increaseQuantityButton.evaluate((button) => {
+        (button as HTMLButtonElement).click();
+      });
+    }
+    await expect(page.getByText(/^9$/).first()).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /buy tickets|buy more tickets|sign in to buy tickets/i })
+    ).toBeVisible();
+    await expect(page.getByText("From $45").first()).toBeVisible();
+  });
+
   test("create wizard can progress from type to review for a private event", async ({
     page
   }) => {
