@@ -4889,6 +4889,106 @@ a {
   gap: 10px;
 }
 
+.tailgate-details-editing-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(242, 201, 76, 0.4);
+  background: rgba(242, 201, 76, 0.16);
+  color: #ffe08a;
+  padding: 10px 12px;
+}
+
+.tailgate-details-editing-banner strong {
+  color: var(--white);
+  font-size: 0.92rem;
+}
+
+.tailgate-details-editing-banner span {
+  color: var(--muted-strong);
+  font-size: 0.84rem;
+  text-align: right;
+}
+
+.tailgate-details-inline-ticket-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.tailgate-details-inline-ticket-editor-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.tailgate-details-inline-ticket-count {
+  border-radius: 999px;
+  border: 1px solid rgba(242, 201, 76, 0.22);
+  background: rgba(242, 201, 76, 0.12);
+  color: #ffe08a;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 6px 10px;
+}
+
+.tailgate-details-inline-ticket-list {
+  display: grid;
+  gap: 10px;
+}
+
+.tailgate-details-inline-ticket-card {
+  display: grid;
+  gap: 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 12px;
+}
+
+.tailgate-details-inline-ticket-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.tailgate-details-inline-ticket-card-header strong,
+.tailgate-details-inline-ticket-card-header span {
+  display: block;
+}
+
+.tailgate-details-inline-ticket-card-header span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.tailgate-details-inline-ticket-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tailgate-details-inline-ticket-grid-span {
+  grid-column: 1 / -1;
+}
+
+.tailgate-details-inline-ticket-description {
+  min-height: 84px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.tailgate-details-inline-ticket-add {
+  justify-self: flex-start;
+}
+
 .tailgate-details-inline-editor-description {
   min-height: 94px;
   resize: vertical;
@@ -9071,7 +9171,8 @@ a.secondary-button {
   }
 
   .tailgate-details-info-grid,
-  .tailgate-details-inline-editor-grid {
+  .tailgate-details-inline-editor-grid,
+  .tailgate-details-inline-ticket-grid {
     grid-template-columns: 1fr;
   }
 

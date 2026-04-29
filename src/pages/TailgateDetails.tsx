@@ -27,10 +27,17 @@ import {
   IconUser
 } from "../components/Icons";
 import { PublicTopNav } from "../components/PublicTopNav";
+import { formatPriceInput } from "../features/create-event/ticketing";
 import {
+  MAX_TICKET_TYPES,
+  hasRequiredTicketTypes,
   getActiveEventTicketTypes,
+  limitTicketTypeDescriptionInput,
+  limitTicketTypeNameInput,
   resolveLowestTicketTypePriceCents,
   summarizeTicketPricing,
+  sanitizeTicketTypeDescription,
+  sanitizeTicketTypeName,
   type EventTicketType
 } from "../features/ticketing/ticketTypes";
 import { useAuth } from "../hooks/useAuth";
@@ -214,6 +221,19 @@ type InlineEditDraft = {
   capacity: string;
 };
 
+type InlineEditTicketTypeDraft = {
+  id: string;
+  name: string;
+  description: string;
+  price: string;
+  quantityAvailable: string;
+  currency: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+  isRemoved: boolean;
+  wasExisting: boolean;
+};
+
 type GuestInviteDraft = {
   name: string;
   phone: string;
@@ -370,6 +390,7 @@ const normalizedStatusMap: Record<string, AttendeeStatus> = {
   declined: "Not Attending"
 };
 const coordinateRegex = /^-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?$/;
+const MIN_INLINE_TICKET_PRICE_CENTS = 2000;
 
 function normalizeTicketLifecycleStatus(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
@@ -1508,6 +1529,7 @@ export default function TailgateDetails() {
   const timelineSectionRef = useRef<HTMLElement | null>(null);
   const quizSectionRef = useRef<HTMLElement | null>(null);
   const eventSnapshotSectionRef = useRef<HTMLElement | null>(null);
+  const handledEditRouteRef = useRef(false);
   const attemptedCoverImageResolutionRef = useRef<Set<string>>(new Set());
   const attemptedCoverBlobFallbackRef = useRef<Set<string>>(new Set());
   const createdCoverBlobUrlsRef = useRef<string[]>([]);
@@ -1596,6 +1618,9 @@ export default function TailgateDetails() {
     ticketPrice: "",
     capacity: ""
   });
+  const [inlineEditTicketTypes, setInlineEditTicketTypes] = useState<InlineEditTicketTypeDraft[]>(
+    []
+  );
   const [guestInviteDraft, setGuestInviteDraft] = useState<GuestInviteDraft>({
     name: "",
     phone: "",
@@ -2157,9 +2182,35 @@ export default function TailgateDetails() {
     };
   };
 
+  const buildInlineEditTicketTypeDrafts = (value: TailgateDetail): InlineEditTicketTypeDraft[] => {
+    if (value.visibilityType !== "open_paid") {
+      return [];
+    }
+
+    return value.ticketTypes.slice(0, MAX_TICKET_TYPES).map((ticketType) => ({
+      id: ticketType.id || createInviteIdentifier(),
+      name: ticketType.name,
+      description: ticketType.description ?? "",
+      price:
+        typeof ticketType.priceCents === "number" && Number.isFinite(ticketType.priceCents)
+          ? formatPriceInput(ticketType.priceCents)
+          : "",
+      quantityAvailable:
+        typeof ticketType.quantityAvailable === "number" && ticketType.quantityAvailable > 0
+          ? String(ticketType.quantityAvailable)
+          : "",
+      currency: ticketType.currency || value.currency || "USD",
+      createdAt: ticketType.createdAt,
+      updatedAt: ticketType.updatedAt,
+      isRemoved: false,
+      wasExisting: true
+    }));
+  };
+
   useEffect(() => {
     if (!detail || isInlineEditing) return;
     setInlineEditDraft(buildInlineEditDraft(detail));
+    setInlineEditTicketTypes(buildInlineEditTicketTypeDrafts(detail));
   }, [detail, isInlineEditing]);
 
   useEffect(() => {
@@ -3069,6 +3120,100 @@ export default function TailgateDetails() {
     setInlineEditError("Cancelled events can't be edited.");
   }, [isInlineEditing, status]);
 
+  const activeInlineEditTicketTypes = useMemo(
+    () => inlineEditTicketTypes.filter((ticketType) => !ticketType.isRemoved),
+    [inlineEditTicketTypes]
+  );
+  const inlineEditCapacitySummary = useMemo(() => {
+    if (activeInlineEditTicketTypes.length === 0) {
+      return null;
+    }
+
+    const parsedCapacities = activeInlineEditTicketTypes.map((ticketType) =>
+      parseCapacity(ticketType.quantityAvailable)
+    );
+    const allCapacitiesSet = parsedCapacities.every(
+      (capacity): capacity is number => typeof capacity === "number"
+    );
+
+    if (!allCapacitiesSet) {
+      return "Per-type capacity is optional. Leave any ticket type blank to keep the overall event cap open.";
+    }
+
+    const totalCapacity = parsedCapacities.reduce((sum, capacity) => sum + capacity, 0);
+    return `Total event capacity will be ${totalCapacity} across ${activeInlineEditTicketTypes.length} ticket type${
+      activeInlineEditTicketTypes.length === 1 ? "" : "s"
+    }.`;
+  }, [activeInlineEditTicketTypes]);
+
+  const updateInlineEditTicketType = (
+    ticketTypeId: string,
+    patch: Partial<InlineEditTicketTypeDraft>
+  ) => {
+    setInlineEditTicketTypes((previous) =>
+      previous.map((ticketType) =>
+        ticketType.id === ticketTypeId
+          ? {
+              ...ticketType,
+              ...patch
+            }
+          : ticketType
+      )
+    );
+  };
+
+  const addInlineEditTicketType = () => {
+    setInlineEditTicketTypes((previous) => {
+      const activeCount = previous.filter((ticketType) => !ticketType.isRemoved).length;
+      if (activeCount >= MAX_TICKET_TYPES) {
+        return previous;
+      }
+
+      const referencePrice =
+        activeInlineEditTicketTypes[0]?.price ??
+        (detail?.ticketPriceCents
+          ? formatPriceInput(detail.ticketPriceCents)
+          : formatPriceInput(MIN_INLINE_TICKET_PRICE_CENTS));
+
+      return [
+        ...previous,
+        {
+          id: createInviteIdentifier(),
+          name: "",
+          description: "",
+          price: referencePrice,
+          quantityAvailable: "",
+          currency: detail?.currency || "USD",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          isRemoved: false,
+          wasExisting: false
+        }
+      ];
+    });
+    setInlineEditError(null);
+  };
+
+  const removeInlineEditTicketType = (ticketTypeId: string) => {
+    setInlineEditTicketTypes((previous) => {
+      const activeCount = previous.filter((ticketType) => !ticketType.isRemoved).length;
+      if (activeCount <= 1) {
+        return previous;
+      }
+
+      return previous.flatMap((ticketType) => {
+        if (ticketType.id !== ticketTypeId) {
+          return [ticketType];
+        }
+        if (ticketType.wasExisting) {
+          return [{ ...ticketType, isRemoved: true, updatedAt: new Date() }];
+        }
+        return [];
+      });
+    });
+    setInlineEditError(null);
+  };
+
   const openInlineEventEditor = (scrollToSection = false) => {
     if (!detail) return;
     if (status === "cancelled") {
@@ -3078,6 +3223,7 @@ export default function TailgateDetails() {
       return;
     }
     setInlineEditDraft(buildInlineEditDraft(detail));
+    setInlineEditTicketTypes(buildInlineEditTicketTypeDrafts(detail));
     setInlineEditError(null);
     setInlineEditSuccess(null);
     setIsInlineEditing(true);
@@ -3091,9 +3237,20 @@ export default function TailgateDetails() {
     }
   };
 
+  useEffect(() => {
+    if (handledEditRouteRef.current || !detail || !isHostUser) return;
+
+    const params = new URLSearchParams(location.search);
+    if (params.get("edit") !== "event") return;
+
+    handledEditRouteRef.current = true;
+    openInlineEventEditor(true);
+  }, [detail, isHostUser, location.search]);
+
   const cancelInlineEventEditor = () => {
     if (!detail) return;
     setInlineEditDraft(buildInlineEditDraft(detail));
+    setInlineEditTicketTypes(buildInlineEditTicketTypeDrafts(detail));
     setInlineEditError(null);
     setIsInlineEditing(false);
   };
@@ -3167,24 +3324,110 @@ export default function TailgateDetails() {
         };
 
     if (detail.visibilityType === "open_paid") {
-      const priceCents = parsePriceToCents(inlineEditDraft.ticketPrice);
-      if (!priceCents || priceCents < 2000) {
-        setInlineEditError("Paid events require a ticket price of at least $20.");
+      const activeTicketDrafts = inlineEditTicketTypes.filter((ticketType) => !ticketType.isRemoved);
+      if (activeTicketDrafts.length < 1) {
+        setInlineEditError("Paid events need at least one active ticket type.");
         return;
       }
-      updates.priceCents = priceCents;
-      updates.ticketPriceCents = priceCents;
+      if (activeTicketDrafts.length > MAX_TICKET_TYPES) {
+        setInlineEditError(`You can add up to ${MAX_TICKET_TYPES} ticket types.`);
+        return;
+      }
 
-      if (inlineEditDraft.capacity.trim()) {
-        const parsedCapacity = parseCapacity(inlineEditDraft.capacity);
-        if (!parsedCapacity) {
-          setInlineEditError("Capacity must be a whole number greater than 0.");
+      const now = new Date();
+      const removedExistingDrafts = inlineEditTicketTypes.filter(
+        (ticketType) => ticketType.isRemoved && ticketType.wasExisting
+      );
+      const normalizedActiveTicketTypes: EventTicketType[] = [];
+
+      for (const [index, ticketType] of activeTicketDrafts.entries()) {
+        const sanitizedName = sanitizeTicketTypeName(ticketType.name);
+        if (!sanitizedName) {
+          setInlineEditError(`Ticket type ${index + 1} needs a name.`);
           return;
         }
-        updates.capacity = parsedCapacity;
-      } else {
-        updates.capacity = null;
+
+        const priceCents = parsePriceToCents(ticketType.price);
+        if (!priceCents || priceCents < MIN_INLINE_TICKET_PRICE_CENTS) {
+          setInlineEditError(
+            `Ticket type "${sanitizedName}" must be priced at $20 or more.`
+          );
+          return;
+        }
+
+        const parsedCapacity = ticketType.quantityAvailable.trim()
+          ? parseCapacity(ticketType.quantityAvailable)
+          : null;
+        if (ticketType.quantityAvailable.trim() && !parsedCapacity) {
+          setInlineEditError(
+            `Ticket type "${sanitizedName}" needs a whole-number capacity greater than 0.`
+          );
+          return;
+        }
+
+        normalizedActiveTicketTypes.push({
+          id: ticketType.id || createInviteIdentifier(),
+          name: sanitizedName,
+          description: sanitizeTicketTypeDescription(ticketType.description),
+          priceCents,
+          currency: (ticketType.currency || detail.currency || "USD").toUpperCase(),
+          quantityAvailable: parsedCapacity,
+          sortOrder: index,
+          isActive: true,
+          createdAt: ticketType.createdAt ?? now,
+          updatedAt: now
+        });
       }
+
+      if (!hasRequiredTicketTypes(normalizedActiveTicketTypes)) {
+        setInlineEditError("Paid events need at least one ticket type.");
+        return;
+      }
+
+      const normalizedRemovedTicketTypes: EventTicketType[] = removedExistingDrafts.map(
+        (ticketType, index) => ({
+          id: ticketType.id,
+          name: sanitizeTicketTypeName(ticketType.name) || `Archived ticket type ${index + 1}`,
+          description: sanitizeTicketTypeDescription(ticketType.description),
+          priceCents:
+            parsePriceToCents(ticketType.price) ??
+            normalizedActiveTicketTypes[0]?.priceCents ??
+            MIN_INLINE_TICKET_PRICE_CENTS,
+          currency: (ticketType.currency || detail.currency || "USD").toUpperCase(),
+          quantityAvailable: ticketType.quantityAvailable.trim()
+            ? parseCapacity(ticketType.quantityAvailable)
+            : null,
+          sortOrder: normalizedActiveTicketTypes.length + index,
+          isActive: false,
+          createdAt: ticketType.createdAt ?? now,
+          updatedAt: now
+        })
+      );
+
+      const normalizedTicketTypes = [
+        ...normalizedActiveTicketTypes,
+        ...normalizedRemovedTicketTypes
+      ];
+      const lowestPriceCents = resolveLowestTicketTypePriceCents(normalizedActiveTicketTypes);
+      if (!lowestPriceCents || lowestPriceCents < MIN_INLINE_TICKET_PRICE_CENTS) {
+        setInlineEditError("Paid events require at least one ticket type priced at $20 or more.");
+        return;
+      }
+
+      const activeCapacities = normalizedActiveTicketTypes.map(
+        (ticketType) => ticketType.quantityAvailable
+      );
+      const hasEventCapacity = activeCapacities.every(
+        (capacity): capacity is number => typeof capacity === "number" && capacity > 0
+      );
+
+      updates.ticketTypes = normalizedTicketTypes;
+      updates.priceCents = lowestPriceCents;
+      updates.ticketPriceCents = lowestPriceCents;
+      updates.capacity = hasEventCapacity
+        ? activeCapacities.reduce((sum, capacity) => sum + capacity, 0)
+        : null;
+      updates.currency = (detail.currency || "USD").toUpperCase();
     }
 
     setInlineEditSaving(true);
@@ -4729,6 +4972,117 @@ export default function TailgateDetails() {
       </div>
     ) : null;
 
+  const inlineEditPaidTicketTypesFields =
+    detail?.visibilityType === "open_paid" ? (
+      <div className="tailgate-details-inline-ticket-editor">
+        <div className="tailgate-details-inline-ticket-editor-header">
+          <div>
+            <span className="input-label">Ticket types</span>
+            <p className="tailgate-details-ticket-copy tailgate-details-ticket-copy-secondary">
+              Existing paid events without named tiers are treated as General Admission until you
+              rename them.
+            </p>
+          </div>
+          <span className="tailgate-details-inline-ticket-count">
+            {activeInlineEditTicketTypes.length} / {MAX_TICKET_TYPES}
+          </span>
+        </div>
+        <div className="tailgate-details-inline-ticket-list">
+          {activeInlineEditTicketTypes.map((ticketType, index) => (
+            <div key={ticketType.id} className="tailgate-details-inline-ticket-card">
+              <div className="tailgate-details-inline-ticket-card-header">
+                <div>
+                  <strong>
+                    {ticketType.name.trim() ? ticketType.name.trim() : `Ticket type ${index + 1}`}
+                  </strong>
+                  <span>Guests will see this option during checkout.</span>
+                </div>
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => removeInlineEditTicketType(ticketType.id)}
+                  disabled={activeInlineEditTicketTypes.length <= 1 || inlineEditSaving}
+                >
+                  Remove
+                </button>
+              </div>
+              <div className="tailgate-details-inline-ticket-grid">
+                <label className="input-group">
+                  <span className="input-label">Ticket type name</span>
+                  <input
+                    className="text-input"
+                    value={ticketType.name}
+                    onChange={(event) =>
+                      updateInlineEditTicketType(ticketType.id, {
+                        name: limitTicketTypeNameInput(event.target.value)
+                      })
+                    }
+                    placeholder="General Admission, VIP, Parking Pass..."
+                  />
+                </label>
+                <label className="input-group">
+                  <span className="input-label">Price (USD)</span>
+                  <input
+                    className="text-input"
+                    value={ticketType.price}
+                    onChange={(event) =>
+                      updateInlineEditTicketType(ticketType.id, {
+                        price: event.target.value.replace(/[^0-9.]/g, "")
+                      })
+                    }
+                    placeholder="20.00"
+                    inputMode="decimal"
+                  />
+                </label>
+                <label className="input-group tailgate-details-inline-ticket-grid-span">
+                  <span className="input-label">Description</span>
+                  <textarea
+                    className="text-input tailgate-details-inline-ticket-description"
+                    value={ticketType.description}
+                    onChange={(event) =>
+                      updateInlineEditTicketType(ticketType.id, {
+                        description: limitTicketTypeDescriptionInput(event.target.value)
+                      })
+                    }
+                    placeholder="Tell guests what this ticket includes."
+                  />
+                </label>
+                <label className="input-group">
+                  <span className="input-label">Capacity (optional)</span>
+                  <input
+                    className="text-input"
+                    value={ticketType.quantityAvailable}
+                    onChange={(event) =>
+                      updateInlineEditTicketType(ticketType.id, {
+                        quantityAvailable: event.target.value.replace(/\D/g, "")
+                      })
+                    }
+                    placeholder="50"
+                    inputMode="numeric"
+                  />
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          className="secondary-button tailgate-details-inline-ticket-add"
+          onClick={addInlineEditTicketType}
+          disabled={activeInlineEditTicketTypes.length >= MAX_TICKET_TYPES || inlineEditSaving}
+        >
+          {activeInlineEditTicketTypes.length >= MAX_TICKET_TYPES
+            ? "Ticket type limit reached"
+            : "Add ticket type"}
+        </button>
+        {inlineEditCapacitySummary ? (
+          <p className="tailgate-details-ticket-copy tailgate-details-ticket-copy-secondary">
+            {inlineEditCapacitySummary}
+          </p>
+        ) : null}
+      </div>
+    ) : null;
+
   const pageContent = loading ? (
         <section className="tailgate-details-stack">
           <div className="tailgate-card skeleton" />
@@ -5410,6 +5764,10 @@ export default function TailgateDetails() {
                   </div>
                   {isInlineEditing ? (
                     <div className="tailgate-details-inline-editor">
+                      <div className="tailgate-details-editing-banner" role="status">
+                        <strong>Editing event</strong>
+                        <span>Changes are not live until you save details.</span>
+                      </div>
                       <div className="tailgate-details-inline-editor-grid">
                         <label className="input-group">
                           <span className="input-label">Event name</span>
@@ -5467,41 +5825,8 @@ export default function TailgateDetails() {
                             }
                           />
                         </label>
-                        {detail.visibilityType === "open_paid" ? (
-                          <>
-                            <label className="input-group">
-                              <span className="input-label">Ticket price (USD)</span>
-                              <input
-                                className="text-input"
-                                value={inlineEditDraft.ticketPrice}
-                                onChange={(event) =>
-                                  setInlineEditDraft((previous) => ({
-                                    ...previous,
-                                    ticketPrice: event.target.value.replace(/[^0-9.]/g, "")
-                                  }))
-                                }
-                                placeholder="20.00"
-                                inputMode="decimal"
-                              />
-                            </label>
-                            <label className="input-group">
-                              <span className="input-label">Capacity (optional)</span>
-                              <input
-                                className="text-input"
-                                value={inlineEditDraft.capacity}
-                                onChange={(event) =>
-                                  setInlineEditDraft((previous) => ({
-                                    ...previous,
-                                    capacity: event.target.value.replace(/\D/g, "")
-                                  }))
-                                }
-                                placeholder="100"
-                                inputMode="numeric"
-                              />
-                            </label>
-                          </>
-                        ) : null}
                       </div>
+                      {inlineEditPaidTicketTypesFields}
                       <label className="input-group">
                         <span className="input-label">Description</span>
                         <textarea
@@ -5714,6 +6039,10 @@ export default function TailgateDetails() {
             </div>
             {isInlineEditing ? (
               <div className="tailgate-details-inline-editor">
+                <div className="tailgate-details-editing-banner" role="status">
+                  <strong>Editing event</strong>
+                  <span>Changes are not live until you save details.</span>
+                </div>
                 <div className="tailgate-details-inline-editor-grid">
                   <label className="input-group">
                     <span className="input-label">Event name</span>
@@ -5771,41 +6100,8 @@ export default function TailgateDetails() {
                       }
                     />
                   </label>
-                  {detail.visibilityType === "open_paid" ? (
-                    <>
-                      <label className="input-group">
-                        <span className="input-label">Ticket price (USD)</span>
-                        <input
-                          className="text-input"
-                          value={inlineEditDraft.ticketPrice}
-                          onChange={(event) =>
-                            setInlineEditDraft((previous) => ({
-                              ...previous,
-                              ticketPrice: event.target.value.replace(/[^0-9.]/g, "")
-                            }))
-                          }
-                          placeholder="20.00"
-                          inputMode="decimal"
-                        />
-                      </label>
-                      <label className="input-group">
-                        <span className="input-label">Capacity (optional)</span>
-                        <input
-                          className="text-input"
-                          value={inlineEditDraft.capacity}
-                          onChange={(event) =>
-                            setInlineEditDraft((previous) => ({
-                              ...previous,
-                              capacity: event.target.value.replace(/\D/g, "")
-                            }))
-                          }
-                          placeholder="100"
-                          inputMode="numeric"
-                        />
-                      </label>
-                    </>
-                  ) : null}
                 </div>
+                {inlineEditPaidTicketTypesFields}
                 <label className="input-group">
                   <span className="input-label">Description</span>
                   <textarea

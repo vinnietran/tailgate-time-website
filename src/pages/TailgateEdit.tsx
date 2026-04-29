@@ -1,15 +1,12 @@
-import { useParams } from "react-router-dom";
-import AppShell from "../components/AppShell";
+import { Navigate, useParams } from "react-router-dom";
 
 export default function TailgateEdit() {
   const { id } = useParams();
+  if (!id) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
-  return (
-    <AppShell header={<div className="simple-header"><h1>Edit Tailgate</h1></div>}>
-      <section className="placeholder-card">
-        <h2>Editing {id}</h2>
-        <p>This page will load the edit form for the selected tailgate.</p>
-      </section>
-    </AppShell>
-  );
+  const encodedId = id ? encodeURIComponent(id) : "";
+
+  return <Navigate to={`/tailgates/${encodedId}?edit=event`} replace />;
 }
