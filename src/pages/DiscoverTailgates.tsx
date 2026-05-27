@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { collection, doc, getDoc, onSnapshot, query, where } from "firebase/firestore";
 import { getBlob, getDownloadURL, ref } from "firebase/storage";
 import { useNavigate } from "react-router-dom";
 import tailgateTimeLogo from "../../ttnobg.png";
@@ -358,23 +358,112 @@ function resolveLocationCoords(
   return null;
 }
 
-function resolveTicketSalesCloseAt(
-  data: Record<string, unknown>,
-  startDateTime: Date | null
-): Date | null {
-  const direct =
+function resolveEventStartDateTime(data: Record<string, unknown>): Date | null {
+  return (
+    normalizeDate(data.dateTime) ??
+    normalizeDate(data.eventTargetTime) ??
+    normalizeDate(data.startDateTime) ??
+    normalizeDate(data.startAt) ??
+    normalizeDate(data.eventDateTime) ??
+    normalizeDate(data.eventDate) ??
+    normalizeDate(data.createdAt)
+  );
+}
+
+function resolveDirectTicketSalesCloseAt(data: Record<string, unknown>): Date | null {
+  return (
     normalizeDate(data.ticketSalesCloseAt) ??
     normalizeDate(data.ticketSalesCutoffAt) ??
-    normalizeDate(data.salesCloseAt);
-  if (direct) return direct;
+    normalizeDate(data.salesCloseAt)
+  );
+}
 
-  const daysBefore =
+function resolveCopiedFromEventId(data: Record<string, unknown>): string | undefined {
+  const metadata = asRecord(data.metadata);
+  return firstString(
+    data.copiedFromEventId,
+    data.copiedFromTailgateId,
+    data.copiedFromId,
+    data.sourceEventId,
+    data.sourceTailgateId,
+    data.sourceTailgateEventId,
+    data.originalEventId,
+    data.originalTailgateId,
+    metadata?.copiedFromEventId,
+    metadata?.copiedFromTailgateId,
+    metadata?.copiedFromId,
+    metadata?.sourceEventId,
+    metadata?.sourceTailgateId,
+    metadata?.sourceTailgateEventId,
+    metadata?.originalEventId,
+    metadata?.originalTailgateId
+  );
+}
+
+function hasDirectTicketSalesCloseDaysBefore(data: Record<string, unknown>) {
+  const direct =
     coerceNumber(data.ticketSalesCloseDaysBefore) ?? coerceNumber(data.ticketSalesCutoffDays);
-  if (typeof daysBefore !== "number" || !startDateTime) {
+  return typeof direct === "number" && Number.isFinite(direct);
+}
+
+function resolveTicketSalesCloseDaysBefore(
+  data: Record<string, unknown>,
+  startDateTime: Date | null,
+  sourceData?: Record<string, unknown> | null
+): number | null {
+  const direct =
+    coerceNumber(data.ticketSalesCloseDaysBefore) ?? coerceNumber(data.ticketSalesCutoffDays);
+  if (typeof direct === "number" && Number.isFinite(direct)) {
+    return Math.max(0, Math.min(365, Math.floor(direct)));
+  }
+
+  if (sourceData) {
+    const sourceDirect =
+      coerceNumber(sourceData.ticketSalesCloseDaysBefore) ??
+      coerceNumber(sourceData.ticketSalesCutoffDays);
+    if (typeof sourceDirect === "number" && Number.isFinite(sourceDirect)) {
+      return Math.max(0, Math.min(365, Math.floor(sourceDirect)));
+    }
+
+    const sourceStart = resolveEventStartDateTime(sourceData);
+    const sourceCloseAt = resolveDirectTicketSalesCloseAt(sourceData);
+    if (sourceStart && sourceCloseAt) {
+      const sourceDiffDays = Math.round(
+        (sourceStart.getTime() - sourceCloseAt.getTime()) / DAY_IN_MS
+      );
+      if (Number.isFinite(sourceDiffDays)) {
+        return Math.max(0, Math.min(365, sourceDiffDays));
+      }
+    }
+  }
+
+  const directCloseAt = resolveDirectTicketSalesCloseAt(data);
+  if (!startDateTime || !directCloseAt) {
     return null;
   }
 
-  return new Date(startDateTime.getTime() - Math.max(0, daysBefore) * DAY_IN_MS);
+  const diffDays = Math.round((startDateTime.getTime() - directCloseAt.getTime()) / DAY_IN_MS);
+  if (!Number.isFinite(diffDays)) {
+    return null;
+  }
+  return Math.max(0, Math.min(365, diffDays));
+}
+
+function resolveTicketSalesCloseAt(
+  data: Record<string, unknown>,
+  startDateTime: Date | null,
+  sourceData?: Record<string, unknown> | null
+): Date | null {
+  const daysBefore = resolveTicketSalesCloseDaysBefore(data, startDateTime, sourceData);
+  if (typeof daysBefore === "number" && startDateTime) {
+    return new Date(
+      startDateTime.getTime() - Math.max(0, Math.min(365, Math.floor(daysBefore))) * DAY_IN_MS
+    );
+  }
+
+  const direct = resolveDirectTicketSalesCloseAt(data);
+  if (direct) return direct;
+  return null;
 }
 
 function countConfirmedDiscoverAttendees(
@@ -464,20 +553,14 @@ function resolveCapacity(value: unknown): number | null {
 
 function toDiscoverTailgateRecord(
   id: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  recordsById?: Map<string, Record<string, unknown>>
 ): DiscoverTailgateRecord | null {
   const visibilityType = resolveVisibilityType(data);
   if (visibilityType === "private") return null;
   if (isCancelledEvent(data)) return null;
 
-  const startDateTime =
-    normalizeDate(data.dateTime) ??
-    normalizeDate(data.eventTargetTime) ??
-    normalizeDate(data.startDateTime) ??
-    normalizeDate(data.startAt) ??
-    normalizeDate(data.eventDateTime) ??
-    normalizeDate(data.eventDate) ??
-    normalizeDate(data.createdAt);
+  const startDateTime = resolveEventStartDateTime(data);
   const endDateTime =
     normalizeDate(data.endDateTime) ??
     normalizeDate(data.endAt) ??
@@ -502,7 +585,8 @@ function toDiscoverTailgateRecord(
       ? formatTicketPricingLabel(pricingSummary, ticketTypes.length > 1 ? "from" : "single") ??
         "Paid"
       : "Free";
-  const ticketSalesCloseAt = resolveTicketSalesCloseAt(data, startDateTime);
+  const sourceData = recordsById?.get(resolveCopiedFromEventId(data) ?? "");
+  const ticketSalesCloseAt = resolveTicketSalesCloseAt(data, startDateTime, sourceData);
   const confirmedAttendanceCount = resolveConfirmedAttendanceCount(data, visibilityType);
   const capacity = resolveCapacity(data.capacity);
   const isSoldOut = capacity !== null && confirmedAttendanceCount >= capacity;
@@ -1119,21 +1203,66 @@ export default function DiscoverTailgates() {
     setLoadingState("initial");
     setError(null);
 
+    const firestore = db;
+    let isActive = true;
+    let snapshotVersion = 0;
     const publicTailgatesQuery = query(
-      collection(db, "tailgateEvents"),
+      collection(firestore, "tailgateEvents"),
       where("visibilityType", "in", [...PUBLIC_DISCOVER_VISIBILITY_TYPES])
     );
 
     const unsubscribe = onSnapshot(
       publicTailgatesQuery,
       (snapshot) => {
-        const items = snapshot.docs
-          .map((doc) => toDiscoverTailgateRecord(doc.id, doc.data() as Record<string, unknown>))
-          .filter((item): item is DiscoverTailgateRecord => Boolean(item));
+        const currentVersion = ++snapshotVersion;
+        const recordsById = new Map<string, Record<string, unknown>>();
+        snapshot.docs.forEach((snapshotDoc) => {
+          recordsById.set(snapshotDoc.id, snapshotDoc.data() as Record<string, unknown>);
+        });
 
-        setSourceTailgates(items);
-        setLoadingState("idle");
-        setError(null);
+        const sourceIdsToFetch = new Set<string>();
+        snapshot.docs.forEach((snapshotDoc) => {
+          const data = snapshotDoc.data() as Record<string, unknown>;
+          const copiedFromEventId = resolveCopiedFromEventId(data);
+          if (
+            copiedFromEventId &&
+            !recordsById.has(copiedFromEventId) &&
+            !hasDirectTicketSalesCloseDaysBefore(data)
+          ) {
+            sourceIdsToFetch.add(copiedFromEventId);
+          }
+        });
+
+        void (async () => {
+          await Promise.all(
+            Array.from(sourceIdsToFetch).map(async (sourceId) => {
+              try {
+                const sourceSnapshot = await getDoc(doc(firestore, "tailgateEvents", sourceId));
+                if (sourceSnapshot.exists()) {
+                  recordsById.set(sourceId, sourceSnapshot.data() as Record<string, unknown>);
+                }
+              } catch (sourceError) {
+                console.warn("Failed to load copied source cutoff for discover", sourceError);
+              }
+            })
+          );
+
+          if (!isActive || currentVersion !== snapshotVersion) return;
+
+          const items = snapshot.docs
+            .map((snapshotDoc) =>
+              toDiscoverTailgateRecord(
+                snapshotDoc.id,
+                snapshotDoc.data() as Record<string, unknown>,
+                recordsById
+              )
+            )
+            .filter((item): item is DiscoverTailgateRecord => Boolean(item));
+
+          setSourceTailgates(items);
+          setLoadingState("idle");
+          setError(null);
+        })();
       },
       (err) => {
         console.error("Failed to load discover tailgates", err);
@@ -1142,7 +1271,10 @@ export default function DiscoverTailgates() {
       }
     );
 
-    return () => unsubscribe();
+    return () => {
+      isActive = false;
+      unsubscribe();
+    };
   }, [reloadKey]);
 
   const tailgates = useMemo(() => {

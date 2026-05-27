@@ -20,7 +20,10 @@ test.describe("Host flows", () => {
     await page.goto("/#/tailgates/tg-001");
 
     await expect(page.getByText("Event command center")).toBeVisible();
+    await expect(page.getByText("No cover photos yet.")).toBeVisible();
+    await expect(page.getByRole("button", { name: /add cover photos/i })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Run The Event" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /copy event/i })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Event Brief" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "What To Expect" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Meet-up Spot" })).toBeVisible();
@@ -29,7 +32,7 @@ test.describe("Host flows", () => {
   test("paid event details render multiple ticket types", async ({ page }) => {
     await page.goto("/#/tailgates/tg-004");
 
-    await expect(page.getByRole("combobox", { name: /ticket type/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /General Admission \$45/i })).toBeVisible();
     await expect(page.getByText("Quantity").first()).toBeVisible();
     const increaseQuantityButton = page.getByRole("button", {
       name: /increase ticket quantity/i

@@ -240,6 +240,11 @@ export default function HostDashboard() {
                           <span />
                           <span />
                           <span />
+                          <span />
+                          <span />
+                          <span />
+                          <span />
+                          <span />
                         </div>
                       )}
                     </div>

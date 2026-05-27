@@ -147,6 +147,46 @@ export function IconExternal({ size = 18, ...props }: IconProps) {
   );
 }
 
+export function IconCopy({ size = 18, ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...props}
+    >
+      <rect x="8" y="8" width="12" height="12" rx="2" />
+      <path d="M4 16V6a2 2 0 012-2h10" />
+    </svg>
+  );
+}
+
+export function IconCheckCircle({ size = 18, ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...props}
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8 12.5l2.7 2.7L16.5 9" />
+    </svg>
+  );
+}
+
 export function IconInstagram({ size = 18, ...props }: IconProps) {
   return (
     <svg
