@@ -14,12 +14,14 @@ import {
   where
 } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
-import { getBlob, getDownloadURL, ref } from "firebase/storage";
+import { getBlob, getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import {
   IconCalendar,
+  IconCheckCircle,
   IconCheckin,
+  IconCopy,
   IconDashboard,
   IconLocation,
   IconMessage,
@@ -27,7 +29,10 @@ import {
   IconUser
 } from "../components/Icons";
 import { PublicTopNav } from "../components/PublicTopNav";
-import { formatPriceInput } from "../features/create-event/ticketing";
+import {
+  formatPriceInput,
+  parseTicketSalesCutoffDaysInput
+} from "../features/create-event/ticketing";
 import {
   MAX_TICKET_TYPES,
   hasRequiredTicketTypes,
@@ -93,6 +98,8 @@ const PUBLIC_RSVP_RATE_LIMIT_OPTIONS = {
 const MAX_HOST_BROADCAST_MESSAGE_LENGTH = 320;
 const MAX_CONTACT_HOST_MESSAGE_LENGTH = 1200;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const MAX_COVER_IMAGES = 5;
+const MAX_COVER_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
 const MAX_QUIZ_QUESTIONS = 10;
 const DEFAULT_PLUS_LIMIT = 12;
 const MAX_OPEN_FREE_PARTY_SIZE = 25;
@@ -216,10 +223,25 @@ type InlineEditDraft = {
   description: string;
   eventDate: string;
   eventStartTime: string;
+  eventEndTime: string;
+  ticketSalesCutoffDays: string;
   locationSummary: string;
   ticketPrice: string;
   capacity: string;
 };
+
+type InlineCoverImageItem =
+  | {
+      id: string;
+      kind: "existing";
+      url: string;
+    }
+  | {
+      id: string;
+      kind: "draft";
+      file: File;
+      previewUrl: string;
+    };
 
 type InlineEditTicketTypeDraft = {
   id: string;
@@ -323,6 +345,7 @@ type TailgateDetail = {
   ticketPriceCents?: number;
   ticketTypes: EventTicketType[];
   ticketSalesCloseAt?: Date | null;
+  ticketSalesCloseDaysBefore?: number | null;
   currency: string;
   ticketTypeConfirmedSoldCount: Record<string, number>;
   ticketsSold?: number;
@@ -697,6 +720,54 @@ function createInviteIdentifier() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function sanitizeStorageFileName(fileName: string) {
+  const trimmed = fileName.trim().toLowerCase();
+  const split = trimmed.split(".");
+  const extension = split.length > 1 ? split.pop() : undefined;
+  return extension?.replace(/[^a-z0-9]/g, "") || "jpg";
+}
+
+function isInlineCoverDraftItem(
+  item: InlineCoverImageItem
+): item is Extract<InlineCoverImageItem, { kind: "draft" }> {
+  return item.kind === "draft";
+}
+
+function buildInlineCoverImageItems(value: TailgateDetail): InlineCoverImageItem[] {
+  return value.coverImageUrls.map((url, index) => ({
+    id: `existing-${index}-${url}`,
+    kind: "existing",
+    url
+  }));
+}
+
+async function uploadInlineCoverImageDraftsForTailgate(
+  hostUserId: string,
+  draftItems: Array<Extract<InlineCoverImageItem, { kind: "draft" }>>
+) {
+  const storageService = firebaseStorage;
+  if (!storageService || draftItems.length === 0) {
+    return {} as Record<string, string>;
+  }
+
+  const createdAt = Date.now();
+  const uploadedEntries = await Promise.all(
+    draftItems.map(async (item, index) => {
+      const extension = sanitizeStorageFileName(item.file.name);
+      const imageRef = ref(
+        storageService,
+        `tailgateCovers/${hostUserId}/${createdAt}-${index}-${createInviteIdentifier()}.${extension}`
+      );
+      await uploadBytes(imageRef, item.file, {
+        contentType: item.file.type || "image/jpeg"
+      });
+      return [item.id, await getDownloadURL(imageRef)] as const;
+    })
+  );
+
+  return Object.fromEntries(uploadedEntries);
+}
+
 function coerceNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -964,6 +1035,35 @@ function combineDateAndTime(dateValue: string, timeValue: string) {
   const combined = new Date(year, month - 1, day, hours, minutes, 0, 0);
   if (Number.isNaN(combined.getTime())) return null;
   return combined;
+}
+
+function combineDateAndEndTime(dateValue: string, startTimeValue: string, endTimeValue: string) {
+  const start = combineDateAndTime(dateValue, startTimeValue);
+  if (!start) return null;
+
+  const [hoursRaw, minutesRaw] = endTimeValue.split(":");
+  const hours = Number(hoursRaw);
+  const minutes = Number(minutesRaw);
+  if (![hours, minutes].every((value) => Number.isFinite(value))) {
+    return null;
+  }
+
+  const end = new Date(
+    start.getFullYear(),
+    start.getMonth(),
+    start.getDate(),
+    hours,
+    minutes,
+    0,
+    0
+  );
+  if (Number.isNaN(end.getTime())) return null;
+
+  if (end <= start) {
+    end.setDate(end.getDate() + 1);
+  }
+
+  return end;
 }
 
 function parsePriceToCents(value: string) {
@@ -1296,23 +1396,103 @@ function extractStoragePathFromValue(value: string) {
   return null;
 }
 
-function resolveTicketSalesCloseAt(
-  data: Record<string, unknown>,
-  startDateTime: Date | null
-): Date | null {
-  const direct =
+function resolveTailgateStartDateTime(data: Record<string, unknown>): Date | null {
+  return (
+    normalizeDate(data.dateTime) ??
+    normalizeDate(data.eventTargetTime) ??
+    normalizeDate(data.startDateTime) ??
+    normalizeDate(data.startAt) ??
+    normalizeDate(data.createdAt)
+  );
+}
+
+function resolveDirectTicketSalesCloseAt(data: Record<string, unknown>): Date | null {
+  return (
     normalizeDate(data.ticketSalesCloseAt) ??
     normalizeDate(data.ticketSalesCutoffAt) ??
-    normalizeDate(data.salesCloseAt);
-  if (direct) return direct;
+    normalizeDate(data.salesCloseAt)
+  );
+}
 
+function resolveCopiedFromEventId(data: Record<string, unknown>): string | undefined {
+  const metadata = asRecord(data.metadata);
+  return firstString(
+    data.copiedFromEventId,
+    data.copiedFromTailgateId,
+    data.copiedFromId,
+    data.sourceEventId,
+    data.sourceTailgateId,
+    data.sourceTailgateEventId,
+    data.originalEventId,
+    data.originalTailgateId,
+    metadata?.copiedFromEventId,
+    metadata?.copiedFromTailgateId,
+    metadata?.copiedFromId,
+    metadata?.sourceEventId,
+    metadata?.sourceTailgateId,
+    metadata?.sourceTailgateEventId,
+    metadata?.originalEventId,
+    metadata?.originalTailgateId
+  );
+}
+
+function resolveTicketSalesCloseDaysBefore(
+  data: Record<string, unknown>,
+  startDateTime: Date | null,
+  ticketSalesCloseAt: Date | null,
+  sourceData?: Record<string, unknown> | null
+): number | null {
   const daysBefore =
     coerceNumber(data.ticketSalesCloseDaysBefore) ?? coerceNumber(data.ticketSalesCutoffDays);
-  if (typeof daysBefore !== "number" || !startDateTime) {
+  if (typeof daysBefore === "number" && Number.isFinite(daysBefore)) {
+    return Math.max(0, Math.min(365, Math.floor(daysBefore)));
+  }
+
+  if (sourceData) {
+    const sourceDirect =
+      coerceNumber(sourceData.ticketSalesCloseDaysBefore) ??
+      coerceNumber(sourceData.ticketSalesCutoffDays);
+    if (typeof sourceDirect === "number" && Number.isFinite(sourceDirect)) {
+      return Math.max(0, Math.min(365, Math.floor(sourceDirect)));
+    }
+
+    const sourceStartDateTime = resolveTailgateStartDateTime(sourceData);
+    const sourceTicketSalesCloseAt = resolveDirectTicketSalesCloseAt(sourceData);
+    if (sourceStartDateTime && sourceTicketSalesCloseAt) {
+      const sourceDiffDays = Math.round(
+        (sourceStartDateTime.getTime() - sourceTicketSalesCloseAt.getTime()) / DAY_IN_MS
+      );
+      if (Number.isFinite(sourceDiffDays)) {
+        return Math.max(0, Math.min(365, sourceDiffDays));
+      }
+    }
+  }
+
+  const directCloseAt = ticketSalesCloseAt ?? resolveDirectTicketSalesCloseAt(data);
+  if (!startDateTime || !directCloseAt) {
     return null;
   }
 
-  return new Date(startDateTime.getTime() - Math.max(0, daysBefore) * DAY_IN_MS);
+  const diffDays = Math.round(
+    (startDateTime.getTime() - directCloseAt.getTime()) / DAY_IN_MS
+  );
+  if (!Number.isFinite(diffDays)) {
+    return null;
+  }
+  return Math.max(0, Math.min(365, diffDays));
+}
+
+function resolveTicketSalesCloseAt(
+  data: Record<string, unknown>,
+  startDateTime: Date | null,
+  sourceData?: Record<string, unknown> | null
+): Date | null {
+  const daysBefore = resolveTicketSalesCloseDaysBefore(data, startDateTime, null, sourceData);
+  if (typeof daysBefore === "number" && startDateTime) {
+    return new Date(startDateTime.getTime() - daysBefore * DAY_IN_MS);
+  }
+
+  return resolveDirectTicketSalesCloseAt(data);
 }
 
 function resolveCoHostInvites(value: unknown): CoHostInviteRecord[] {
@@ -1350,15 +1530,14 @@ function resolveEventQuiz(data: Record<string, unknown>) {
   };
 }
 
-function toDetailFromFirestore(id: string, data: Record<string, unknown>): TailgateDetail {
+function toDetailFromFirestore(
+  id: string,
+  data: Record<string, unknown>,
+  sourceData?: Record<string, unknown> | null
+): TailgateDetail {
   const hostId = firstString(data.hostId, data.hostUserId, data.ownerId) ?? "";
   const hostName = firstString(data.hostName, data.displayName) ?? "Host";
-  const startDateTime =
-    normalizeDate(data.dateTime) ??
-    normalizeDate(data.eventTargetTime) ??
-    normalizeDate(data.startDateTime) ??
-    normalizeDate(data.startAt) ??
-    normalizeDate(data.createdAt);
+  const startDateTime = resolveTailgateStartDateTime(data);
   const endDateTime =
     normalizeDate(data.endDateTime) ??
     normalizeDate(data.endAt) ??
@@ -1388,7 +1567,13 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     coerceNumber(data.ticketsSold) ??
     coerceNumber(data.rsvpsConfirmed) ??
     0;
-  const ticketSalesCloseAt = resolveTicketSalesCloseAt(data, startDateTime);
+  const ticketSalesCloseAt = resolveTicketSalesCloseAt(data, startDateTime, sourceData);
+  const ticketSalesCloseDaysBefore = resolveTicketSalesCloseDaysBefore(
+    data,
+    startDateTime,
+    ticketSalesCloseAt,
+    sourceData
+  );
   const quiz = resolveEventQuiz(data);
 
   return {
@@ -1423,6 +1608,7 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     ticketPriceCents: priceCents,
     ticketTypes,
     ticketSalesCloseAt,
+    ticketSalesCloseDaysBefore,
     currency,
     ticketTypeConfirmedSoldCount,
     ticketsSold,
@@ -1494,6 +1680,7 @@ function toDetailFromMock(event: TailgateEvent): TailgateDetail {
     ticketPriceCents: event.ticketPriceCents,
     ticketTypes,
     ticketSalesCloseAt: null,
+    ticketSalesCloseDaysBefore: null,
     currency: event.currency ?? "USD",
     ticketTypeConfirmedSoldCount: {},
     ticketsSold: event.ticketsSold ?? event.rsvpsConfirmed ?? 0,
@@ -1529,7 +1716,9 @@ export default function TailgateDetails() {
   const timelineSectionRef = useRef<HTMLElement | null>(null);
   const quizSectionRef = useRef<HTMLElement | null>(null);
   const eventSnapshotSectionRef = useRef<HTMLElement | null>(null);
+  const eventBriefSectionRef = useRef<HTMLElement | null>(null);
   const handledEditRouteRef = useRef(false);
+  const pendingInlineEditSaveScrollRef = useRef(false);
   const attemptedCoverImageResolutionRef = useRef<Set<string>>(new Set());
   const attemptedCoverBlobFallbackRef = useRef<Set<string>>(new Set());
   const createdCoverBlobUrlsRef = useRef<string[]>([]);
@@ -1537,6 +1726,7 @@ export default function TailgateDetails() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<TailgateDetail | null>(null);
+  const [resolvedHostName, setResolvedHostName] = useState<string | null>(null);
   const [attendeeFilter, setAttendeeFilter] = useState<AttendeeFilterKey>("All");
   const [rsvpSaving, setRsvpSaving] = useState(false);
   const [rsvpPendingChoice, setRsvpPendingChoice] = useState<GuestRsvpChoice | null>(null);
@@ -1614,6 +1804,8 @@ export default function TailgateDetails() {
     description: "",
     eventDate: "",
     eventStartTime: "",
+    eventEndTime: "",
+    ticketSalesCutoffDays: "0",
     locationSummary: "",
     ticketPrice: "",
     capacity: ""
@@ -1621,6 +1813,9 @@ export default function TailgateDetails() {
   const [inlineEditTicketTypes, setInlineEditTicketTypes] = useState<InlineEditTicketTypeDraft[]>(
     []
   );
+  const [inlineCoverImageItems, setInlineCoverImageItems] = useState<InlineCoverImageItem[]>([]);
+  const inlineCoverImageInputRef = useRef<HTMLInputElement | null>(null);
+  const inlineCoverImageItemsRef = useRef<InlineCoverImageItem[]>([]);
   const [guestInviteDraft, setGuestInviteDraft] = useState<GuestInviteDraft>({
     name: "",
     phone: "",
@@ -1642,6 +1837,8 @@ export default function TailgateDetails() {
     action: "add" | "remove";
   } | null>(null);
   const [coHostProfiles, setCoHostProfiles] = useState<Record<string, CoHostProfile>>({});
+  const [copyEventSaving, setCopyEventSaving] = useState(false);
+  const [copyEventFeedback, setCopyEventFeedback] = useState<HostBroadcastFeedback | null>(null);
   const [isContactHostComposerOpen, setIsContactHostComposerOpen] = useState(false);
   const [contactHostMessage, setContactHostMessage] = useState("");
   const [contactHostSending, setContactHostSending] = useState(false);
@@ -1654,6 +1851,14 @@ export default function TailgateDetails() {
     text: string;
   } | null>(null);
   const rawCoverImageUrls = detail?.coverImageUrls ?? [];
+
+  const revokeInlineCoverImageDraftPreviews = () => {
+    inlineCoverImageItemsRef.current.forEach((item) => {
+      if (item.kind === "draft") {
+        URL.revokeObjectURL(item.previewUrl);
+      }
+    });
+  };
 
   const clearCreatedCoverBlobUrls = () => {
     createdCoverBlobUrlsRef.current.forEach((blobUrl) => URL.revokeObjectURL(blobUrl));
@@ -1829,6 +2034,17 @@ export default function TailgateDetails() {
   );
 
   useEffect(() => {
+    inlineCoverImageItemsRef.current = inlineCoverImageItems;
+  }, [inlineCoverImageItems]);
+
+  useEffect(
+    () => () => {
+      revokeInlineCoverImageDraftPreviews();
+    },
+    []
+  );
+
+  useEffect(() => {
     if (!id) {
       setError("Missing tailgate id.");
       setLoading(false);
@@ -1848,18 +2064,54 @@ export default function TailgateDetails() {
 
     setLoading(true);
     setError(null);
-    const eventRef = doc(db, "tailgateEvents", id);
+    const firestore = db;
+    const eventRef = doc(firestore, "tailgateEvents", id);
+    let snapshotVersion = 0;
     const unsubscribe = onSnapshot(
       eventRef,
-      (snapshot) => {
+      async (snapshot) => {
+        const currentVersion = ++snapshotVersion;
         if (!snapshot.exists()) {
           setDetail(null);
           setError("Tailgate not found.");
           setLoading(false);
           return;
         }
-        setDetail(toDetailFromFirestore(snapshot.id, snapshot.data() as Record<string, unknown>));
-        setLoading(false);
+        const eventData = snapshot.data() as Record<string, unknown>;
+        const copiedFromEventId = resolveCopiedFromEventId(eventData);
+        const needsCopiedCutoffSource =
+          resolveVisibilityType(eventData.visibilityType) === "open_paid" &&
+          Boolean(copiedFromEventId) &&
+          coerceNumber(eventData.ticketSalesCloseDaysBefore) === undefined &&
+          coerceNumber(eventData.ticketSalesCutoffDays) === undefined;
+
+        if (!needsCopiedCutoffSource || !copiedFromEventId) {
+          setDetail(toDetailFromFirestore(snapshot.id, eventData));
+          setLoading(false);
+          return;
+        }
+
+        try {
+          const sourceSnapshot = await getDoc(doc(firestore, "tailgateEvents", copiedFromEventId));
+          if (currentVersion !== snapshotVersion) return;
+          setDetail(
+            toDetailFromFirestore(
+              snapshot.id,
+              eventData,
+              sourceSnapshot.exists()
+                ? (sourceSnapshot.data() as Record<string, unknown>)
+                : null
+            )
+          );
+        } catch (sourceError) {
+          console.error("Failed to load copied source cutoff", sourceError);
+          if (currentVersion !== snapshotVersion) return;
+          setDetail(toDetailFromFirestore(snapshot.id, eventData));
+        } finally {
+          if (currentVersion === snapshotVersion) {
+            setLoading(false);
+          }
+        }
       },
       (snapshotError) => {
         console.error("Failed to load tailgate details", snapshotError);
@@ -1870,6 +2122,32 @@ export default function TailgateDetails() {
 
     return () => unsubscribe();
   }, [id]);
+
+  useEffect(() => {
+    if (!db || !detail?.hostId) {
+      setResolvedHostName(null);
+      return;
+    }
+
+    const unsubscribe = onSnapshot(
+      doc(db, "users", detail.hostId),
+      (snapshot) => {
+        if (!snapshot.exists()) {
+          setResolvedHostName(null);
+          return;
+        }
+
+        const data = snapshot.data() as Record<string, unknown>;
+        setResolvedHostName(firstString(data.displayName, data.name, data.fullName) ?? null);
+      },
+      (profileError) => {
+        console.warn("Failed to resolve host profile name", profileError);
+        setResolvedHostName(null);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [detail?.hostId]);
 
   useEffect(() => {
     setActiveCoverIndex(0);
@@ -1959,9 +2237,13 @@ export default function TailgateDetails() {
   }, [rawCoverImageUrls, resolvedCoverImageUrlsByRaw]);
 
   useEffect(() => {
+    revokeInlineCoverImageDraftPreviews();
+    handledEditRouteRef.current = false;
     setIsInlineEditing(false);
     setInlineEditError(null);
     setInlineEditSuccess(null);
+    setCopyEventSaving(false);
+    setCopyEventFeedback(null);
   }, [detail?.id]);
 
   useEffect(() => {
@@ -2167,6 +2449,11 @@ export default function TailgateDetails() {
       description: value.description ?? "",
       eventDate: toDateInput(start),
       eventStartTime: toTimeInput(start),
+      eventEndTime: value.endDateTime ? toTimeInput(value.endDateTime) : "",
+      ticketSalesCutoffDays:
+        value.visibilityType === "open_paid"
+          ? String(value.ticketSalesCloseDaysBefore ?? 0)
+          : "0",
       locationSummary:
         value.locationSummary ??
         resolveLocationString(value.locationRaw) ??
@@ -2209,8 +2496,10 @@ export default function TailgateDetails() {
 
   useEffect(() => {
     if (!detail || isInlineEditing) return;
+    revokeInlineCoverImageDraftPreviews();
     setInlineEditDraft(buildInlineEditDraft(detail));
     setInlineEditTicketTypes(buildInlineEditTicketTypeDrafts(detail));
+    setInlineCoverImageItems(buildInlineCoverImageItems(detail));
   }, [detail, isInlineEditing]);
 
   useEffect(() => {
@@ -2218,6 +2507,34 @@ export default function TailgateDetails() {
     const timer = setTimeout(() => setInlineEditSuccess(null), 4000);
     return () => clearTimeout(timer);
   }, [inlineEditSuccess]);
+
+  useEffect(() => {
+    if (!inlineEditSuccess || isInlineEditing || !pendingInlineEditSaveScrollRef.current) return;
+    const scrollToSavedDetails = () => {
+      const target = eventBriefSectionRef.current ?? eventSnapshotSectionRef.current;
+      if (!target) return;
+
+      const nextTop = Math.max(0, target.getBoundingClientRect().top + window.scrollY - 20);
+      window.scrollTo({
+        top: nextTop,
+        behavior: "auto"
+      });
+    };
+
+    const animationFrame = window.requestAnimationFrame(scrollToSavedDetails);
+    const followUpTimers = [120, 320, 700].map((delay) =>
+      window.setTimeout(scrollToSavedDetails, delay)
+    );
+    const completionTimer = window.setTimeout(() => {
+      pendingInlineEditSaveScrollRef.current = false;
+    }, 800);
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      followUpTimers.forEach((timer) => window.clearTimeout(timer));
+      window.clearTimeout(completionTimer);
+    };
+  }, [detail, inlineEditSuccess, isInlineEditing]);
 
   useEffect(() => {
     setGuestInviteDraft({
@@ -2811,7 +3128,7 @@ export default function TailgateDetails() {
     normalizeStatus(openFreeCurrentAttendee?.status) === "Attending";
   const openFreeBringLabel =
     openFreePartySize === 1 ? "Just me" : `${openFreePartySize} people total`;
-  const hostDisplayName = detail?.hostName?.trim() || "Host";
+  const hostDisplayName = resolvedHostName?.trim() || detail?.hostName?.trim() || "Host";
   const publicHostDisplayName = hostDisplayName;
   const contactHostCharacterCount = contactHostMessage.length;
   const canSendContactHost =
@@ -3214,6 +3531,69 @@ export default function TailgateDetails() {
     setInlineEditError(null);
   };
 
+  const moveInlineCoverImageToFront = (itemId: string) => {
+    setInlineCoverImageItems((previous) => {
+      const target = previous.find((item) => item.id === itemId);
+      if (!target) return previous;
+      return [target, ...previous.filter((item) => item.id !== itemId)];
+    });
+    setInlineEditError(null);
+  };
+
+  const removeInlineCoverImageItem = (itemId: string) => {
+    setInlineCoverImageItems((previous) => {
+      const target = previous.find((item) => item.id === itemId);
+      if (target?.kind === "draft") {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return previous.filter((item) => item.id !== itemId);
+    });
+    setInlineEditError(null);
+  };
+
+  const handleInlineCoverImagesSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (selectedFiles.length === 0) return;
+
+    if (inlineCoverImageItems.length >= MAX_COVER_IMAGES) {
+      setInlineEditError(`You can upload up to ${MAX_COVER_IMAGES} cover photos.`);
+      return;
+    }
+
+    const availableSlots = MAX_COVER_IMAGES - inlineCoverImageItems.length;
+    const validImageFiles = selectedFiles.filter(
+      (file) => file.type.startsWith("image/") && file.size <= MAX_COVER_IMAGE_SIZE_BYTES
+    );
+    const acceptedFiles = validImageFiles.slice(0, availableSlots);
+
+    if (acceptedFiles.length > 0) {
+      setInlineCoverImageItems((previous) => [
+        ...previous,
+        ...acceptedFiles.map((file) => ({
+          id: createInviteIdentifier(),
+          kind: "draft" as const,
+          file,
+          previewUrl: URL.createObjectURL(file)
+        }))
+      ]);
+    }
+
+    if (acceptedFiles.length < selectedFiles.length) {
+      const messageParts: string[] = [];
+      if (validImageFiles.length < selectedFiles.length) {
+        messageParts.push("Only image files up to 10MB are allowed.");
+      }
+      if (validImageFiles.length > availableSlots) {
+        messageParts.push(`You can upload up to ${MAX_COVER_IMAGES} cover photos.`);
+      }
+      setInlineEditError(messageParts.join(" "));
+      return;
+    }
+
+    setInlineEditError(null);
+  };
+
   const openInlineEventEditor = (scrollToSection = false) => {
     if (!detail) return;
     if (status === "cancelled") {
@@ -3222,8 +3602,11 @@ export default function TailgateDetails() {
       setIsInlineEditing(false);
       return;
     }
+    revokeInlineCoverImageDraftPreviews();
+    pendingInlineEditSaveScrollRef.current = false;
     setInlineEditDraft(buildInlineEditDraft(detail));
     setInlineEditTicketTypes(buildInlineEditTicketTypeDrafts(detail));
+    setInlineCoverImageItems(buildInlineCoverImageItems(detail));
     setInlineEditError(null);
     setInlineEditSuccess(null);
     setIsInlineEditing(true);
@@ -3249,8 +3632,10 @@ export default function TailgateDetails() {
 
   const cancelInlineEventEditor = () => {
     if (!detail) return;
+    revokeInlineCoverImageDraftPreviews();
     setInlineEditDraft(buildInlineEditDraft(detail));
     setInlineEditTicketTypes(buildInlineEditTicketTypeDrafts(detail));
+    setInlineCoverImageItems(buildInlineCoverImageItems(detail));
     setInlineEditError(null);
     setIsInlineEditing(false);
   };
@@ -3286,6 +3671,19 @@ export default function TailgateDetails() {
       return;
     }
 
+    const trimmedEndTime = inlineEditDraft.eventEndTime.trim();
+    const endDateTime = trimmedEndTime
+      ? combineDateAndEndTime(
+          inlineEditDraft.eventDate,
+          inlineEditDraft.eventStartTime,
+          trimmedEndTime
+        )
+      : null;
+    if (trimmedEndTime && !endDateTime) {
+      setInlineEditError("Set a valid end time.");
+      return;
+    }
+
     const updates: Record<string, unknown> = {
       eventName: nextName,
       name: nextName,
@@ -3293,6 +3691,11 @@ export default function TailgateDetails() {
       startDateTime: startDateTime,
       dateTime: startDateTime,
       eventTargetTime: startDateTime,
+      endDateTime,
+      endAt: endDateTime,
+      eventEndAt: endDateTime,
+      tailgateEndAt: endDateTime,
+      eventEndTime: trimmedEndTime || null,
       locationSummary: nextLocation,
       updatedAt: new Date()
     };
@@ -3324,6 +3727,22 @@ export default function TailgateDetails() {
         };
 
     if (detail.visibilityType === "open_paid") {
+      const ticketSalesCloseDaysBefore = parseTicketSalesCutoffDaysInput(
+        inlineEditDraft.ticketSalesCutoffDays
+      );
+      if (ticketSalesCloseDaysBefore === null) {
+        setInlineEditError("Ticket sales cutoff must be a whole number from 0 to 365.");
+        return;
+      }
+      const ticketSalesCloseAt = new Date(
+        startDateTime.getTime() - ticketSalesCloseDaysBefore * DAY_IN_MS
+      );
+      updates.ticketSalesCloseDaysBefore = ticketSalesCloseDaysBefore;
+      updates.ticketSalesCutoffDays = ticketSalesCloseDaysBefore;
+      updates.ticketSalesCloseAt = ticketSalesCloseAt;
+      updates.ticketSalesCutoffAt = ticketSalesCloseAt;
+      updates.salesCloseAt = ticketSalesCloseAt;
+
       const activeTicketDrafts = inlineEditTicketTypes.filter((ticketType) => !ticketType.isRemoved);
       if (activeTicketDrafts.length < 1) {
         setInlineEditError("Paid events need at least one active ticket type.");
@@ -3430,17 +3849,270 @@ export default function TailgateDetails() {
       updates.currency = (detail.currency || "USD").toUpperCase();
     }
 
+    const draftCoverItems = inlineCoverImageItems.filter(isInlineCoverDraftItem);
+    if (draftCoverItems.length > 0 && !firebaseStorage) {
+      setInlineEditError("Image upload is unavailable right now.");
+      return;
+    }
+
     setInlineEditSaving(true);
     setInlineEditError(null);
     try {
+      const uploadedDraftUrlsById = await uploadInlineCoverImageDraftsForTailgate(
+        user?.uid ?? detail.hostId,
+        draftCoverItems
+      );
+      const nextCoverImageUrls = inlineCoverImageItems
+        .map((item) => (item.kind === "existing" ? item.url : uploadedDraftUrlsById[item.id]))
+        .filter((url): url is string => typeof url === "string" && url.trim().length > 0);
+      const primaryCover = nextCoverImageUrls[0] ?? null;
+
+      updates.coverImageUrls = nextCoverImageUrls;
+      updates.coverImageUrl = primaryCover;
+      updates.coverPhotoUrl = primaryCover;
+      updates.imageUrl = primaryCover;
+      updates.cover = primaryCover
+        ? {
+            url: primaryCover,
+            imageUrl: primaryCover,
+            downloadUrl: primaryCover,
+            coverImageUrls: nextCoverImageUrls
+          }
+        : null;
+      updates.media = primaryCover
+        ? {
+            coverImageUrl: primaryCover,
+            coverImageUrls: nextCoverImageUrls,
+            imageUrl: primaryCover
+          }
+        : null;
+
       await updateDoc(doc(db, "tailgateEvents", id), updates);
-      setInlineEditSuccess("Event details updated.");
+      revokeInlineCoverImageDraftPreviews();
+      pendingInlineEditSaveScrollRef.current = true;
+      setInlineEditSuccess("Event details saved.");
       setIsInlineEditing(false);
     } catch (saveError) {
       console.error("Failed to save inline event details", saveError);
       setInlineEditError("Unable to save event details. Please try again.");
     } finally {
       setInlineEditSaving(false);
+    }
+  };
+
+  const copyTailgateEvent = async () => {
+    if (!db || !id || !detail || !user?.uid) {
+      setCopyEventFeedback({ tone: "error", text: "Event copy is unavailable right now." });
+      return;
+    }
+    if (!isEventHost) {
+      setCopyEventFeedback({ tone: "error", text: "Only the primary host can copy this event." });
+      return;
+    }
+
+    setCopyEventSaving(true);
+    setCopyEventFeedback(null);
+    try {
+      const now = new Date();
+      const eventRef = doc(db, "tailgateEvents", id);
+      const eventSnapshot = await getDoc(eventRef);
+      const sourceData = eventSnapshot.exists()
+        ? (eventSnapshot.data() as Record<string, unknown>)
+        : {};
+      const sourceMetadata = asRecord(sourceData.metadata);
+      let copiedHostName =
+        firstString(user.displayName, resolvedHostName, detail.hostName) ?? "Host";
+      try {
+        const hostProfile = await getDoc(doc(db, "users", user.uid));
+        if (hostProfile.exists()) {
+          const hostData = hostProfile.data() as Record<string, unknown>;
+          copiedHostName =
+            firstString(hostData.displayName, hostData.name, hostData.fullName, copiedHostName) ??
+            copiedHostName;
+        }
+      } catch (hostProfileError) {
+        console.warn("Failed to resolve host profile for copied tailgate", hostProfileError);
+      }
+      const copiedTitle = `${detail.eventName} (Copy)`;
+      const copiedCoverImageUrls = detail.coverImageUrls;
+      const primaryCover = copiedCoverImageUrls[0] ?? null;
+      const copiedStartDateTime = detail.startDateTime ?? detail.eventTargetTime;
+      const copiedTicketSalesCloseDaysBefore =
+        detail.visibilityType === "open_paid" ? detail.ticketSalesCloseDaysBefore ?? 0 : null;
+      const copiedTicketSalesCloseAt =
+        copiedStartDateTime && copiedTicketSalesCloseDaysBefore !== null
+          ? new Date(copiedStartDateTime.getTime() - copiedTicketSalesCloseDaysBefore * DAY_IN_MS)
+          : null;
+      const copiedTicketTypes = Array.isArray(sourceData.ticketTypes)
+        ? sourceData.ticketTypes.map((ticketType, index) => {
+            const ticketTypeRecord = asRecord(ticketType);
+            if (!ticketTypeRecord) return ticketType;
+            return {
+              ...ticketTypeRecord,
+              sortOrder: coerceNumber(ticketTypeRecord.sortOrder) ?? index,
+              createdAt: ticketTypeRecord.createdAt ?? now,
+              updatedAt: now
+            };
+          })
+        : undefined;
+      const copiedQuizQuestions = (
+        quizQuestions.length > 0 ? quizQuestions : detail.quiz?.questions ?? []
+      )
+        .filter((question) => question.questionText.trim() !== "")
+        .map((question) => ({
+          id: question.id,
+          questionText: question.questionText.trim(),
+          choices: question.choices.map((choice) => ({
+            id: choice.id,
+            text: choice.text.trim()
+          })),
+          correctChoiceId: question.correctChoiceId,
+          type: question.type
+        }));
+      const copiedQuizTitle = quizTitle.trim() || detail.quiz?.title.trim() || "";
+      const shouldCopyQuiz =
+        detail.visibilityType === "private" &&
+        copiedQuizTitle.length > 0 &&
+        copiedQuizQuestions.length > 0;
+      const scheduleStepsToCopy = timelineEnabledForEvent
+        ? timelineSteps.filter((step) => step.timestampStart.getTime() > 0)
+        : [];
+      const shouldCopySchedule = scheduleStepsToCopy.length > 0;
+
+      const copyPayload: Record<string, unknown> = {
+        ...sourceData,
+        eventName: copiedTitle,
+        name: copiedTitle,
+        hostUserId: user.uid,
+        hostId: user.uid,
+        hostName: copiedHostName,
+        hostEmail: user.email ?? firstString(sourceData.hostEmail) ?? "",
+        attendees: [],
+        attendeeIds: [],
+        attendeeUserIds: [],
+        attendeesUserIds: [],
+        goingUserIds: [],
+        rsvpUserIds: [],
+        pendingUserIds: [],
+        rsvpPendingUserIds: [],
+        invitedUserIds: [],
+        coHostIds: [],
+        coHostInvites: [],
+        rsvpsConfirmed: 0,
+        confirmedCount: 0,
+        rsvpConfirmedCount: 0,
+        attendeeCount: 0,
+        rsvpsPending: 0,
+        pendingCount: 0,
+        rsvpPendingCount: 0,
+        confirmedPaidCount: 0,
+        confirmedPurchaseCount: 0,
+        purchaseCount: 0,
+        ticketsSold: 0,
+        soldCount: 0,
+        ticketsPurchased: 0,
+        paidAttendees: 0,
+        checkedInCount: 0,
+        grossRevenueCents: 0,
+        platformFeeRevenueCents: 0,
+        ticketTypeConfirmedSoldCount: {},
+        ticketSalesCloseDaysBefore: copiedTicketSalesCloseDaysBefore,
+        ticketSalesCutoffDays: copiedTicketSalesCloseDaysBefore,
+        ticketSalesCloseAt: copiedTicketSalesCloseAt,
+        ticketSalesCutoffAt: copiedTicketSalesCloseAt,
+        salesCloseAt: copiedTicketSalesCloseAt,
+        payoutStatus: "pending",
+        stripePayoutStatus: null,
+        transferStatus: null,
+        payout: null,
+        payouts: null,
+        status: "upcoming",
+        eventStatus: "upcoming",
+        cancelledAt: null,
+        cancellationReason: null,
+        coverImageUrls: copiedCoverImageUrls,
+        coverImageUrl: primaryCover,
+        coverPhotoUrl: primaryCover,
+        imageUrl: primaryCover,
+        cover: primaryCover
+          ? {
+              url: primaryCover,
+              imageUrl: primaryCover,
+              downloadUrl: primaryCover,
+              coverImageUrls: copiedCoverImageUrls
+            }
+          : null,
+        media: primaryCover
+          ? {
+              coverImageUrl: primaryCover,
+              coverImageUrls: copiedCoverImageUrls,
+              imageUrl: primaryCover
+            }
+          : null,
+        hasEventFeed: true,
+        timelineEnabled: shouldCopySchedule,
+        schedulePublished: false,
+        copiedFromEventId: id,
+        copiedAt: now,
+        createdVia: "web",
+        metadata: {
+          ...(sourceMetadata ?? {}),
+          copiedFromEventId: id,
+          copiedViaWebsite: true
+        },
+        createdAt: now,
+        updatedAt: now
+      };
+
+      if (copiedTicketTypes) {
+        copyPayload.ticketTypes = copiedTicketTypes;
+      }
+      if (shouldCopyQuiz) {
+        copyPayload.quiz = {
+          title: copiedQuizTitle,
+          questions: copiedQuizQuestions
+        };
+      } else {
+        copyPayload.quiz = null;
+      }
+
+      const created = await addDoc(collection(db, "tailgateEvents"), copyPayload);
+      try {
+        if (shouldCopyQuiz) {
+          await addDoc(collection(db, "tailgateEvents", created.id, "quizzes"), {
+            eventId: created.id,
+            title: copiedQuizTitle,
+            questions: copiedQuizQuestions,
+            createdBy: user.uid,
+            createdAt: now,
+            updatedAt: now
+          });
+        }
+        if (shouldCopySchedule) {
+          const scheduleCollection = collection(db, "tailgateEvents", created.id, "schedule");
+          await Promise.all(
+            scheduleStepsToCopy.map((step) =>
+              addDoc(scheduleCollection, {
+                title: step.title,
+                description: step.description ?? "",
+                timestampStart: step.timestampStart,
+                timestampEnd: step.timestampEnd ?? null,
+                createdAt: now,
+                updatedAt: now
+              })
+            )
+          );
+        }
+      } catch (addOnCopyError) {
+        console.warn("Tailgate copied, but optional add-ons were not fully copied", addOnCopyError);
+      }
+
+      navigate(`/tailgates/${created.id}?edit=event`);
+    } catch (copyError) {
+      console.error("Failed to copy tailgate event", copyError);
+      setCopyEventFeedback({ tone: "error", text: "Unable to copy this event. Please try again." });
+    } finally {
+      setCopyEventSaving(false);
     }
   };
 
@@ -4987,6 +5659,26 @@ export default function TailgateDetails() {
             {activeInlineEditTicketTypes.length} / {MAX_TICKET_TYPES}
           </span>
         </div>
+        <div className="tailgate-details-inline-ticket-settings">
+          <label className="input-group">
+            <span className="input-label">Stop selling tickets (days before)</span>
+            <input
+              className="text-input"
+              value={inlineEditDraft.ticketSalesCutoffDays}
+              onChange={(event) =>
+                setInlineEditDraft((previous) => ({
+                  ...previous,
+                  ticketSalesCutoffDays: event.target.value.replace(/\D/g, "")
+                }))
+              }
+              placeholder="0"
+              inputMode="numeric"
+            />
+          </label>
+          <p className="tailgate-details-ticket-copy tailgate-details-ticket-copy-secondary">
+            Set to 0 to allow sales until event start. The close time is recalculated when you save the event date.
+          </p>
+        </div>
         <div className="tailgate-details-inline-ticket-list">
           {activeInlineEditTicketTypes.map((ticketType, index) => (
             <div key={ticketType.id} className="tailgate-details-inline-ticket-card">
@@ -5082,6 +5774,73 @@ export default function TailgateDetails() {
         ) : null}
       </div>
     ) : null;
+
+  const inlineCoverImageEditor = (
+    <div className="tailgate-details-inline-cover-editor">
+      <div className="tailgate-details-inline-cover-header">
+        <div>
+          <span className="input-label">Cover photos</span>
+          <p className="tailgate-details-ticket-copy tailgate-details-ticket-copy-secondary">
+            The first photo becomes the event cover.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => inlineCoverImageInputRef.current?.click()}
+          disabled={inlineCoverImageItems.length >= MAX_COVER_IMAGES || inlineEditSaving}
+        >
+          {inlineCoverImageItems.length >= MAX_COVER_IMAGES ? "Max reached" : "Add photos"}
+        </button>
+      </div>
+      <input
+        ref={inlineCoverImageInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="create-wizard-cover-upload-input"
+        onChange={handleInlineCoverImagesSelected}
+        disabled={inlineEditSaving}
+      />
+      {inlineCoverImageItems.length > 0 ? (
+        <div className="create-wizard-cover-grid tailgate-details-inline-cover-grid">
+          {inlineCoverImageItems.map((item, index) => (
+            <figure key={item.id} className="create-wizard-cover-item">
+              <img
+                src={item.kind === "existing" ? getDisplayCoverImageUrl(item.url) : item.previewUrl}
+                alt={`Cover ${index + 1}`}
+              />
+              <figcaption>
+                <span>{index === 0 ? "Primary" : `Photo ${index + 1}`}</span>
+                <span className="tailgate-details-inline-cover-actions">
+                  {index > 0 ? (
+                    <button
+                      type="button"
+                      className="link-button"
+                      onClick={() => moveInlineCoverImageToFront(item.id)}
+                      disabled={inlineEditSaving}
+                    >
+                      Make primary
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => removeInlineCoverImageItem(item.id)}
+                    disabled={inlineEditSaving}
+                  >
+                    Remove
+                  </button>
+                </span>
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      ) : (
+        <p className="meta-muted">No cover photos selected.</p>
+      )}
+    </div>
+  );
 
   const pageContent = loading ? (
         <section className="tailgate-details-stack">
@@ -5248,6 +6007,29 @@ export default function TailgateDetails() {
                 ) : null}
               </div>
             </article>
+          ) : isHostUser ? (
+            <article className="tailgate-details-card tailgate-details-carousel-card tailgate-host-dashboard-card tailgate-host-media-card tailgate-host-full-span tailgate-details-cover-empty">
+              <div className="tailgate-details-carousel-header">
+                <h2>Event Photos</h2>
+                <span>0 / {MAX_COVER_IMAGES}</span>
+              </div>
+              <div className="tailgate-details-cover-empty-body">
+                <div>
+                  <strong>No cover photos yet.</strong>
+                  <p className="meta-muted">
+                    Add a photo to make this event easier to recognize on details and discovery.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => openInlineEventEditor(true)}
+                  disabled={!db || !canEditCancelledEvent}
+                >
+                  Add cover photos
+                </button>
+              </div>
+            </article>
           ) : null}
 
           {isHostUser ? (
@@ -5381,9 +6163,25 @@ export default function TailgateDetails() {
                       </span>
                       <span className="tailgate-command-action-copy">
                         <strong>{isInlineEditing ? "Editing event" : "Edit event"}</strong>
-                        <small>Update title, kickoff, pricing, and host notes.</small>
+                        <small>Update title, photos, timing, pricing, and host notes.</small>
                       </span>
                     </button>
+                    {isEventHost ? (
+                      <button
+                        type="button"
+                        className="tailgate-command-action-card"
+                        onClick={() => void copyTailgateEvent()}
+                        disabled={!db || copyEventSaving}
+                      >
+                        <span className="tailgate-command-action-icon" aria-hidden="true">
+                          <IconCopy size={16} />
+                        </span>
+                        <span className="tailgate-command-action-copy">
+                          <strong>{copyEventSaving ? "Copying event..." : "Copy event"}</strong>
+                          <small>Duplicate details, tickets, photos, and saved add-ons.</small>
+                        </span>
+                      </button>
+                    ) : null}
                     {detail.visibilityType === "open_paid" ? (
                       <button
                         type="button"
@@ -5516,6 +6314,9 @@ export default function TailgateDetails() {
                       </span>
                     </button>
                   </div>
+                  {copyEventFeedback?.tone === "error" ? (
+                    <p className="tailgate-details-ticket-error">{copyEventFeedback.text}</p>
+                  ) : null}
                   {isHostUser && isHostBroadcastComposerOpen ? (
                     <div className="tailgate-details-host-broadcast tailgate-details-host-contact">
                       <label className="input-group" htmlFor="host-broadcast-message">
@@ -5743,7 +6544,10 @@ export default function TailgateDetails() {
                   </button>
                 </section>
 
-                <section className="tailgate-command-panel">
+                <section
+                  className="tailgate-command-panel tailgate-command-brief-panel"
+                  ref={eventBriefSectionRef}
+                >
                   <div className="section-header">
                     <div>
                       <h2>Event Brief</h2>
@@ -5825,7 +6629,22 @@ export default function TailgateDetails() {
                             }
                           />
                         </label>
+                        <label className="input-group">
+                          <span className="input-label">End time</span>
+                          <input
+                            className="text-input"
+                            type="time"
+                            value={inlineEditDraft.eventEndTime}
+                            onChange={(event) =>
+                              setInlineEditDraft((previous) => ({
+                                ...previous,
+                                eventEndTime: event.target.value
+                              }))
+                            }
+                          />
+                        </label>
                       </div>
+                      {inlineCoverImageEditor}
                       {inlineEditPaidTicketTypesFields}
                       <label className="input-group">
                         <span className="input-label">Description</span>
@@ -5865,7 +6684,15 @@ export default function TailgateDetails() {
                     </div>
                   ) : null}
                   {inlineEditSuccess ? (
-                    <p className="tailgate-details-inline-editor-success">{inlineEditSuccess}</p>
+                    <p
+                      className="tailgate-details-inline-editor-success tailgate-details-save-success"
+                      role="status"
+                    >
+                      <span className="tailgate-details-save-success-icon" aria-hidden="true">
+                        <IconCheckCircle size={16} />
+                      </span>
+                      <span>{inlineEditSuccess}</span>
+                    </p>
                   ) : null}
                   <div className="tailgate-details-info-grid tailgate-command-info-grid">
                     <div className="tailgate-details-info-card">
@@ -6100,7 +6927,22 @@ export default function TailgateDetails() {
                       }
                     />
                   </label>
+                  <label className="input-group">
+                    <span className="input-label">End time</span>
+                    <input
+                      className="text-input"
+                      type="time"
+                      value={inlineEditDraft.eventEndTime}
+                      onChange={(event) =>
+                        setInlineEditDraft((previous) => ({
+                          ...previous,
+                          eventEndTime: event.target.value
+                        }))
+                      }
+                    />
+                  </label>
                 </div>
+                {inlineCoverImageEditor}
                 {inlineEditPaidTicketTypesFields}
                 <label className="input-group">
                   <span className="input-label">Description</span>
@@ -6140,7 +6982,15 @@ export default function TailgateDetails() {
               </div>
             ) : null}
             {inlineEditSuccess ? (
-              <p className="tailgate-details-inline-editor-success">{inlineEditSuccess}</p>
+              <p
+                className="tailgate-details-inline-editor-success tailgate-details-save-success"
+                role="status"
+              >
+                <span className="tailgate-details-save-success-icon" aria-hidden="true">
+                  <IconCheckCircle size={16} />
+                </span>
+                <span>{inlineEditSuccess}</span>
+              </p>
             ) : null}
             <div className="tailgate-details-info-grid">
               <div className="tailgate-details-info-card">

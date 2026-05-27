@@ -50,6 +50,7 @@ export function useTailgatePurchaseMetrics(tailgateIds?: string[]) {
       return;
     }
 
+    const firestore = db;
     const idSet = new Set(normalizedIds);
     const snapshots = new Map<string, RawPurchaseRecord[]>();
     const recomputeMetrics = () => {
@@ -97,8 +98,8 @@ export function useTailgatePurchaseMetrics(tailgateIds?: string[]) {
       chunkValues(normalizedIds, 10).map((chunk, index) => {
         const purchaseQuery =
           chunk.length === 1
-            ? query(collection(db, "ticketPurchases"), where(field, "==", chunk[0]))
-            : query(collection(db, "ticketPurchases"), where(field, "in", chunk));
+            ? query(collection(firestore, "ticketPurchases"), where(field, "==", chunk[0]))
+            : query(collection(firestore, "ticketPurchases"), where(field, "in", chunk));
         const snapshotKey = `${field}:${index}`;
 
         return onSnapshot(
