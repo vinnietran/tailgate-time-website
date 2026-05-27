@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "lot-legends": "lot-legends",
+    "prod": "tailgatetime-prod",
+    "default": "lot-legends"
+  }
+}
