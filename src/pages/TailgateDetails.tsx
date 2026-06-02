@@ -312,6 +312,24 @@ type TicketTypeSelectOption = {
   disabled?: boolean;
 };
 
+type TicketManifestSource = "tickets" | "tailgateTickets";
+
+type TicketManifestRow = {
+  id: string;
+  source: TicketManifestSource;
+  ticketCode: string;
+  attendeeName: string;
+  attendeeEmail: string | null;
+  attendeePhone: string | null;
+  ticketTypeName: string;
+  quantity: number;
+  checkedInCount: number;
+  remaining: number;
+  status: string;
+  createdAtMs: number;
+  lastActivityAtMs: number;
+};
+
 type ContactEventHostInput = {
   eventId: string;
   message: string;
@@ -423,6 +441,48 @@ function isConfirmedPaidTicketStatus(status: string): boolean {
   return status === "valid" || status === "checked_in" || status === "confirmed";
 }
 
+function formatTicketManifestStatus(status: string): string {
+  if (status === "checked_in") return "Checked in";
+  if (status === "valid") return "Valid";
+  if (status === "confirmed") return "Confirmed";
+  if (status === "refunded") return "Refunded";
+  if (status === "cancelled" || status === "canceled") return "Cancelled";
+  if (status === "expired") return "Expired";
+  if (status === "failed") return "Failed";
+  if (!status) return "Unknown";
+  return status
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function resolveManifestTimestampMs(...values: unknown[]): number {
+  for (const value of values) {
+    const date = normalizeDate(value);
+    if (date) return date.getTime();
+
+    if (typeof value === "object" && value && "toMillis" in value) {
+      const timestamp = value as { toMillis?: () => number };
+      if (typeof timestamp.toMillis === "function") {
+        const milliseconds = timestamp.toMillis();
+        if (Number.isFinite(milliseconds)) return milliseconds;
+      }
+    }
+  }
+  return 0;
+}
+
+function formatTicketManifestTimestamp(value: number): string | null {
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return new Date(value).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
 function resolveTicketTypeIdFromRecord(data: Record<string, unknown>): string | null {
   const qrPayload =
     typeof data.qrPayload === "string" && data.qrPayload.trim().length > 0
@@ -456,6 +516,101 @@ function resolveTicketRecordQuantity(data: Record<string, unknown>): number {
     return Math.max(1, Math.round(parsed));
   }
   return 1;
+}
+
+function resolveTicketRecordCode(data: Record<string, unknown>): string {
+  return (
+    firstString(
+      data.ticketCode,
+      data.code,
+      data.shortCode,
+      data.confirmationCode,
+      asRecord(data.ticket)?.ticketCode,
+      asRecord(data.ticket)?.code,
+      asRecord(data.purchase)?.ticketCode,
+      asRecord(data.metadata)?.ticketCode
+    ) ?? "—"
+  );
+}
+
+function resolveTicketRecordAttendeeName(data: Record<string, unknown>): string {
+  return (
+    firstString(
+      data.attendeeName,
+      data.guestName,
+      data.purchaserName,
+      data.customerName,
+      data.displayName,
+      data.name,
+      data.userName,
+      asRecord(data.attendee)?.name,
+      asRecord(data.guest)?.name,
+      asRecord(data.purchaser)?.name,
+      asRecord(data.customer)?.name,
+      asRecord(data.user)?.displayName,
+      asRecord(data.purchase)?.purchaserName,
+      asRecord(data.metadata)?.purchaserName
+    ) ?? "Guest"
+  );
+}
+
+function resolveTicketRecordAttendeeEmail(data: Record<string, unknown>): string | null {
+  return (
+    firstString(
+      data.attendeeEmail,
+      data.guestEmail,
+      data.purchaserEmail,
+      data.customerEmail,
+      data.email,
+      data.userEmail,
+      asRecord(data.attendee)?.email,
+      asRecord(data.guest)?.email,
+      asRecord(data.purchaser)?.email,
+      asRecord(data.customer)?.email,
+      asRecord(data.user)?.email,
+      asRecord(data.purchase)?.purchaserEmail,
+      asRecord(data.metadata)?.purchaserEmail
+    ) ?? null
+  );
+}
+
+function resolveTicketRecordAttendeePhone(data: Record<string, unknown>): string | null {
+  const rawPhone =
+    firstString(
+      data.attendeePhone,
+      data.guestPhone,
+      data.purchaserPhone,
+      data.customerPhone,
+      data.phone,
+      data.phoneNumber,
+      data.userPhone,
+      asRecord(data.attendee)?.phone,
+      asRecord(data.guest)?.phone,
+      asRecord(data.purchaser)?.phone,
+      asRecord(data.customer)?.phone,
+      asRecord(data.user)?.phoneNumber,
+      asRecord(data.purchase)?.purchaserPhone,
+      asRecord(data.metadata)?.purchaserPhone
+    ) ?? null;
+
+  if (!rawPhone) return null;
+  const digits = rawPhone.replace(/\D/g, "");
+  if (digits.length === 10) {
+    return formatPhoneInput(digits);
+  }
+  return rawPhone;
+}
+
+function resolveTicketRecordCheckedInCount(
+  data: Record<string, unknown>,
+  status: string,
+  quantity: number
+): number {
+  const parsed = coerceNumber(data.checkedInCount);
+  if (typeof parsed === "number" && Number.isFinite(parsed) && parsed > 0) {
+    return Math.min(quantity, Math.max(0, Math.floor(parsed)));
+  }
+  return status === "checked_in" ? Math.min(quantity, 1) : 0;
 }
 
 function normalizeTicketTypeLookupKey(value: unknown): string {
@@ -507,6 +662,44 @@ function resolveEventTicketTypeIdFromRecord(
     (ticketType) => normalizeTicketTypeLookupKey(ticketType.name) === ticketTypeNameKey
   );
   return matchedTicketType?.id ?? null;
+}
+
+function buildTicketManifestRow(
+  id: string,
+  data: Record<string, unknown>,
+  eventTicketTypes: EventTicketType[],
+  source: TicketManifestSource
+): TicketManifestRow {
+  const status = normalizeTicketLifecycleStatus(data.status);
+  const quantity = resolveTicketRecordQuantity(data);
+  const checkedInCount = resolveTicketRecordCheckedInCount(data, status, quantity);
+  const eventTicketTypeId = resolveEventTicketTypeIdFromRecord(data, eventTicketTypes);
+  const eventTicketTypeName =
+    eventTicketTypes.find((ticketType) => ticketType.id === eventTicketTypeId)?.name ?? null;
+  const createdAtMs = resolveManifestTimestampMs(
+    data.createdAt,
+    data.purchasedAt,
+    data.completedAt,
+    data.confirmedAt,
+    data.checkoutCreatedAt
+  );
+  const checkedInAtMs = resolveManifestTimestampMs(data.checkedInAt, data.lastCheckInAt);
+
+  return {
+    id,
+    source,
+    ticketCode: resolveTicketRecordCode(data),
+    attendeeName: resolveTicketRecordAttendeeName(data),
+    attendeeEmail: resolveTicketRecordAttendeeEmail(data),
+    attendeePhone: resolveTicketRecordAttendeePhone(data),
+    ticketTypeName: eventTicketTypeName ?? resolveTicketTypeNameFromRecord(data) ?? "General Admission",
+    quantity,
+    checkedInCount,
+    remaining: Math.max(0, quantity - checkedInCount),
+    status,
+    createdAtMs,
+    lastActivityAtMs: Math.max(createdAtMs, checkedInAtMs)
+  };
 }
 
 function formatTicketTypeAvailabilityMessage(remaining: number | null): string | null {
@@ -1717,6 +1910,7 @@ export default function TailgateDetails() {
   const quizSectionRef = useRef<HTMLElement | null>(null);
   const eventSnapshotSectionRef = useRef<HTMLElement | null>(null);
   const eventBriefSectionRef = useRef<HTMLElement | null>(null);
+  const ticketManifestSectionRef = useRef<HTMLElement | null>(null);
   const handledEditRouteRef = useRef(false);
   const pendingInlineEditSaveScrollRef = useRef(false);
   const attemptedCoverImageResolutionRef = useRef<Set<string>>(new Set());
@@ -1745,6 +1939,10 @@ export default function TailgateDetails() {
   const [confirmedTicketCount, setConfirmedTicketCount] = useState(0);
   const [confirmedTicketCountByType, setConfirmedTicketCountByType] = useState<Record<string, number>>({});
   const [liveCheckedInCount, setLiveCheckedInCount] = useState<number | null>(null);
+  const [ticketManifestRows, setTicketManifestRows] = useState<TicketManifestRow[]>([]);
+  const [ticketManifestLoading, setTicketManifestLoading] = useState(false);
+  const [ticketManifestError, setTicketManifestError] = useState<string | null>(null);
+  const [isTicketManifestCollapsed, setIsTicketManifestCollapsed] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [checkoutPurchaseStatus, setCheckoutPurchaseStatus] =
     useState<CheckoutPurchaseStatus>(null);
@@ -2647,6 +2845,10 @@ export default function TailgateDetails() {
   }, [detail?.id]);
 
   useEffect(() => {
+    setIsTicketManifestCollapsed(false);
+  }, [detail?.id]);
+
+  useEffect(() => {
     if (!detail || detail.visibilityType !== "open_paid" || detail.ticketTypes.length === 0) {
       setSelectedTicketTypeId(null);
       return;
@@ -2877,6 +3079,108 @@ export default function TailgateDetails() {
         console.error("Host checked-in count lookup failed (legacy model)", snapshotError);
         hasLegacySnapshot = true;
         applyCheckedInTotal();
+      }
+    );
+
+    return () => {
+      unsubscribeNew();
+      unsubscribeLegacy();
+    };
+  }, [detail, isHostUser]);
+
+  useEffect(() => {
+    if (!detail || !db || !isHostUser || detail.visibilityType !== "open_paid") {
+      setTicketManifestRows([]);
+      setTicketManifestLoading(false);
+      setTicketManifestError(null);
+      return;
+    }
+
+    const eventTicketTypes = detail.ticketTypes ?? [];
+    let hasNewSnapshot = false;
+    let hasLegacySnapshot = false;
+    let newManifestRows: TicketManifestRow[] = [];
+    let legacyManifestRows: TicketManifestRow[] = [];
+    const failedSources = new Set<TicketManifestSource>();
+
+    const sortManifestRows = (rows: TicketManifestRow[]) =>
+      [...rows].sort((a, b) => {
+        const activityDelta = b.lastActivityAtMs - a.lastActivityAtMs;
+        if (activityDelta !== 0) return activityDelta;
+        return a.attendeeName.localeCompare(b.attendeeName);
+      });
+
+    const applyManifestRows = () => {
+      if (!hasNewSnapshot || !hasLegacySnapshot) return;
+      const rows = newManifestRows.length > 0 ? newManifestRows : legacyManifestRows;
+      const sortedRows = sortManifestRows(rows);
+      setTicketManifestRows(sortedRows);
+      setTicketManifestLoading(false);
+      setTicketManifestError(
+        sortedRows.length === 0 && failedSources.size > 0
+          ? "Unable to load the ticket manifest right now."
+          : null
+      );
+    };
+
+    setTicketManifestRows([]);
+    setTicketManifestLoading(true);
+    setTicketManifestError(null);
+
+    const newTicketsQuery = query(collection(db, "tickets"), where("tailgateId", "==", detail.id));
+    const legacyTicketsQuery = query(
+      collection(db, "tailgateTickets"),
+      where("tailgateId", "==", detail.id)
+    );
+
+    const unsubscribeNew = onSnapshot(
+      newTicketsQuery,
+      (snapshot) => {
+        failedSources.delete("tickets");
+        newManifestRows = snapshot.docs
+          .map((docSnap) =>
+            buildTicketManifestRow(
+              docSnap.id,
+              docSnap.data() as Record<string, unknown>,
+              eventTicketTypes,
+              "tickets"
+            )
+          )
+          .filter((row) => isConfirmedPaidTicketStatus(row.status));
+        hasNewSnapshot = true;
+        applyManifestRows();
+      },
+      (snapshotError) => {
+        console.error("Failed to load ticket manifest", snapshotError);
+        failedSources.add("tickets");
+        newManifestRows = [];
+        hasNewSnapshot = true;
+        applyManifestRows();
+      }
+    );
+    const unsubscribeLegacy = onSnapshot(
+      legacyTicketsQuery,
+      (snapshot) => {
+        failedSources.delete("tailgateTickets");
+        legacyManifestRows = snapshot.docs
+          .map((docSnap) =>
+            buildTicketManifestRow(
+              docSnap.id,
+              docSnap.data() as Record<string, unknown>,
+              eventTicketTypes,
+              "tailgateTickets"
+            )
+          )
+          .filter((row) => row.status === "confirmed");
+        hasLegacySnapshot = true;
+        applyManifestRows();
+      },
+      (snapshotError) => {
+        console.error("Failed to load legacy ticket manifest", snapshotError);
+        failedSources.add("tailgateTickets");
+        legacyManifestRows = [];
+        hasLegacySnapshot = true;
+        applyManifestRows();
       }
     );
 
@@ -3260,6 +3564,19 @@ export default function TailgateDetails() {
       ? Math.max(0, selectedTicketTypeCapacity - selectedTicketTypeSoldCount)
       : null;
   const checkedInCountForHost = liveCheckedInCount ?? detail?.checkedInCount;
+  const ticketManifestTotals = useMemo(
+    () =>
+      ticketManifestRows.reduce(
+        (totals, row) => ({
+          records: totals.records + 1,
+          tickets: totals.tickets + row.quantity,
+          checkedIn: totals.checkedIn + row.checkedInCount,
+          remaining: totals.remaining + row.remaining
+        }),
+        { records: 0, tickets: 0, checkedIn: 0, remaining: 0 }
+      ),
+    [ticketManifestRows]
+  );
   const payout = estimateHostPayout({
     ticketsSold,
     ticketPriceCents,
@@ -4658,6 +4975,13 @@ export default function TailgateDetails() {
 
   const scrollToQuiz = () => {
     quizSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const scrollToTicketManifest = () => {
+    setIsTicketManifestCollapsed(false);
+    window.setTimeout(() => {
+      ticketManifestSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
   };
 
   const updateQuizQuestionText = (text: string) => {
@@ -6183,20 +6507,35 @@ export default function TailgateDetails() {
                       </button>
                     ) : null}
                     {detail.visibilityType === "open_paid" ? (
-                      <button
-                        type="button"
-                        className="tailgate-command-action-card"
-                        onClick={() => navigate(`/tailgates/${detail.id}/checkin`)}
-                        disabled={!canOpenCheckIn}
-                      >
-                        <span className="tailgate-command-action-icon" aria-hidden="true">
-                          <IconCheckin size={16} />
-                        </span>
-                        <span className="tailgate-command-action-copy">
-                          <strong>Check-in</strong>
-                          <small>Handle arrivals and ticket validation.</small>
-                        </span>
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="tailgate-command-action-card"
+                          onClick={() => navigate(`/tailgates/${detail.id}/checkin`)}
+                          disabled={!canOpenCheckIn}
+                        >
+                          <span className="tailgate-command-action-icon" aria-hidden="true">
+                            <IconCheckin size={16} />
+                          </span>
+                          <span className="tailgate-command-action-copy">
+                            <strong>Check-in</strong>
+                            <small>Handle arrivals and ticket validation.</small>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="tailgate-command-action-card"
+                          onClick={scrollToTicketManifest}
+                        >
+                          <span className="tailgate-command-action-icon" aria-hidden="true">
+                            <IconDashboard size={16} />
+                          </span>
+                          <span className="tailgate-command-action-copy">
+                            <strong>Ticket manifest</strong>
+                            <small>View tickets, guests, and check-in status anytime.</small>
+                          </span>
+                        </button>
+                      </>
                     ) : canShowWhosComingSection ? (
                       <button
                         type="button"
@@ -6843,6 +7182,131 @@ export default function TailgateDetails() {
               ) : null}
             </article>
           )}
+
+          {isHostUser && detail.visibilityType === "open_paid" ? (
+            <article
+              className="tailgate-details-card tailgate-host-dashboard-card tailgate-host-full-span tailgate-ticket-manifest-card"
+              ref={ticketManifestSectionRef}
+            >
+              <div className="section-header tailgate-ticket-manifest-header">
+                <div>
+                  <h2>Ticket Manifest</h2>
+                  <p className="section-subtitle">
+                    Live ticket list for hosts and co-hosts.
+                  </p>
+                </div>
+                <div className="tailgate-ticket-manifest-header-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => setIsTicketManifestCollapsed((current) => !current)}
+                    aria-expanded={!isTicketManifestCollapsed}
+                    aria-controls="tailgate-ticket-manifest-body"
+                  >
+                    {isTicketManifestCollapsed ? "Show manifest" : "Hide manifest"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => navigate(`/tailgates/${detail.id}/checkin`)}
+                    disabled={!canOpenCheckIn}
+                  >
+                    Open check-in
+                  </button>
+                </div>
+              </div>
+
+              <div className="tailgate-ticket-manifest-summary">
+                <div className="tailgate-ticket-manifest-summary-item">
+                  <span>Entries</span>
+                  <strong>{ticketManifestTotals.records}</strong>
+                </div>
+                <div className="tailgate-ticket-manifest-summary-item">
+                  <span>Tickets</span>
+                  <strong>{ticketManifestTotals.tickets}</strong>
+                </div>
+                <div className="tailgate-ticket-manifest-summary-item">
+                  <span>Checked in</span>
+                  <strong>{ticketManifestTotals.checkedIn}</strong>
+                </div>
+                <div className="tailgate-ticket-manifest-summary-item">
+                  <span>Remaining</span>
+                  <strong>{ticketManifestTotals.remaining}</strong>
+                </div>
+              </div>
+
+              <div
+                id="tailgate-ticket-manifest-body"
+                className="tailgate-ticket-manifest-body"
+                hidden={isTicketManifestCollapsed}
+              >
+                {ticketManifestError ? (
+                  <p className="tailgate-details-ticket-error">{ticketManifestError}</p>
+                ) : null}
+
+                {ticketManifestLoading ? (
+                  <p className="meta-muted">Loading ticket manifest...</p>
+                ) : ticketManifestRows.length === 0 ? (
+                  <div className="tailgate-ticket-manifest-empty">
+                    <strong>No confirmed tickets yet.</strong>
+                    <p className="meta-muted">
+                      Confirmed tickets will appear here as soon as guests purchase.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="tailgate-ticket-manifest-table" role="table" aria-label="Ticket manifest">
+                    <div
+                      className="tailgate-ticket-manifest-row tailgate-ticket-manifest-head"
+                      role="row"
+                    >
+                      <span role="columnheader">Guest</span>
+                      <span role="columnheader">Ticket</span>
+                      <span role="columnheader">Qty</span>
+                      <span role="columnheader">Status</span>
+                      <span role="columnheader">Check-in</span>
+                    </div>
+                    {ticketManifestRows.map((row) => {
+                      const activityLabel = formatTicketManifestTimestamp(row.lastActivityAtMs);
+                      return (
+                        <div
+                          key={`${row.source}-${row.id}`}
+                          className="tailgate-ticket-manifest-row"
+                          role="row"
+                        >
+                          <span className="tailgate-ticket-manifest-guest" role="cell">
+                            <strong>{row.attendeeName}</strong>
+                            {row.attendeeEmail ? <small>{row.attendeeEmail}</small> : null}
+                            {row.attendeePhone ? <small>{row.attendeePhone}</small> : null}
+                          </span>
+                          <span className="tailgate-ticket-manifest-ticket" role="cell">
+                            <strong>{row.ticketTypeName}</strong>
+                            <small>Code {row.ticketCode}</small>
+                          </span>
+                          <span role="cell">{row.quantity}</span>
+                          <span role="cell">
+                            <span className="tailgate-ticket-manifest-status">
+                              {formatTicketManifestStatus(row.status)}
+                            </span>
+                            {activityLabel ? <small>{activityLabel}</small> : null}
+                          </span>
+                          <span role="cell">
+                            <strong>
+                              {row.checkedInCount}/{row.quantity}
+                            </strong>
+                            <small>
+                              {row.remaining === 0
+                                ? "Fully checked in"
+                                : `${row.remaining} remaining`}
+                            </small>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </article>
+          ) : null}
 
           {!isHostUser ? (
           <article className="tailgate-details-card" ref={eventSnapshotSectionRef}>
