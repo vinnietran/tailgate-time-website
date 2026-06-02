@@ -4137,6 +4137,140 @@ a {
   line-height: 1.35;
 }
 
+.tailgate-ticket-manifest-card {
+  display: grid;
+  gap: 16px;
+  scroll-margin-top: 20px;
+}
+
+.tailgate-ticket-manifest-header {
+  align-items: center;
+}
+
+.tailgate-ticket-manifest-header-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.tailgate-ticket-manifest-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tailgate-ticket-manifest-summary-item {
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 12px;
+}
+
+.tailgate-ticket-manifest-summary-item span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tailgate-ticket-manifest-summary-item strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--white);
+  font-size: 1.3rem;
+}
+
+.tailgate-ticket-manifest-empty {
+  border-radius: var(--radius-md);
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 18px;
+}
+
+.tailgate-ticket-manifest-empty strong {
+  color: var(--white);
+}
+
+.tailgate-ticket-manifest-empty p {
+  margin: 6px 0 0;
+}
+
+.tailgate-ticket-manifest-body {
+  display: grid;
+  gap: 12px;
+}
+
+.tailgate-ticket-manifest-body[hidden] {
+  display: none;
+}
+
+.tailgate-ticket-manifest-table {
+  display: grid;
+  overflow-x: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tailgate-ticket-manifest-row {
+  min-width: 760px;
+  display: grid;
+  grid-template-columns:
+    minmax(180px, 1.35fr)
+    minmax(170px, 1.1fr)
+    minmax(54px, 0.35fr)
+    minmax(130px, 0.85fr)
+    minmax(120px, 0.75fr);
+  gap: 12px;
+  align-items: center;
+  padding: 13px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.tailgate-ticket-manifest-row span {
+  min-width: 0;
+  color: var(--white);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.tailgate-ticket-manifest-row small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.tailgate-ticket-manifest-head span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tailgate-ticket-manifest-guest,
+.tailgate-ticket-manifest-ticket {
+  display: grid;
+  gap: 2px;
+}
+
+.tailgate-ticket-manifest-status {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 999px;
+  border: 1px solid rgba(242, 201, 76, 0.28);
+  background: rgba(242, 201, 76, 0.12);
+  padding: 4px 9px;
+  color: var(--gold-300);
+  font-weight: 700;
+}
+
 .tailgate-command-subsection {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   padding-top: 16px;
@@ -9342,6 +9476,30 @@ a.secondary-button {
   .tailgate-command-action-grid,
   .tailgate-command-info-grid {
     grid-template-columns: 1fr;
+  }
+
+  .tailgate-ticket-manifest-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tailgate-ticket-manifest-header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .tailgate-ticket-manifest-table {
+    overflow-x: visible;
+  }
+
+  .tailgate-ticket-manifest-row {
+    min-width: 0;
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding: 14px 0;
+  }
+
+  .tailgate-ticket-manifest-head {
+    display: none;
   }
 
   .tailgate-command-cohost-row,
