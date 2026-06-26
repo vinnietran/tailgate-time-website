@@ -1,4 +1,4 @@
-import{j as e,U as u,a3 as p,a6 as h}from"./index-BY4XVoPE.js";const g=`# TailgateTime User Guide
+import{j as e,U as u,a3 as p,a6 as h}from"./index-jS02DC8a.js";const g=`# TailgateTime User Guide
 
 ## 1. What TailgateTime Does
 TailgateTime helps you plan, discover, and run game-day tailgates.
