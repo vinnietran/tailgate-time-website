@@ -4457,17 +4457,23 @@ export default function TailgateDetails() {
 
     try {
       if (useInviteRsvpFlow && inviteAttendee) {
+        const canSubmitPlusGuests =
+          detail.visibilityType === "private" &&
+          detail.allowGuestPlusOnInvite === true &&
+          nextStatus === "Attending";
         const incompleteGuest = invitePlusGuests.find((guest) => {
           const phoneDigits = toPhoneDigits(guest.phone);
           return phoneDigits.length > 0 && phoneDigits.length < 10;
         });
-        if (incompleteGuest) {
+        if (canSubmitPlusGuests && incompleteGuest) {
           setRsvpError("Enter a full 10-digit phone number for each guest contact.");
           return;
         }
 
-        const totalGuestsRequested = Math.max(0, Number(inviteGuestCount || "0") || 0);
-        const payloadGuests = nextStatus === "Attending"
+        const totalGuestsRequested = canSubmitPlusGuests
+          ? Math.max(0, Number(inviteGuestCount || "0") || 0)
+          : 0;
+        const payloadGuests = canSubmitPlusGuests
           ? invitePlusGuests
               .map((guest) => ({
                 attendeeId: guest.attendeeId,
@@ -4482,7 +4488,7 @@ export default function TailgateDetails() {
           token: inviteAttendee.token,
           rsvpStatus: nextStatus === "Attending" ? "yes" : "no",
           anonymousGuestCount:
-            nextStatus === "Attending"
+            canSubmitPlusGuests
               ? Math.max(totalGuestsRequested - payloadGuests.length, 0)
               : 0,
           additionalGuests: payloadGuests
