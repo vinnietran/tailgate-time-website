@@ -17,6 +17,7 @@ import {
   formatCurrencyFromCents,
   formatDateTimeRange
 } from "../utils/format";
+import tailgateTimeLogo from "../../ttnobg.png";
 import appStoreBadge from "../../screenshots/app-store-badge.svg";
 import playStoreBadge from "../../screenshots/google-play-badge.png";
 
@@ -28,12 +29,15 @@ const BUFFALO_TAILGATES_LISTING_HOST =
   import.meta.env.VITE_FIREBASE_PROJECT_ID === "tailgatetime-prod"
     ? "Buffalo Tailgates"
     : "Vinnie Tranquillo";
-const PARTNER_LISTING_VISIBILITY_TYPES = ["open_free", "open_paid"] as const;
+const OPEN_LISTING_VISIBILITY_TYPES = ["open_free", "open_paid"] as const;
+const HOMEPAGE_DISCOVER_EVENT_LIMIT = 8;
+const DEFAULT_TAILGATE_LISTING_COVER = tailgateTimeLogo;
 const DEFAULT_PARTNER_LISTING_COVER = "/images/buffalo_tailgates-logo.png";
 
-type PartnerTailgateListing = {
+type HomepageTailgateListing = {
   id: string;
   name: string;
+  hostName?: string;
   visibilityType: "open_free" | "open_paid";
   startDateTime: Date | null;
   endDateTime: Date | null;
@@ -223,7 +227,24 @@ function resolveListingLocation(data: Record<string, unknown>) {
   );
 }
 
-function resolveListingCoverImageUrl(data: Record<string, unknown>) {
+function resolveListingHostName(data: Record<string, unknown>) {
+  const host = asRecord(data.host);
+  const hostProfile = asRecord(data.hostProfile);
+  return firstString(
+    data.hostName,
+    data.displayName,
+    data.hostDisplayName,
+    host?.displayName,
+    host?.name,
+    hostProfile?.displayName,
+    hostProfile?.name
+  );
+}
+
+function resolveListingCoverImageUrl(
+  data: Record<string, unknown>,
+  fallback = DEFAULT_TAILGATE_LISTING_COVER
+) {
   const cover = asRecord(data.cover);
   const media = asRecord(data.media);
 
@@ -246,17 +267,14 @@ function resolveListingCoverImageUrl(data: Record<string, unknown>) {
       firstStringFromArray(cover?.imageUrls),
       firstStringFromArray(media?.coverImageUrls),
       firstStringFromArray(media?.imageUrls)
-    ) ?? DEFAULT_PARTNER_LISTING_COVER
+    ) ?? fallback
   );
 }
 
-function toPartnerTailgateListing(
+function toHomepageTailgateListing(
   id: string,
   data: Record<string, unknown>
-): PartnerTailgateListing | null {
-  const hostName = firstString(data.hostName, data.displayName, data.hostDisplayName);
-  if (hostName?.toLowerCase() !== BUFFALO_TAILGATES_LISTING_HOST.toLowerCase()) return null;
-
+): HomepageTailgateListing | null {
   const visibilityType = resolveListingVisibilityType(data);
   if (visibilityType !== "open_free" && visibilityType !== "open_paid") return null;
   if (isCancelledListing(data)) return null;
@@ -294,6 +312,7 @@ function toPartnerTailgateListing(
   return {
     id,
     name: firstString(data.eventName, data.name, data.title) ?? "Untitled Tailgate",
+    hostName: resolveListingHostName(data),
     visibilityType,
     startDateTime,
     endDateTime,
@@ -307,6 +326,10 @@ function toPartnerTailgateListing(
         : "Free",
     confirmedCount
   };
+}
+
+function isBuffaloTailgatesPartnerListing(listing: HomepageTailgateListing) {
+  return listing.hostName?.toLowerCase() === BUFFALO_TAILGATES_LISTING_HOST.toLowerCase();
 }
 
 const discoverHighlights = [
@@ -330,25 +353,28 @@ const discoverHighlights = [
 export default function Home() {
   const { user } = useAuth();
   const [activeBuffaloImage, setActiveBuffaloImage] = useState(0);
-  const [activeBuffaloListing, setActiveBuffaloListing] = useState(0);
-  const [buffaloListings, setBuffaloListings] = useState<PartnerTailgateListing[]>([]);
-  const [buffaloListingsLoading, setBuffaloListingsLoading] = useState(true);
-  const [buffaloListingsError, setBuffaloListingsError] = useState<string | null>(null);
+  const [upcomingTailgateListings, setUpcomingTailgateListings] = useState<
+    HomepageTailgateListing[]
+  >([]);
+  const [buffaloListings, setBuffaloListings] = useState<HomepageTailgateListing[]>([]);
+  const [openListingsLoading, setOpenListingsLoading] = useState(true);
+  const [openListingsError, setOpenListingsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!db) {
+      setUpcomingTailgateListings([]);
       setBuffaloListings([]);
-      setBuffaloListingsLoading(false);
-      setBuffaloListingsError(null);
+      setOpenListingsLoading(false);
+      setOpenListingsError(null);
       return;
     }
 
-    setBuffaloListingsLoading(true);
-    setBuffaloListingsError(null);
+    setOpenListingsLoading(true);
+    setOpenListingsError(null);
 
     const publicTailgatesQuery = query(
       collection(db, "tailgateEvents"),
-      where("visibilityType", "in", [...PARTNER_LISTING_VISIBILITY_TYPES])
+      where("visibilityType", "in", [...OPEN_LISTING_VISIBILITY_TYPES])
     );
 
     const unsubscribe = onSnapshot(
@@ -356,24 +382,32 @@ export default function Home() {
       (snapshot) => {
         const listings = snapshot.docs
           .map((document) =>
-            toPartnerTailgateListing(document.id, document.data() as Record<string, unknown>)
+            toHomepageTailgateListing(document.id, document.data() as Record<string, unknown>)
           )
-          .filter((item): item is PartnerTailgateListing => Boolean(item))
+          .filter((item): item is HomepageTailgateListing => Boolean(item))
           .sort((a, b) => {
             const aTime = a.startDateTime?.getTime() ?? Number.POSITIVE_INFINITY;
             const bTime = b.startDateTime?.getTime() ?? Number.POSITIVE_INFINITY;
             return aTime - bTime;
           });
 
-        setBuffaloListings(listings);
-        setBuffaloListingsLoading(false);
-        setBuffaloListingsError(null);
+        setUpcomingTailgateListings(listings.slice(0, HOMEPAGE_DISCOVER_EVENT_LIMIT));
+        setBuffaloListings(
+          listings.filter(isBuffaloTailgatesPartnerListing).map((listing) =>
+            listing.coverImageUrl === DEFAULT_TAILGATE_LISTING_COVER
+              ? { ...listing, coverImageUrl: DEFAULT_PARTNER_LISTING_COVER }
+              : listing
+          )
+        );
+        setOpenListingsLoading(false);
+        setOpenListingsError(null);
       },
       (error) => {
-        console.error("Failed to load Buffalo Tailgates listings", error);
+        console.error("Failed to load homepage tailgate listings", error);
+        setUpcomingTailgateListings([]);
         setBuffaloListings([]);
-        setBuffaloListingsLoading(false);
-        setBuffaloListingsError("Listings are not available right now.");
+        setOpenListingsLoading(false);
+        setOpenListingsError("Upcoming tailgates are not available right now.");
       }
     );
 
@@ -381,12 +415,21 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    setActiveBuffaloListing((current) =>
-      buffaloListings.length === 0 ? 0 : Math.min(current, buffaloListings.length - 1)
-    );
-  }, [buffaloListings.length]);
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
 
-  const activeBuffaloListingItem = buffaloListings[activeBuffaloListing] ?? null;
+    const intervalId = window.setInterval(() => {
+      setActiveBuffaloImage((current) =>
+        current === buffaloTailgatesImages.length - 1 ? 0 : current + 1
+      );
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   const showPreviousBuffaloImage = () => {
     setActiveBuffaloImage((current) =>
@@ -397,18 +440,6 @@ export default function Home() {
   const showNextBuffaloImage = () => {
     setActiveBuffaloImage((current) =>
       current === buffaloTailgatesImages.length - 1 ? 0 : current + 1
-    );
-  };
-
-  const showPreviousBuffaloListing = () => {
-    setActiveBuffaloListing((current) =>
-      current === 0 ? buffaloListings.length - 1 : current - 1
-    );
-  };
-
-  const showNextBuffaloListing = () => {
-    setActiveBuffaloListing((current) =>
-      current === buffaloListings.length - 1 ? 0 : current + 1
     );
   };
 
@@ -500,6 +531,60 @@ export default function Home() {
               </article>
             ))}
           </div>
+          <div className="homepage-discover-events" aria-label="Upcoming open tailgates">
+            <div className="homepage-discover-events-header">
+              <div>
+                <span>Upcoming open tailgates</span>
+                <p>Live listings fans can join from Discover.</p>
+              </div>
+              <Link to="/discover">View all</Link>
+            </div>
+            {openListingsLoading ? (
+              <p className="homepage-discover-events-state">Loading upcoming tailgates...</p>
+            ) : openListingsError ? (
+              <p className="homepage-discover-events-state">{openListingsError}</p>
+            ) : upcomingTailgateListings.length > 0 ? (
+              <div className="homepage-discover-events-grid">
+                {upcomingTailgateListings.map((listing) => (
+                  <Link
+                    key={listing.id}
+                    to={`/tailgates/${listing.id}`}
+                    className="homepage-discover-event-card"
+                    aria-label={`View ${listing.name}`}
+                  >
+                    <div
+                      className={`homepage-discover-event-media ${
+                        listing.coverImageUrl === DEFAULT_TAILGATE_LISTING_COVER
+                          ? "is-logo"
+                          : "has-image"
+                      }`}
+                    >
+                      <img src={listing.coverImageUrl} alt="" loading="lazy" />
+                    </div>
+                    <div className="homepage-discover-event-heading">
+                      <h3>{listing.name}</h3>
+                      <span
+                        className={`homepage-discover-event-chip ${
+                          listing.visibilityType === "open_paid" ? "paid" : "free"
+                        }`}
+                      >
+                        {listing.visibilityType === "open_paid" ? "Open Paid" : "Open Free"}
+                      </span>
+                    </div>
+                    <p className="homepage-discover-event-date">
+                      {formatDateTimeRange(listing.startDateTime, listing.endDateTime)}
+                    </p>
+                    <div className="homepage-discover-event-footer">
+                      <span>{listing.locationSummary ?? "Location coming soon"}</span>
+                      <strong>{listing.priceLabel}</strong>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            ) : (
+              <p className="homepage-discover-events-state">No upcoming open tailgates yet.</p>
+            )}
+          </div>
         </div>
       </section>
 
@@ -532,100 +617,56 @@ export default function Home() {
                   <span>Upcoming listings</span>
                   {buffaloListings.length > 0 ? <small>{buffaloListings.length} live</small> : null}
                 </div>
-                {buffaloListingsLoading ? (
+                {openListingsLoading ? (
                   <p className="homepage-partner-listing-state">Loading listings...</p>
-                ) : buffaloListingsError ? (
-                  <p className="homepage-partner-listing-state">{buffaloListingsError}</p>
-                ) : activeBuffaloListingItem ? (
-                  <>
-                    <Link
-                      to={`/tailgates/${activeBuffaloListingItem.id}`}
-                      className="homepage-partner-listing-panel"
-                      aria-label={`View ${activeBuffaloListingItem.name}`}
-                    >
-                      <div
-                        className={`homepage-partner-listing-media ${
-                          activeBuffaloListingItem.coverImageUrl === DEFAULT_PARTNER_LISTING_COVER
-                            ? "is-logo"
-                            : "has-image"
-                        }`}
+                ) : openListingsError ? (
+                  <p className="homepage-partner-listing-state">{openListingsError}</p>
+                ) : buffaloListings.length > 0 ? (
+                  <div className="homepage-partner-listings-scroll">
+                    {buffaloListings.map((listing) => (
+                      <Link
+                        key={listing.id}
+                        to={`/tailgates/${listing.id}`}
+                        className="homepage-partner-listing-panel"
+                        aria-label={`View ${listing.name}`}
                       >
-                        <img src={activeBuffaloListingItem.coverImageUrl} alt="" loading="lazy" />
-                      </div>
-                      <div className="homepage-partner-listing-heading">
-                        <h4>{activeBuffaloListingItem.name}</h4>
-                        <span
-                          className={`homepage-partner-listing-chip ${
-                            activeBuffaloListingItem.visibilityType === "open_paid"
-                              ? "paid"
-                              : "free"
+                        <div
+                          className={`homepage-partner-listing-media ${
+                            listing.coverImageUrl === DEFAULT_PARTNER_LISTING_COVER
+                              ? "is-logo"
+                              : "has-image"
                           }`}
                         >
-                          {activeBuffaloListingItem.visibilityType === "open_paid"
-                            ? "Open Paid"
-                            : "Open Free"}
-                        </span>
-                      </div>
-                      <p className="homepage-partner-listing-date">
-                        {formatDateTimeRange(
-                          activeBuffaloListingItem.startDateTime,
-                          activeBuffaloListingItem.endDateTime
-                        )}
-                      </p>
-                      <div className="homepage-partner-listing-body">
-                        <div className="homepage-partner-listing-copy">
-                          <p>
-                            {activeBuffaloListingItem.locationSummary ?? "Location coming soon"}
-                          </p>
-                          <p className="homepage-partner-listing-size">
-                            {activeBuffaloListingItem.confirmedCount} confirmed
-                          </p>
+                          <img src={listing.coverImageUrl} alt="" loading="lazy" />
                         </div>
-                        <div className="homepage-partner-listing-meta">
-                          <strong>{activeBuffaloListingItem.priceLabel}</strong>
-                          <span>View</span>
+                        <div className="homepage-partner-listing-heading">
+                          <h4>{listing.name}</h4>
+                          <span
+                            className={`homepage-partner-listing-chip ${
+                              listing.visibilityType === "open_paid" ? "paid" : "free"
+                            }`}
+                          >
+                            {listing.visibilityType === "open_paid" ? "Open Paid" : "Open Free"}
+                          </span>
                         </div>
-                      </div>
-                    </Link>
-                    {buffaloListings.length > 1 ? (
-                      <div className="homepage-partner-listing-controls">
-                        <span className="homepage-partner-listing-count">
-                          Listing {activeBuffaloListing + 1} of {buffaloListings.length}
-                        </span>
-                        <button
-                          type="button"
-                          aria-label="Show previous Buffalo Tailgates listing"
-                          onClick={showPreviousBuffaloListing}
-                        >
-                          {"<"}
-                        </button>
-                        <div
-                          className="homepage-partner-listing-dots"
-                          aria-label="Buffalo Tailgates listing selector"
-                        >
-                          {buffaloListings.map((listing, index) => (
-                            <button
-                              key={listing.id}
-                              type="button"
-                              className={index === activeBuffaloListing ? "active" : ""}
-                              aria-label={`Show Buffalo Tailgates listing ${index + 1}`}
-                              aria-current={index === activeBuffaloListing ? "true" : undefined}
-                              onClick={() => setActiveBuffaloListing(index)}
-                            >
-                              {index + 1}
-                            </button>
-                          ))}
+                        <p className="homepage-partner-listing-date">
+                          {formatDateTimeRange(listing.startDateTime, listing.endDateTime)}
+                        </p>
+                        <div className="homepage-partner-listing-body">
+                          <div className="homepage-partner-listing-copy">
+                            <p>{listing.locationSummary ?? "Location coming soon"}</p>
+                            <p className="homepage-partner-listing-size">
+                              {listing.confirmedCount} confirmed
+                            </p>
+                          </div>
+                          <div className="homepage-partner-listing-meta">
+                            <strong>{listing.priceLabel}</strong>
+                            <span>View</span>
+                          </div>
                         </div>
-                        <button
-                          type="button"
-                          aria-label="Show next Buffalo Tailgates listing"
-                          onClick={showNextBuffaloListing}
-                        >
-                          {">"}
-                        </button>
-                      </div>
-                    ) : null}
-                  </>
+                      </Link>
+                    ))}
+                  </div>
                 ) : (
                   <p className="homepage-partner-listing-state">
                     No upcoming open listings yet.
@@ -634,10 +675,19 @@ export default function Home() {
               </div>
             </div>
             <div className="homepage-partner-carousel" aria-label="Buffalo Tailgates photos">
-              <img
-                src={buffaloTailgatesImages[activeBuffaloImage].src}
-                alt={buffaloTailgatesImages[activeBuffaloImage].alt}
-              />
+              <div className="homepage-partner-carousel-slides">
+                {buffaloTailgatesImages.map((image, index) => (
+                  <img
+                    key={image.src}
+                    className={`homepage-partner-carousel-image ${
+                      index === activeBuffaloImage ? "active" : ""
+                    }`}
+                    src={image.src}
+                    alt={index === activeBuffaloImage ? image.alt : ""}
+                    aria-hidden={index === activeBuffaloImage ? undefined : "true"}
+                  />
+                ))}
+              </div>
               <div className="homepage-partner-carousel-controls">
                 <button
                   type="button"

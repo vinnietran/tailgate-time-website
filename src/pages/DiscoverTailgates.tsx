@@ -20,6 +20,8 @@ import { resolveLocationLabel } from "../utils/location";
 
 type ViewMode = "list" | "map";
 type MapPanelMode = "results" | "details";
+type DiscoverDateFilter = "all" | "today" | "tomorrow" | "weekend" | "next7" | "custom";
+type DiscoverPriceFilter = "all" | "free" | "paid";
 
 type LatLng = {
   lat: number;
@@ -29,6 +31,7 @@ type LatLng = {
 type DiscoverTailgateRecord = {
   id: string;
   eventName: string;
+  hostName?: string;
   startDateTime: Date | null;
   endDateTime?: Date | null;
   visibilityType: "open_free" | "open_paid";
@@ -55,6 +58,19 @@ const DEFAULT_RADIUS_MILES = 50;
 const EARTH_RADIUS_MILES = 3958.8;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const PUBLIC_DISCOVER_VISIBILITY_TYPES = ["open_free", "open_paid"] as const;
+const DISCOVER_DATE_FILTERS: Array<{ value: DiscoverDateFilter; label: string }> = [
+  { value: "all", label: "Any date" },
+  { value: "today", label: "Today" },
+  { value: "tomorrow", label: "Tomorrow" },
+  { value: "weekend", label: "This weekend" },
+  { value: "next7", label: "Next 7 days" },
+  { value: "custom", label: "Custom" }
+];
+const DISCOVER_PRICE_FILTERS: Array<{ value: DiscoverPriceFilter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "free", label: "Free" },
+  { value: "paid", label: "Paid" }
+];
 const MAPS_API_KEY = (
   import.meta.env.MAPS_API_KEY ??
   import.meta.env.VITE_MAPS_API_KEY ??
@@ -230,6 +246,104 @@ function resolveLocationSummary(data: Record<string, unknown>) {
     location.lotName,
     location.venueName
   );
+}
+
+function resolveHostName(data: Record<string, unknown>) {
+  const host = asRecord(data.host);
+  const hostProfile = asRecord(data.hostProfile);
+  return firstString(
+    data.hostName,
+    data.hostDisplayName,
+    data.displayName,
+    data.hostDisplayNameSnapshot,
+    host?.displayName,
+    host?.name,
+    hostProfile?.displayName,
+    hostProfile?.name
+  );
+}
+
+function startOfLocalDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function addLocalDays(date: Date, days: number) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+}
+
+function parseDateInput(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const [year, month, day] = trimmed.split("-").map(Number);
+  if (!year || !month || !day) return null;
+
+  const parsed = new Date(year, month - 1, day);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isEndDateBeforeStartDate(startDate: string, endDate: string) {
+  const parsedStart = parseDateInput(startDate);
+  const parsedEnd = parseDateInput(endDate);
+  if (!parsedStart || !parsedEnd) return false;
+  return parsedEnd.getTime() < parsedStart.getTime();
+}
+
+function getWeekendRange(now: Date) {
+  const today = startOfLocalDay(now);
+  const dayOfWeek = today.getDay();
+
+  if (dayOfWeek === 0) {
+    return { start: today, end: addLocalDays(today, 1) };
+  }
+  if (dayOfWeek === 6) {
+    return { start: today, end: addLocalDays(today, 2) };
+  }
+
+  const daysUntilSaturday = 6 - dayOfWeek;
+  const start = addLocalDays(today, daysUntilSaturday);
+  return { start, end: addLocalDays(start, 2) };
+}
+
+function matchesDateFilter(
+  item: DiscoverTailgateRecord,
+  filter: DiscoverDateFilter,
+  now: Date,
+  customStartDate = "",
+  customEndDate = ""
+) {
+  const startTime = item.startDateTime?.getTime();
+  if (typeof startTime !== "number" || Number.isNaN(startTime)) return false;
+
+  const today = startOfLocalDay(now);
+  let range: { start: Date; end: Date } | null = null;
+
+  if (filter === "custom") {
+    const parsedStart = parseDateInput(customStartDate);
+    const parsedEnd = parseDateInput(customEndDate);
+    if (!parsedStart && !parsedEnd) return true;
+    if (isEndDateBeforeStartDate(customStartDate, customEndDate)) return false;
+
+    if (parsedStart && startTime < startOfLocalDay(parsedStart).getTime()) {
+      return false;
+    }
+    if (parsedEnd && startTime >= addLocalDays(startOfLocalDay(parsedEnd), 1).getTime()) {
+      return false;
+    }
+    return true;
+  } else if (filter === "today") {
+    range = { start: today, end: addLocalDays(today, 1) };
+  } else if (filter === "tomorrow") {
+    const tomorrow = addLocalDays(today, 1);
+    range = { start: tomorrow, end: addLocalDays(tomorrow, 1) };
+  } else if (filter === "weekend") {
+    range = getWeekendRange(now);
+  } else if (filter === "next7") {
+    range = { start: now, end: new Date(now.getTime() + 7 * DAY_IN_MS) };
+  }
+
+  if (!range) return true;
+  return startTime >= range.start.getTime() && startTime < range.end.getTime();
 }
 
 function resolveDescription(data: Record<string, unknown>) {
@@ -594,6 +708,7 @@ function toDiscoverTailgateRecord(
   return {
     id,
     eventName: firstString(data.eventName, data.name, data.title) ?? "Untitled Tailgate",
+    hostName: resolveHostName(data),
     startDateTime,
     endDateTime,
     visibilityType,
@@ -632,6 +747,7 @@ function fromMockTailgates(): DiscoverTailgateRecord[] {
       return item.startDateTime.getTime() >= nowTime;
     })
     .map((item, index): DiscoverTailgateRecord => {
+      const mockData = asRecord(item) ?? {};
       const visibilityType: DiscoverTailgateRecord["visibilityType"] =
         item.visibilityType === "open_paid" ? "open_paid" : "open_free";
       const confirmedAttendanceCount =
@@ -657,6 +773,7 @@ function fromMockTailgates(): DiscoverTailgateRecord[] {
       return {
         id: item.id,
         eventName: item.name,
+        hostName: resolveHostName(mockData) ?? "Demo Host",
         startDateTime: item.startDateTime,
         visibilityType,
         coverImageUrl: item.coverImageUrl ?? DEFAULT_TAILGATE_COVER_IMAGE,
@@ -1002,6 +1119,12 @@ export default function DiscoverTailgates() {
 
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [searchText, setSearchText] = useState("");
+  const [dateFilter, setDateFilter] = useState<DiscoverDateFilter>("all");
+  const [customDateStart, setCustomDateStart] = useState("");
+  const [customDateEnd, setCustomDateEnd] = useState("");
+  const [priceFilter, setPriceFilter] = useState<DiscoverPriceFilter>("all");
+  const [hostSearchText, setHostSearchText] = useState("");
+  const [hideSoldOut, setHideSoldOut] = useState(false);
   const [searchInputFocused, setSearchInputFocused] = useState(false);
   const [searching, setSearching] = useState(false);
   const [locating, setLocating] = useState(false);
@@ -1278,7 +1401,9 @@ export default function DiscoverTailgates() {
   }, [reloadKey]);
 
   const tailgates = useMemo(() => {
-    const nowTime = Date.now();
+    const now = new Date();
+    const nowTime = now.getTime();
+    const hostQuery = hostSearchText.trim().toLowerCase();
 
     const enriched: DiscoverTailgate[] = sourceTailgates
       .filter((item) => {
@@ -1308,7 +1433,7 @@ export default function DiscoverTailgates() {
         };
       });
 
-    const filtered = center
+    const locationFiltered = center
       ? enriched.filter(
           (item) =>
             Boolean(item.coords) &&
@@ -1316,6 +1441,15 @@ export default function DiscoverTailgates() {
             item.distanceMiles <= DEFAULT_RADIUS_MILES
         )
       : enriched;
+
+    const filtered = locationFiltered.filter((item) => {
+      if (!matchesDateFilter(item, dateFilter, now, customDateStart, customDateEnd)) return false;
+      if (priceFilter === "free" && item.visibilityType !== "open_free") return false;
+      if (priceFilter === "paid" && item.visibilityType !== "open_paid") return false;
+      if (hideSoldOut && item.isSoldOut) return false;
+      if (hostQuery && !item.hostName?.toLowerCase().includes(hostQuery)) return false;
+      return true;
+    });
 
     return filtered.sort((a, b) => {
       if (center) {
@@ -1328,7 +1462,16 @@ export default function DiscoverTailgates() {
       const bDate = b.startDateTime?.getTime() ?? Number.POSITIVE_INFINITY;
       return aDate - bDate;
     });
-  }, [center, sourceTailgates]);
+  }, [
+    center,
+    customDateEnd,
+    customDateStart,
+    dateFilter,
+    hideSoldOut,
+    hostSearchText,
+    priceFilter,
+    sourceTailgates
+  ]);
 
   useEffect(
     () => () => {
@@ -1424,6 +1567,26 @@ export default function DiscoverTailgates() {
       setMapPanelMode("results");
     }
   }, [viewMode]);
+
+  const trimmedHostSearchText = hostSearchText.trim();
+  const activeFilterCount = [
+    dateFilter !== "all",
+    priceFilter !== "all",
+    trimmedHostSearchText.length > 0,
+    hideSoldOut
+  ].filter(Boolean).length;
+  const hasActiveDiscoverFilters = activeFilterCount > 0;
+  const customDateRangeInvalid =
+    dateFilter === "custom" && isEndDateBeforeStartDate(customDateStart, customDateEnd);
+  const customDateRangeErrorId = "discover-custom-date-range-error";
+  const clearDiscoverFilters = useCallback(() => {
+    setDateFilter("all");
+    setCustomDateStart("");
+    setCustomDateEnd("");
+    setPriceFilter("all");
+    setHostSearchText("");
+    setHideSoldOut(false);
+  }, []);
 
   const hasGoogleMapsKey = MAPS_API_KEY.length > 0;
   const {
@@ -1586,6 +1749,10 @@ export default function DiscoverTailgates() {
     : centerSource === "gps" || centerLabel === "Your location"
     ? "Near you"
     : `Near ${centerLabel ?? "this area"}`;
+  const resultCountLabel =
+    loadingState === "initial"
+      ? "Loading..."
+      : `${tailgates.length} tailgate${tailgates.length === 1 ? "" : "s"}`;
 
   const renderEmptyState = () => {
     if (error) {
@@ -1594,6 +1761,31 @@ export default function DiscoverTailgates() {
           <p className="discover-empty-title">{error}</p>
           <button className="primary-button" type="button" onClick={handleRetry}>
             Retry
+          </button>
+        </div>
+      );
+    }
+
+    if (customDateRangeInvalid) {
+      return (
+        <div className="discover-empty-state">
+          <p className="discover-empty-title">Check the custom date range.</p>
+          <p className="discover-empty-subtitle">
+            End date must be on or after the from date.
+          </p>
+        </div>
+      );
+    }
+
+    if (hasActiveDiscoverFilters) {
+      return (
+        <div className="discover-empty-state">
+          <p className="discover-empty-title">No tailgates match these filters.</p>
+          <p className="discover-empty-subtitle">
+            Try a wider date range, show both free and paid events, or clear the host search.
+          </p>
+          <button className="primary-button" type="button" onClick={clearDiscoverFilters}>
+            Clear filters
           </button>
         </div>
       );
@@ -1640,9 +1832,9 @@ export default function DiscoverTailgates() {
               {loadingState === "initial" ? <span className="discover-header-loading">Loading...</span> : null}
             </div>
           </div>
-          <button type="button" className="discover-filter-button" disabled>
-            Filters
-          </button>
+          <div className="discover-result-count" aria-live="polite">
+            {resultCountLabel}
+          </div>
         </div>
 
         <div className="discover-search-section">
@@ -1713,6 +1905,115 @@ export default function DiscoverTailgates() {
           >
             {locating ? "Locating..." : "Use my location"}
           </button>
+          <div className="discover-filter-panel" aria-label="Discover filters">
+            <div className="discover-filter-panel-header">
+              <span>
+                Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+              </span>
+              <button
+                type="button"
+                className="discover-clear-filters"
+                onClick={clearDiscoverFilters}
+                disabled={!hasActiveDiscoverFilters}
+              >
+                Clear filters
+              </button>
+            </div>
+            <div className="discover-filter-grid">
+              <fieldset className="discover-filter-group discover-filter-group-wide">
+                <legend>Date</legend>
+                <div className="discover-filter-chip-row">
+                  {DISCOVER_DATE_FILTERS.map((filter) => (
+                    <button
+                      key={filter.value}
+                      type="button"
+                      className={`discover-filter-chip ${
+                        dateFilter === filter.value ? "active" : ""
+                      }`}
+                      aria-pressed={dateFilter === filter.value}
+                      onClick={() => setDateFilter(filter.value)}
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                </div>
+                {dateFilter === "custom" ? (
+                  <div className="discover-custom-date-range">
+                    <label className="discover-custom-date-field">
+                      <span>From</span>
+                      <input
+                        type="date"
+                        value={customDateStart}
+                        onChange={(event) => {
+                          setDateFilter("custom");
+                          setCustomDateStart(event.target.value);
+                        }}
+                      />
+                    </label>
+                    <label className="discover-custom-date-field">
+                      <span>To</span>
+                      <input
+                        type="date"
+                        min={customDateStart || undefined}
+                        value={customDateEnd}
+                        aria-invalid={customDateRangeInvalid ? "true" : undefined}
+                        aria-describedby={
+                          customDateRangeInvalid ? customDateRangeErrorId : undefined
+                        }
+                        onChange={(event) => {
+                          setDateFilter("custom");
+                          setCustomDateEnd(event.target.value);
+                        }}
+                      />
+                    </label>
+                    {customDateRangeInvalid ? (
+                      <p
+                        className="discover-custom-date-error"
+                        id={customDateRangeErrorId}
+                      >
+                        End date must be on or after the from date.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </fieldset>
+              <fieldset className="discover-filter-group">
+                <legend>Entry</legend>
+                <div className="discover-filter-chip-row">
+                  {DISCOVER_PRICE_FILTERS.map((filter) => (
+                    <button
+                      key={filter.value}
+                      type="button"
+                      className={`discover-filter-chip ${
+                        priceFilter === filter.value ? "active" : ""
+                      }`}
+                      aria-pressed={priceFilter === filter.value}
+                      onClick={() => setPriceFilter(filter.value)}
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+              <label className="discover-host-filter">
+                <span>Host</span>
+                <input
+                  className="text-input discover-host-filter-input"
+                  placeholder="Search host name"
+                  value={hostSearchText}
+                  onChange={(event) => setHostSearchText(event.target.value)}
+                />
+              </label>
+              <label className="discover-availability-filter">
+                <input
+                  type="checkbox"
+                  checked={hideSoldOut}
+                  onChange={(event) => setHideSoldOut(event.target.checked)}
+                />
+                <span>Hide sold out</span>
+              </label>
+            </div>
+          </div>
         </div>
 
         {error && tailgates.length > 0 ? <p className="discover-inline-error">{error}</p> : null}
@@ -1818,6 +2119,7 @@ export default function DiscoverTailgates() {
                             <span className="discover-map-result-main">
                               <strong>{item.eventName}</strong>
                               <small>{formatDiscoverDate(item.startDateTime, item.endDateTime)}</small>
+                              {item.hostName ? <small>Hosted by {item.hostName}</small> : null}
                             </span>
                             <span className="discover-map-result-price">
                               {item.priceLabel}
@@ -1936,6 +2238,9 @@ export default function DiscoverTailgates() {
                         </span>
                       </div>
                       <p>{formatDiscoverDate(item.startDateTime, item.endDateTime)}</p>
+                      {item.hostName ? (
+                        <p className="discover-card-host">Hosted by {item.hostName}</p>
+                      ) : null}
                     </div>
                   </div>
                   <div className="discover-card-body">
