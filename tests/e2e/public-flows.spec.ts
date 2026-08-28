@@ -31,6 +31,26 @@ test.describe("Public flows", () => {
     await expect(page.getByRole("button", { name: /use my location/i })).toBeVisible();
   });
 
+  test("discover supports direct links to location-filtered results", async ({ page }) => {
+    await page.goto(
+      "/#/discover?lat=40.4468&lng=-79.9901&location=Pittsburgh%2C%20PA&utm_campaign=pittsburgh"
+    );
+
+    await expect(page.getByText("Near Pittsburgh, PA")).toBeVisible();
+    await expect(page.getByPlaceholder("Search by ZIP, city, or address")).toHaveValue(
+      "Pittsburgh, PA"
+    );
+    await expect(page.getByText("Sunday Tailgate vs. Chiefs")).toBeVisible();
+    await expect(page).toHaveURL(/utm_campaign=pittsburgh/);
+  });
+
+  test("discover ignores invalid location coordinates", async ({ page }) => {
+    await page.goto("/#/discover?lat=200&lng=-79.9901&location=Invalid");
+
+    await expect(page.getByText("Set a location")).toBeVisible();
+    await expect(page.getByPlaceholder("Search by ZIP, city, or address")).toHaveValue("");
+  });
+
   test("invite RSVP hides and ignores plus-guest count when host did not allow guests", async ({
     page
   }) => {

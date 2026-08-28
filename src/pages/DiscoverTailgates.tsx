@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { getBlob, getDownloadURL, ref } from "firebase/storage";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import tailgateTimeLogo from "../../ttnobg.png";
 import AppShell from "../components/AppShell";
 import { PublicTopNav } from "../components/PublicTopNav";
@@ -77,6 +77,7 @@ const MAPS_API_KEY = (
   ""
 ).trim();
 const DEFAULT_TAILGATE_COVER_IMAGE = tailgateTimeLogo;
+const MAX_DISCOVER_LOCATION_LABEL_LENGTH = 160;
 
 const MOCK_COORDS: LatLng[] = [
   { lat: 40.4453, lng: -80.0155 },
@@ -84,6 +85,52 @@ const MOCK_COORDS: LatLng[] = [
   { lat: 40.437, lng: -80.0012 },
   { lat: 40.4512, lng: -79.9872 }
 ];
+
+type DiscoverUrlLocation = {
+  coords: LatLng;
+  label: string;
+};
+
+function parseDiscoverUrlLocation(search: string): DiscoverUrlLocation | null {
+  const params = new URLSearchParams(search);
+  if (!params.has("lat") || !params.has("lng")) {
+    return null;
+  }
+
+  const rawLat = params.get("lat")?.trim() ?? "";
+  const rawLng = params.get("lng")?.trim() ?? "";
+  if (!rawLat || !rawLng) {
+    return null;
+  }
+
+  const lat = Number(rawLat);
+  const lng = Number(rawLng);
+
+  if (
+    !Number.isFinite(lat) ||
+    lat < -90 ||
+    lat > 90 ||
+    !Number.isFinite(lng) ||
+    lng < -180 ||
+    lng > 180
+  ) {
+    return null;
+  }
+
+  const requestedLabel = (params.get("location") ?? "").trim();
+  const label = requestedLabel
+    ? requestedLabel.slice(0, MAX_DISCOVER_LOCATION_LABEL_LENGTH)
+    : `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+
+  return {
+    coords: { lat, lng },
+    label
+  };
+}
+
+function formatDiscoverCoordinate(value: number) {
+  return Number(value.toFixed(6)).toString();
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -1022,19 +1069,26 @@ function requestBrowserLocation(): Promise<LatLng | null> {
 export default function DiscoverTailgates() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const routerLocation = useLocation();
+  const urlLocation = useMemo(
+    () => parseDiscoverUrlLocation(routerLocation.search),
+    [routerLocation.search]
+  );
 
   const [sourceTailgates, setSourceTailgates] = useState<DiscoverTailgateRecord[]>([]);
   const [loadingState, setLoadingState] = useState<"initial" | "idle">("initial");
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
-  const [center, setCenter] = useState<LatLng | null>(null);
-  const [centerLabel, setCenterLabel] = useState<string | null>(null);
-  const [centerSource, setCenterSource] = useState<"gps" | "manual" | null>(null);
+  const [center, setCenter] = useState<LatLng | null>(() => urlLocation?.coords ?? null);
+  const [centerLabel, setCenterLabel] = useState<string | null>(() => urlLocation?.label ?? null);
+  const [centerSource, setCenterSource] = useState<"gps" | "manual" | null>(() =>
+    urlLocation ? "manual" : null
+  );
   const [locationStatus, setLocationStatus] = useState<"idle" | "denied" | "unsupported">("idle");
 
   const [viewMode, setViewMode] = useState<ViewMode>("list");
-  const [searchText, setSearchText] = useState("");
+  const [searchText, setSearchText] = useState(() => urlLocation?.label ?? "");
   const [dateFilter, setDateFilter] = useState<DiscoverDateFilter>("all");
   const [customDateStart, setCustomDateStart] = useState("");
   const [customDateEnd, setCustomDateEnd] = useState("");
@@ -1064,6 +1118,18 @@ export default function DiscoverTailgates() {
   const [recoveringCoverImageByRaw, setRecoveringCoverImageByRaw] = useState<
     Record<string, boolean>
   >({});
+
+  useEffect(() => {
+    if (!urlLocation) return;
+
+    setCenter(urlLocation.coords);
+    setCenterLabel(urlLocation.label);
+    setCenterSource("manual");
+    setSearchText(urlLocation.label);
+    setSelectedId(null);
+    setMapPanelMode("results");
+    setError(null);
+  }, [urlLocation]);
 
   const clearCreatedCoverBlobUrls = () => {
     createdCoverBlobUrlsRef.current.forEach((blobUrl) => URL.revokeObjectURL(blobUrl));
@@ -1479,6 +1545,24 @@ export default function DiscoverTailgates() {
     ? `#/tailgates/${selectedMapTailgate.id}?embed=discover-map`
     : null;
 
+  const updateManualLocationUrl = useCallback(
+    (coords: LatLng, label: string) => {
+      const params = new URLSearchParams(routerLocation.search);
+      params.set("lat", formatDiscoverCoordinate(coords.lat));
+      params.set("lng", formatDiscoverCoordinate(coords.lng));
+      params.set("location", label.slice(0, MAX_DISCOVER_LOCATION_LABEL_LENGTH));
+
+      navigate(
+        {
+          pathname: routerLocation.pathname,
+          search: `?${params.toString()}`
+        },
+        { replace: true }
+      );
+    },
+    [navigate, routerLocation.pathname, routerLocation.search]
+  );
+
   const handleMapSelection = useCallback((id: string | null) => {
     setSelectedId(id);
     setMapPanelMode(id ? "details" : "results");
@@ -1496,12 +1580,18 @@ export default function DiscoverTailgates() {
       setCenter({ lat: resolved.lat, lng: resolved.lng });
       setCenterLabel(resolved.label);
       setCenterSource("manual");
+      updateManualLocationUrl({ lat: resolved.lat, lng: resolved.lng }, resolved.label);
       handleMapSelection(null);
       setError(null);
       clearLocationSuggestions();
       setSearchInputFocused(false);
     },
-    [clearLocationSuggestions, handleMapSelection, resolveLocationSuggestion]
+    [
+      clearLocationSuggestions,
+      handleMapSelection,
+      resolveLocationSuggestion,
+      updateManualLocationUrl
+    ]
   );
 
   const handleSearchSubmit = useCallback(async () => {
@@ -1523,6 +1613,7 @@ export default function DiscoverTailgates() {
       setCenter({ lat: result.lat, lng: result.lng });
       setCenterLabel(result.label);
       setCenterSource("manual");
+      updateManualLocationUrl({ lat: result.lat, lng: result.lng }, result.label);
       handleMapSelection(null);
       setError(null);
       clearLocationSuggestions();
@@ -1533,7 +1624,13 @@ export default function DiscoverTailgates() {
     } finally {
       setSearching(false);
     }
-  }, [clearLocationSuggestions, handleMapSelection, hasGoogleMapsKey, searchText]);
+  }, [
+    clearLocationSuggestions,
+    handleMapSelection,
+    hasGoogleMapsKey,
+    searchText,
+    updateManualLocationUrl
+  ]);
 
   const handleUseMyLocation = useCallback(async () => {
     if (!navigator.geolocation) {
