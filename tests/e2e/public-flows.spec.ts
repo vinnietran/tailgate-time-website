@@ -44,6 +44,19 @@ test.describe("Public flows", () => {
     await expect(page).toHaveURL(/utm_campaign=pittsburgh/);
   });
 
+  test("discover supports direct links to host-filtered results", async ({ page }) => {
+    await page.goto("/#/discover?host=Demo%20Host&utm_campaign=partner");
+
+    await expect(page.getByPlaceholder("Search host name")).toHaveValue("Demo Host");
+    await expect(page.getByText("Sunday Tailgate vs. Chiefs")).toBeVisible();
+    await expect(page).toHaveURL(/host=Demo(?:\+|%20)Host/);
+    await expect(page).toHaveURL(/utm_campaign=partner/);
+
+    await page.getByPlaceholder("Search host name").fill("Another Host");
+    await expect(page).toHaveURL(/host=Another(?:\+|%20)Host/);
+    await expect(page).toHaveURL(/utm_campaign=partner/);
+  });
+
   test("discover ignores invalid location coordinates", async ({ page }) => {
     await page.goto("/#/discover?lat=200&lng=-79.9901&location=Invalid");
 

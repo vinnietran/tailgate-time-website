@@ -78,6 +78,7 @@ const MAPS_API_KEY = (
 ).trim();
 const DEFAULT_TAILGATE_COVER_IMAGE = tailgateTimeLogo;
 const MAX_DISCOVER_LOCATION_LABEL_LENGTH = 160;
+const MAX_DISCOVER_HOST_QUERY_LENGTH = 120;
 
 const MOCK_COORDS: LatLng[] = [
   { lat: 40.4453, lng: -80.0155 },
@@ -126,6 +127,11 @@ function parseDiscoverUrlLocation(search: string): DiscoverUrlLocation | null {
     coords: { lat, lng },
     label
   };
+}
+
+function parseDiscoverUrlHost(search: string) {
+  const params = new URLSearchParams(search);
+  return (params.get("host") ?? "").trim().slice(0, MAX_DISCOVER_HOST_QUERY_LENGTH);
 }
 
 function formatDiscoverCoordinate(value: number) {
@@ -1074,6 +1080,10 @@ export default function DiscoverTailgates() {
     () => parseDiscoverUrlLocation(routerLocation.search),
     [routerLocation.search]
   );
+  const urlHost = useMemo(
+    () => parseDiscoverUrlHost(routerLocation.search),
+    [routerLocation.search]
+  );
 
   const [sourceTailgates, setSourceTailgates] = useState<DiscoverTailgateRecord[]>([]);
   const [loadingState, setLoadingState] = useState<"initial" | "idle">("initial");
@@ -1093,7 +1103,7 @@ export default function DiscoverTailgates() {
   const [customDateStart, setCustomDateStart] = useState("");
   const [customDateEnd, setCustomDateEnd] = useState("");
   const [priceFilter, setPriceFilter] = useState<DiscoverPriceFilter>("all");
-  const [hostSearchText, setHostSearchText] = useState("");
+  const [hostSearchText, setHostSearchText] = useState(() => urlHost);
   const [hideSoldOut, setHideSoldOut] = useState(false);
   const [searchInputFocused, setSearchInputFocused] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -1130,6 +1140,12 @@ export default function DiscoverTailgates() {
     setMapPanelMode("results");
     setError(null);
   }, [urlLocation]);
+
+  useEffect(() => {
+    setHostSearchText(urlHost);
+    setSelectedId(null);
+    setMapPanelMode("results");
+  }, [urlHost]);
 
   const clearCreatedCoverBlobUrls = () => {
     createdCoverBlobUrlsRef.current.forEach((blobUrl) => URL.revokeObjectURL(blobUrl));
@@ -1513,14 +1529,46 @@ export default function DiscoverTailgates() {
   const customDateRangeInvalid =
     dateFilter === "custom" && isEndDateBeforeStartDate(customDateStart, customDateEnd);
   const customDateRangeErrorId = "discover-custom-date-range-error";
+  const updateHostFilterUrl = useCallback(
+    (value: string) => {
+      const params = new URLSearchParams(routerLocation.search);
+      const normalized = value.trim().slice(0, MAX_DISCOVER_HOST_QUERY_LENGTH);
+
+      if (normalized) {
+        params.set("host", normalized);
+      } else {
+        params.delete("host");
+      }
+
+      const nextSearch = params.toString();
+      navigate(
+        {
+          pathname: routerLocation.pathname,
+          search: nextSearch ? `?${nextSearch}` : ""
+        },
+        { replace: true }
+      );
+    },
+    [navigate, routerLocation.pathname, routerLocation.search]
+  );
+
+  const updateHostFilter = useCallback(
+    (value: string) => {
+      setHostSearchText(value);
+      updateHostFilterUrl(value);
+    },
+    [updateHostFilterUrl]
+  );
+
   const clearDiscoverFilters = useCallback(() => {
     setDateFilter("all");
     setCustomDateStart("");
     setCustomDateEnd("");
     setPriceFilter("all");
     setHostSearchText("");
+    updateHostFilterUrl("");
     setHideSoldOut(false);
-  }, []);
+  }, [updateHostFilterUrl]);
 
   const hasGoogleMapsKey = MAPS_API_KEY.length > 0;
   const {
@@ -1966,7 +2014,7 @@ export default function DiscoverTailgates() {
                   className="text-input discover-host-filter-input"
                   placeholder="Search host name"
                   value={hostSearchText}
-                  onChange={(event) => setHostSearchText(event.target.value)}
+                  onChange={(event) => updateHostFilter(event.target.value)}
                 />
               </label>
               <label className="discover-availability-filter">

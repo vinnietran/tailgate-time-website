@@ -29,6 +29,7 @@ const BUFFALO_TAILGATES_LISTING_HOST =
   import.meta.env.VITE_FIREBASE_PROJECT_ID === "tailgatetime-prod"
     ? "Buffalo Tailgates"
     : "Vinnie Tranquillo";
+const EXPERIENCE_LISTING_HOST = "The Experience Event and Tailgate";
 const OPEN_LISTING_VISIBILITY_TYPES = ["open_free", "open_paid"] as const;
 const HOMEPAGE_DISCOVER_EVENT_LIMIT = 8;
 const DEFAULT_TAILGATE_LISTING_COVER = tailgateTimeLogo;
@@ -137,6 +138,46 @@ const buffaloTailgatesImages = [
     alt: "Buffalo Tailgates community event scene"
   }
 ];
+
+const experienceTailgateImages = [
+  {
+    src: "/images/events_experience/img_1.jpeg",
+    alt: "The Experience Event & Tailgate community gathered on game day"
+  },
+  {
+    src: "/images/events_experience/img_2.jpeg",
+    alt: "Guests playing games at The Experience Event & Tailgate"
+  },
+  {
+    src: "/images/events_experience/img_3.jpeg",
+    alt: "The Experience Event & Tailgate hospitality setup"
+  }
+];
+
+const featuredPartners = [
+  {
+    id: "buffalo-tailgates",
+    name: "Buffalo Tailgates",
+    shortName: "Buffalo Tailgates",
+    logo: "/images/buffalo_tailgates-logo.png",
+    description:
+      "Local game-day hosts bringing Bills fans together with easier planning, discovery, and check-in.",
+    location: "Buffalo, NY",
+    hostQuery: "Buffalo Tailgates",
+    images: buffaloTailgatesImages
+  },
+  {
+    id: "the-experience",
+    name: "The Experience Event & Tailgate",
+    shortName: "The Experience Event & Tailgate",
+    logo: "/images/events_experience/logo.png",
+    description:
+      "Elevated Ohio game-day events bringing fans together with food, entertainment, and memorable tailgate experiences.",
+    location: "Columbus, OH",
+    hostQuery: EXPERIENCE_LISTING_HOST,
+    images: experienceTailgateImages
+  }
+] as const;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -332,6 +373,10 @@ function isBuffaloTailgatesPartnerListing(listing: HomepageTailgateListing) {
   return listing.hostName?.toLowerCase() === BUFFALO_TAILGATES_LISTING_HOST.toLowerCase();
 }
 
+function isExperiencePartnerListing(listing: HomepageTailgateListing) {
+  return listing.hostName?.toLowerCase() === EXPERIENCE_LISTING_HOST.toLowerCase();
+}
+
 const discoverHighlights = [
   {
     title: "Find public tailgates fast",
@@ -352,11 +397,14 @@ const discoverHighlights = [
 
 export default function Home() {
   const { user } = useAuth();
-  const [activeBuffaloImage, setActiveBuffaloImage] = useState(0);
+  const [activePartnerImage, setActivePartnerImage] = useState(0);
+  const [activePartnerIndex, setActivePartnerIndex] = useState(0);
+  const [partnerRotationPaused, setPartnerRotationPaused] = useState(false);
   const [upcomingTailgateListings, setUpcomingTailgateListings] = useState<
     HomepageTailgateListing[]
   >([]);
   const [buffaloListings, setBuffaloListings] = useState<HomepageTailgateListing[]>([]);
+  const [experienceListings, setExperienceListings] = useState<HomepageTailgateListing[]>([]);
   const [openListingsLoading, setOpenListingsLoading] = useState(true);
   const [openListingsError, setOpenListingsError] = useState<string | null>(null);
 
@@ -364,6 +412,7 @@ export default function Home() {
     if (!db) {
       setUpcomingTailgateListings([]);
       setBuffaloListings([]);
+      setExperienceListings([]);
       setOpenListingsLoading(false);
       setOpenListingsError(null);
       return;
@@ -399,6 +448,13 @@ export default function Home() {
               : listing
           )
         );
+        setExperienceListings(
+          listings.filter(isExperiencePartnerListing).map((listing) =>
+            listing.coverImageUrl === DEFAULT_TAILGATE_LISTING_COVER
+              ? { ...listing, coverImageUrl: "/images/events_experience/logo.png" }
+              : listing
+          )
+        );
         setOpenListingsLoading(false);
         setOpenListingsError(null);
       },
@@ -406,6 +462,7 @@ export default function Home() {
         console.error("Failed to load homepage tailgate listings", error);
         setUpcomingTailgateListings([]);
         setBuffaloListings([]);
+        setExperienceListings([]);
         setOpenListingsLoading(false);
         setOpenListingsError("Upcoming tailgates are not available right now.");
       }
@@ -416,6 +473,26 @@ export default function Home() {
 
   useEffect(() => {
     if (
+      partnerRotationPaused ||
+      (typeof window !== "undefined" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+    ) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setActivePartnerIndex((current) =>
+        current === featuredPartners.length - 1 ? 0 : current + 1
+      );
+    }, 10000);
+
+    return () => window.clearInterval(intervalId);
+  }, [partnerRotationPaused]);
+
+  useEffect(() => {
+    setActivePartnerImage(0);
+
+    if (
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches
     ) {
@@ -423,24 +500,33 @@ export default function Home() {
     }
 
     const intervalId = window.setInterval(() => {
-      setActiveBuffaloImage((current) =>
-        current === buffaloTailgatesImages.length - 1 ? 0 : current + 1
+      setActivePartnerImage((current) =>
+        current === featuredPartners[activePartnerIndex].images.length - 1 ? 0 : current + 1
       );
     }, 5000);
 
     return () => window.clearInterval(intervalId);
-  }, []);
+  }, [activePartnerIndex]);
 
-  const showPreviousBuffaloImage = () => {
-    setActiveBuffaloImage((current) =>
-      current === 0 ? buffaloTailgatesImages.length - 1 : current - 1
+  const showPreviousPartnerImage = () => {
+    setActivePartnerImage((current) =>
+      current === 0 ? activePartner.images.length - 1 : current - 1
     );
   };
 
-  const showNextBuffaloImage = () => {
-    setActiveBuffaloImage((current) =>
-      current === buffaloTailgatesImages.length - 1 ? 0 : current + 1
+  const showNextPartnerImage = () => {
+    setActivePartnerImage((current) =>
+      current === activePartner.images.length - 1 ? 0 : current + 1
     );
+  };
+
+  const activePartner = featuredPartners[activePartnerIndex];
+  const activePartnerListings =
+    activePartner.id === "buffalo-tailgates" ? buffaloListings : experienceListings;
+
+  const selectPartner = (index: number) => {
+    setActivePartnerIndex(index);
+    setPartnerRotationPaused(true);
   };
 
   return (
@@ -588,42 +674,77 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="homepage-partners-shell">
+      <section
+        className="homepage-partners-shell"
+        onMouseEnter={() => setPartnerRotationPaused(true)}
+        onMouseLeave={() => setPartnerRotationPaused(false)}
+      >
         <div className="homepage-section-header homepage-partners-header">
-          <p className="homepage-kicker">Featured Partner</p>
-          <h2>Buffalo Tailgates brings game day together.</h2>
+          <p className="homepage-kicker">Featured Partners</p>
+          <h2>Meet the communities making game day better.</h2>
           <p>
-            TailgateTime is proud to feature Buffalo Tailgates, a Bills game-day community helping
-            fans connect before kickoff.
+            Explore the partners using TailgateTime to bring fans together before kickoff.
           </p>
         </div>
+        <div className="homepage-partner-tabs" role="tablist" aria-label="Featured partners">
+          {featuredPartners.map((partner, index) => (
+            <button
+              key={partner.id}
+              type="button"
+              role="tab"
+              id={`partner-tab-${partner.id}`}
+              aria-controls={`partner-panel-${partner.id}`}
+              aria-selected={index === activePartnerIndex}
+              className={index === activePartnerIndex ? "active" : ""}
+              onClick={() => selectPartner(index)}
+            >
+              <span className="homepage-partner-tab-logo">
+                <img src={partner.logo} alt="" />
+              </span>
+              <span className="homepage-partner-tab-copy">
+                <strong>{partner.shortName}</strong>
+                <small>Featured community</small>
+              </span>
+              <span className="homepage-partner-tab-marker" aria-hidden="true" />
+            </button>
+          ))}
+        </div>
         <div className="homepage-partners-grid">
-          <article className="homepage-partner-card featured">
+          <article
+            className="homepage-partner-card featured"
+            role="tabpanel"
+            id={`partner-panel-${activePartner.id}`}
+            aria-labelledby={`partner-tab-${activePartner.id}`}
+          >
             <div className="homepage-partner-content">
               <div className="homepage-partner-topline">
                 <span className="homepage-partner-logo">
-                  <img src="/images/buffalo_tailgates-logo.png" alt="Buffalo Tailgates logo" />
+                  <img src={activePartner.logo} alt={`${activePartner.name} logo`} />
                 </span>
                 <span>Featured partner</span>
               </div>
-              <h3>Buffalo Tailgates</h3>
-              <p>
-                Local game-day hosts bringing Bills fans together with easier planning, discovery,
-                and check-in.
-              </p>
-              <small>Buffalo, NY</small>
-              <div className="homepage-partner-listings" aria-label="Buffalo Tailgates listings">
+              <h3>{activePartner.name}</h3>
+              <p>{activePartner.description}</p>
+              <small>{activePartner.location}</small>
+              <div className="homepage-partner-listings" aria-label={`${activePartner.name} listings`}>
                 <div className="homepage-partner-listings-header">
                   <span>Upcoming listings</span>
-                  {buffaloListings.length > 0 ? <small>{buffaloListings.length} live</small> : null}
+                  <div>
+                    {activePartnerListings.length > 0 ? (
+                      <small>{activePartnerListings.length} live</small>
+                    ) : null}
+                    <Link to={`/discover?host=${encodeURIComponent(activePartner.hostQuery)}`}>
+                      View all
+                    </Link>
+                  </div>
                 </div>
                 {openListingsLoading ? (
                   <p className="homepage-partner-listing-state">Loading listings...</p>
                 ) : openListingsError ? (
                   <p className="homepage-partner-listing-state">{openListingsError}</p>
-                ) : buffaloListings.length > 0 ? (
+                ) : activePartnerListings.length > 0 ? (
                   <div className="homepage-partner-listings-scroll">
-                    {buffaloListings.map((listing) => (
+                    {activePartnerListings.map((listing) => (
                       <Link
                         key={listing.id}
                         to={`/tailgates/${listing.id}`}
@@ -674,51 +795,51 @@ export default function Home() {
                 )}
               </div>
             </div>
-            <div className="homepage-partner-carousel" aria-label="Buffalo Tailgates photos">
+            <div className="homepage-partner-carousel" aria-label={`${activePartner.name} photos`}>
               <div className="homepage-partner-carousel-slides">
-                {buffaloTailgatesImages.map((image, index) => (
+                {activePartner.images.map((image, index) => (
                   <img
                     key={image.src}
                     className={`homepage-partner-carousel-image ${
-                      index === activeBuffaloImage ? "active" : ""
+                      index === activePartnerImage ? "active" : ""
                     }`}
                     src={image.src}
-                    alt={index === activeBuffaloImage ? image.alt : ""}
-                    aria-hidden={index === activeBuffaloImage ? undefined : "true"}
+                    alt={index === activePartnerImage ? image.alt : ""}
+                    aria-hidden={index === activePartnerImage ? undefined : "true"}
                   />
                 ))}
               </div>
               <div className="homepage-partner-carousel-controls">
                 <button
                   type="button"
-                  aria-label="Show previous Buffalo Tailgates photo"
-                  onClick={showPreviousBuffaloImage}
+                  aria-label={`Show previous ${activePartner.name} photo`}
+                  onClick={showPreviousPartnerImage}
                 >
                   {"<"}
                 </button>
                 <button
                   type="button"
-                  aria-label="Show next Buffalo Tailgates photo"
-                  onClick={showNextBuffaloImage}
+                  aria-label={`Show next ${activePartner.name} photo`}
+                  onClick={showNextPartnerImage}
                 >
                   {">"}
                 </button>
               </div>
               <div
                 className="homepage-partner-carousel-dots"
-                aria-label="Buffalo Tailgates photo selector"
+                aria-label={`${activePartner.name} photo selector`}
               >
                 <span className="homepage-partner-carousel-count">
-                  Photo {activeBuffaloImage + 1} of {buffaloTailgatesImages.length}
+                  Photo {activePartnerImage + 1} of {activePartner.images.length}
                 </span>
-                {buffaloTailgatesImages.map((image, index) => (
+                {activePartner.images.map((image, index) => (
                   <button
                     key={image.src}
                     type="button"
-                    className={index === activeBuffaloImage ? "active" : ""}
-                    aria-label={`Show Buffalo Tailgates photo ${index + 1}`}
-                    aria-current={index === activeBuffaloImage ? "true" : undefined}
-                    onClick={() => setActiveBuffaloImage(index)}
+                    className={index === activePartnerImage ? "active" : ""}
+                    aria-label={`Show ${activePartner.name} photo ${index + 1}`}
+                    aria-current={index === activePartnerImage ? "true" : undefined}
+                    onClick={() => setActivePartnerImage(index)}
                   >
                     {index + 1}
                   </button>
@@ -726,6 +847,14 @@ export default function Home() {
               </div>
             </div>
           </article>
+          <div className="homepage-partner-pagination" aria-live="polite">
+            <span>Partner {activePartnerIndex + 1} of {featuredPartners.length}</span>
+            <div aria-hidden="true">
+              {featuredPartners.map((partner, index) => (
+                <span key={partner.id} className={index === activePartnerIndex ? "active" : ""} />
+              ))}
+            </div>
+          </div>
         </div>
       </section>
 
