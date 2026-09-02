@@ -17,6 +17,8 @@ function getAnalyticsPageTitle(pathname: string) {
     { path: "/", title: "TailgateTime Home" },
     { path: "/login", title: "TailgateTime Login" },
     { path: "/dashboard", title: "TailgateTime Host Dashboard" },
+    { path: "/dashboard/host-page", title: "Your Host Page | TailgateTime" },
+    { path: "/hosts/:slug", title: "Host | TailgateTime" },
     { path: "/tailgates/new", title: "Create Tailgate" },
     { path: "/account", title: "Account & Payouts" },
     { path: "/account/payout-history", title: "Payout History" },

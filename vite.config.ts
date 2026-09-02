@@ -41,7 +41,7 @@ fbq('track', 'PageView');`
 
 export default defineConfig(({ mode }) => ({
   plugins: [react(), metaPixelPlugin(mode === "tailgatetime-prod")],
-  base: "./",
+  base: "/",
   envPrefix: ["VITE_", "MAPS_"],
   server: {
     proxy: {

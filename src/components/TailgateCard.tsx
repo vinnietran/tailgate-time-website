@@ -160,7 +160,7 @@ export default function TailgateCard({
           className="link-button card-link-button"
           onClick={(e) => {
             e.stopPropagation();
-            const shareUrl = `${window.location.origin}/#/tailgates/${event.id}`;
+            const shareUrl = `${window.location.origin}/tailgates/${event.id}`;
             navigator.clipboard?.writeText(shareUrl);
           }}
         >

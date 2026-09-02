@@ -29,7 +29,9 @@ test.describe("Host flows", () => {
   test("paid event details render multiple ticket types", async ({ page }) => {
     await page.goto("/#/tailgates/tg-004");
 
-    await expect(page.getByRole("combobox", { name: /ticket type/i })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /general admission \$45/i })
+    ).toBeVisible();
     await expect(page.getByText("Quantity").first()).toBeVisible();
     const increaseQuantityButton = page.getByRole("button", {
       name: /increase ticket quantity/i

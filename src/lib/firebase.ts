@@ -107,6 +107,15 @@ export function trackPageView(path: string) {
   });
 }
 
+export function trackCustomEvent(
+  name: string,
+  params?: Record<string, string | number | boolean | undefined>
+) {
+  void getAnalyticsInstance().then((analytics) => {
+    if (analytics) logEvent(analytics, name, params);
+  });
+}
+
 export async function getAppCheckTokenValue() {
   if (!appCheckInstance) {
     return null;
