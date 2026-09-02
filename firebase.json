@@ -29,10 +29,33 @@
         ]
       }
     ],
+    "rewrites": [
+      {
+        "source": "/sitemap-hosts.xml",
+        "function": {
+          "functionId": "renderHostSitemap",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/hosts/**",
+        "function": {
+          "functionId": "renderHostPage",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
     "ignore": [
       "firebase.json",
       "**/.*",
       "**/node_modules/**"
     ]
+  },
+  "functions": {
+    "source": "functions"
   }
 }

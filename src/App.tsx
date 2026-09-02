@@ -26,6 +26,8 @@ const Release20 = lazy(() => import("./pages/Release20"));
 const AdminSpotlight = lazy(() => import("./pages/AdminSpotlight"));
 const AdminMetrics = lazy(() => import("./pages/AdminMetrics"));
 const AdminOps = lazy(() => import("./pages/AdminOps"));
+const PublicHostPage = lazy(() => import("./pages/PublicHostPage"));
+const HostPageSettings = lazy(() => import("./pages/HostPageSettings"));
 
 function RouteFallback() {
   return <div className="page-shell" aria-busy="true" />;
@@ -49,6 +51,15 @@ export default function App() {
             element={withSuspense(
               <ProtectedRoute>
                 <HostDashboard />
+              </ProtectedRoute>
+            )}
+          />
+          <Route path="/hosts/:slug" element={withSuspense(<PublicHostPage />)} />
+          <Route
+            path="/dashboard/host-page"
+            element={withSuspense(
+              <ProtectedRoute>
+                <HostPageSettings />
               </ProtectedRoute>
             )}
           />

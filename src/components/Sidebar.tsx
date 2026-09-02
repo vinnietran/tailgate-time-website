@@ -43,6 +43,12 @@ const navItems: SidebarNavItem[] = [
     icon: <IconSpark size={18} />
   },
   {
+    to: "/dashboard/host-page",
+    label: "Host Page",
+    meta: "Public profile",
+    icon: <IconSpark size={18} />
+  },
+  {
     to: "/account",
     label: "Account & Payouts",
     meta: "Billing",

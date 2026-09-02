@@ -3713,7 +3713,7 @@ export default function TailgateDetails() {
   };
 
   const copyEventShareLink = () => {
-    const shareUrl = `${window.location.origin}/#/tailgates/${detail?.id ?? id ?? ""}`;
+    const shareUrl = `${window.location.origin}/tailgates/${detail?.id ?? id ?? ""}`;
     navigator.clipboard?.writeText(shareUrl);
   };
 
@@ -3802,15 +3802,11 @@ export default function TailgateDetails() {
 
     try {
       const purchaseIdPlaceholder = "{purchaseId}";
-      const returnBaseUrl = `${window.location.origin}${window.location.pathname}`;
-      const successUrl = `${returnBaseUrl}?purchaseId=${encodeURIComponent(
-        purchaseIdPlaceholder
-      )}#/tailgates/${encodeURIComponent(detail.id)}?checkout=success&purchaseId=${encodeURIComponent(
+      const returnBaseUrl = `${window.location.origin}/tailgates/${encodeURIComponent(detail.id)}`;
+      const successUrl = `${returnBaseUrl}?checkout=success&purchaseId=${encodeURIComponent(
         purchaseIdPlaceholder
       )}`;
-      const cancelUrl = `${returnBaseUrl}?purchaseId=${encodeURIComponent(
-        purchaseIdPlaceholder
-      )}#/tailgates/${encodeURIComponent(detail.id)}?checkout=cancel&purchaseId=${encodeURIComponent(
+      const cancelUrl = `${returnBaseUrl}?checkout=cancel&purchaseId=${encodeURIComponent(
         purchaseIdPlaceholder
       )}`;
       const createSession = httpsCallable(

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import TopBar from "../components/TopBar";
@@ -7,6 +7,7 @@ import { useAuth } from "../hooks/useAuth";
 import { useDashboardTailgates } from "../hooks/useDashboardTailgates";
 import { useDashboardSpotlight } from "../hooks/useDashboardSpotlight";
 import { useUserProfile } from "../hooks/useUserProfile";
+import { useHostProfile } from "../hooks/useHostProfile";
 import { formatDateTimeRange, getFirstName } from "../utils/format";
 import {
   buildTailgatePricingSummary,
@@ -16,6 +17,8 @@ import {
 
 type TimeframeFilter = "upcoming" | "past";
 type QuickFilter = "all" | "hosting" | "paidOut" | "attending";
+
+const HOST_PAGE_ANNOUNCEMENT_VERSION = "host-page-v2";
 
 function isCancelledStatus(status?: string) {
   const raw = (status ?? "").toLowerCase();
@@ -34,6 +37,24 @@ export default function HostDashboard() {
   const email = profile?.email ?? user?.email;
   const firstName = getFirstName(displayName ?? email);
   const { upcomingTailgates, pastTailgates, loading, error } = useDashboardTailgates(user?.uid);
+  const { profile: hostProfile } = useHostProfile(Boolean(user));
+  const hostPagePromptStorageKey = user?.uid
+    ? `tt.feature-announcement.${HOST_PAGE_ANNOUNCEMENT_VERSION}.${user.uid}`
+    : null;
+  const [hostPagePromptDismissed, setHostPagePromptDismissed] = useState(true);
+
+  useEffect(() => {
+    if (!hostPagePromptStorageKey) {
+      setHostPagePromptDismissed(true);
+      return;
+    }
+    setHostPagePromptDismissed(window.localStorage.getItem(hostPagePromptStorageKey) === "1");
+  }, [hostPagePromptStorageKey]);
+
+  const dismissHostPagePrompt = () => {
+    if (hostPagePromptStorageKey) window.localStorage.setItem(hostPagePromptStorageKey, "1");
+    setHostPagePromptDismissed(true);
+  };
 
   const [timeframeFilter, setTimeframeFilter] = useState<TimeframeFilter>("upcoming");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
@@ -144,6 +165,37 @@ export default function HostDashboard() {
 
   return (
     <AppShell header={<TopBar firstName={firstName} />} showHeaderActions={false}>
+      {hostProfile && !hostPagePromptDismissed ? (
+        <section className="host-page-setup-banner" aria-labelledby="host-page-announcement-title">
+          <button
+            type="button"
+            className="host-page-setup-dismiss"
+            aria-label="Dismiss Host Page announcement"
+            onClick={dismissHostPagePrompt}
+          >
+            ×
+          </button>
+          <div>
+            <p className="host-page-setup-kicker">New · Public Host Pages</p>
+            <h2 id="host-page-announcement-title">
+              {hostProfile.publicPageSetupCompleted
+                ? "Your Host Page has a fresh new look"
+                : "Your new public Host Page is ready"}
+            </h2>
+            <p>
+              {hostProfile.publicPageSetupCompleted
+                ? "Show off your gallery, share your story, and give fans one polished place to see every tailgate you’re hosting."
+                : "Fans can now learn about your tailgates and see every upcoming event from one shareable page."}
+            </p>
+          </div>
+          <div className="host-page-setup-actions">
+            <Link className="primary-button" to="/dashboard/host-page" onClick={dismissHostPagePrompt}>
+              {hostProfile.publicPageSetupCompleted ? "Customize Host Page" : "Set Up My Host Page"}
+            </Link>
+            <a className="outline-button" href={`/hosts/${hostProfile.slug}`} target="_blank" rel="noreferrer" onClick={dismissHostPagePrompt}>View Page</a>
+          </div>
+        </section>
+      ) : null}
       <section className="dashboard-top-panels">
         <article className="dashboard-next-card">
           <div className="dashboard-next-header">

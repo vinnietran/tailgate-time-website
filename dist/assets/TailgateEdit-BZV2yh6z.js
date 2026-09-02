@@ -1,0 +1,1 @@
+import{S as r,j as t,a7 as a}from"./index-BZd35gpI.js";function n(){const{id:e}=r();if(!e)return t.jsx(a,{to:"/dashboard",replace:!0});const o=e?encodeURIComponent(e):"";return t.jsx(a,{to:`/tailgates/${o}?edit=event`,replace:!0})}export{n as default};

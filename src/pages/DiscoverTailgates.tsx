@@ -1590,7 +1590,7 @@ export default function DiscoverTailgates() {
     [mapPins, selectedId]
   );
   const selectedMapDetailsHref = selectedMapTailgate
-    ? `#/tailgates/${selectedMapTailgate.id}?embed=discover-map`
+    ? `/tailgates/${selectedMapTailgate.id}?embed=discover-map`
     : null;
 
   const updateManualLocationUrl = useCallback(

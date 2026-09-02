@@ -16,7 +16,7 @@ test.describe("Public flows", () => {
 
     await page.getByRole("link", { name: /explore tailgates/i }).click();
 
-    await expect(page).toHaveURL(/#\/discover$/);
+    await expect(page).toHaveURL(/\/discover$/);
     await expect(page.getByRole("heading", { name: "Discover" })).toBeVisible();
     await expect(page.getByText("Sunday Tailgate vs. Chiefs")).toBeVisible();
     await expect(page.getByText("Thursday Night Pre-Game Social")).toBeVisible();
