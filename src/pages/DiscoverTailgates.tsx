@@ -695,6 +695,7 @@ function toDiscoverTailgateRecord(
     eventSizeSummary: buildEventSizeSummary({
       visibilityType,
       confirmedCount: confirmedAttendanceCount,
+      capacity,
       ticketPriceCents: priceCents,
       ticketTypes
     })
@@ -757,6 +758,7 @@ function fromMockTailgates(): DiscoverTailgateRecord[] {
         eventSizeSummary: buildEventSizeSummary({
           visibilityType,
           confirmedCount: confirmedAttendanceCount,
+          capacity,
           ticketPriceCents: item.ticketPriceCents,
           ticketTypes
         })

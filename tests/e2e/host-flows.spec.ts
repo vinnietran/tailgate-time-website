@@ -26,6 +26,15 @@ test.describe("Host flows", () => {
     await expect(page.getByRole("heading", { name: "Meet-up Spot" })).toBeVisible();
   });
 
+  test("invite-only event hosts can add co-hosts", async ({ page }) => {
+    await page.goto("/#/tailgates/tg-003");
+
+    await expect(page.getByRole("heading", { name: "Co-hosts" })).toBeVisible();
+    await expect(page.getByText(/help manage invites, the guest list, and the event/i)).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Co-host phone number" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Text co-host" })).toBeVisible();
+  });
+
   test("paid event details render multiple ticket types", async ({ page }) => {
     await page.goto("/#/tailgates/tg-004");
 

@@ -55,6 +55,7 @@ import {
   buildEventSizeSummary,
   formatTicketPricingLabel,
   estimateHostPayout,
+  getOpenEventSizeLabel,
   getTailgateCrowdTag,
   getVisibilityLabel
 } from "../utils/tailgate";
@@ -2996,11 +2997,16 @@ export default function TailgateDetails() {
       : null;
   const eventSizeBaseCount =
     detail?.visibilityType === "open_paid" ? confirmedPaidCount : attendeeCounts.goingHeadcount;
-  const eventSizeTag = getTailgateCrowdTag(eventSizeBaseCount);
+  const eventSizeTag = detail
+    ? detail.visibilityType === "open_free" || detail.visibilityType === "open_paid"
+      ? getOpenEventSizeLabel(detail.capacity)
+      : getTailgateCrowdTag(eventSizeBaseCount)
+    : "Large";
   const eventSizeSummary = detail
     ? buildEventSizeSummary({
         visibilityType: detail.visibilityType,
         confirmedCount: eventSizeBaseCount,
+        capacity: detail.capacity,
         ticketPriceCents: lowestTicketPriceCents,
         ticketTypes: eventTicketTypes
       })
@@ -3104,7 +3110,9 @@ export default function TailgateDetails() {
     !hostBroadcastSending &&
     Boolean(sendHostTextToAttendees);
   const canManageCoHosts =
-    isEventHost && detail?.visibilityType === "open_paid" && status !== "cancelled";
+    isEventHost &&
+    (detail?.visibilityType === "open_paid" || detail?.visibilityType === "private") &&
+    status !== "cancelled";
   const activeCoHostIds = detail?.coHostIds.filter((value) => value !== detail.hostId) ?? [];
   const pendingCoHostInvites = detail?.coHostInvites ?? [];
   useEffect(() => {
@@ -5591,8 +5599,9 @@ export default function TailgateDetails() {
                       </div>
                       {activeCoHostIds.length === 0 && pendingCoHostInvites.length === 0 ? (
                         <p className="tailgate-command-cohost-empty">
-                          Add co-hosts by phone so they can help manage the event and check in
-                          tickets.
+                          {detail.visibilityType === "private"
+                            ? "Add co-hosts by phone so they can help manage invites, the guest list, and the event."
+                            : "Add co-hosts by phone so they can help manage the event and check in tickets."}
                         </p>
                       ) : null}
                       {activeCoHostIds.length > 0 ? (
@@ -5680,8 +5689,10 @@ export default function TailgateDetails() {
                             <h4>Add by phone</h4>
                             <p>
                               <strong>{hostDisplayName}</strong> has added you as a co-host for{" "}
-                              <strong>{detail.eventName}</strong>. You can now assist with checking
-                              in guest tickets.
+                              <strong>{detail.eventName}</strong>. You can now assist with{" "}
+                              {detail.visibilityType === "private"
+                                ? "managing invites, the guest list, and event details."
+                                : "checking in guest tickets."}
                             </p>
                             <p>
                               If this phone number is not tied to a TailgateTime account yet, they
@@ -5693,6 +5704,7 @@ export default function TailgateDetails() {
                               className="text-input"
                               type="tel"
                               inputMode="tel"
+                              aria-label="Co-host phone number"
                               value={coHostPhoneDraft}
                               onChange={(event) =>
                                 setCoHostPhoneDraft(formatPhoneInput(event.target.value))
