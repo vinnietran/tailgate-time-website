@@ -52,13 +52,34 @@ export function getTailgateCrowdTag(count: number): string {
   return "XL • Packed House";
 }
 
+export function getOpenEventSizeLabel(capacity?: number | null): "Small" | "Medium" | "Large" {
+  if (typeof capacity !== "number" || !Number.isFinite(capacity) || capacity <= 0) {
+    return "Large";
+  }
+
+  const safeCapacity = Math.floor(capacity);
+  if (safeCapacity <= 4) {
+    return "Small";
+  }
+  if (safeCapacity <= 19) {
+    return "Medium";
+  }
+  return "Large";
+}
+
 export function buildEventSizeSummary(input: {
   visibilityType: VisibilityType;
   confirmedCount: number;
+  capacity?: number | null;
   ticketPriceCents?: number | null;
   ticketTypes?: EventTicketType[];
 }) {
-  const summary = `Event size: ${getTailgateCrowdTag(input.confirmedCount)}`;
+  const isOpenEvent =
+    input.visibilityType === "open_free" || input.visibilityType === "open_paid";
+  const sizeLabel = isOpenEvent
+    ? getOpenEventSizeLabel(input.capacity)
+    : getTailgateCrowdTag(input.confirmedCount);
+  const summary = `Event size: ${sizeLabel}`;
   if (input.visibilityType !== "open_paid") {
     return summary;
   }
