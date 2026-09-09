@@ -20,6 +20,7 @@ const SOURCE_NAMES = new Set([
   "search",
   "map",
   "host_page",
+  "host_share",
   "game_page",
   "direct_link",
   "instagram",

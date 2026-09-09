@@ -57,6 +57,57 @@ test.describe("Host flows", () => {
     await expect(page.getByText("From $45").first()).toBeVisible();
   });
 
+  test("new paid tailgate success screen leads to promotion tools", async ({ page }) => {
+    await page.goto("/tailgates/tg-001/created");
+
+    await expect(page.getByRole("heading", { name: "Tailgate Successfully Created" })).toBeVisible();
+    await expect(page.getByText(/share your ticket link/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Share Tailgate" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "View Tailgate" })).toHaveAttribute("href", "/tailgates/tg-001");
+    await page.getByRole("link", { name: "Share Ticket Link & QR" }).click();
+    await expect(page.getByRole("heading", { name: "Share Your Tailgate" })).toBeVisible();
+    await expect(page.getByText("Open Paid")).toBeVisible();
+  });
+
+  test("open free event has attendee-focused promotion tools", async ({ page }) => {
+    await page.goto("/tailgates/tg-002/promote");
+
+    await expect(page.getByRole("heading", { name: "Share Your Tailgate" })).toBeVisible();
+    await expect(page.getByText(/copy your public event link or create a QR code/i)).toBeVisible();
+    await expect(page.getByText("Open Free")).toBeVisible();
+  });
+
+  test("invite-only event does not expose public promotion tools", async ({ page }) => {
+    await page.goto("/tailgates/tg-003/promote");
+
+    await expect(page.getByRole("heading", { name: "This tailgate is invite-only" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Share Your Tailgate" })).toHaveCount(0);
+  });
+
+  test("unrelated user cannot access host promotion controls", async ({ page }) => {
+    await page.goto("/tailgates/tg-004/promote");
+
+    await expect(page.getByRole("heading", { name: "You don’t have access to these tools" })).toBeVisible();
+  });
+
+  test("promotion links are attributed and QR generation remains available", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.goto("/tailgates/tg-001/promote");
+    await page.getByRole("button", { name: "Copy Link" }).click();
+    await expect(page.getByText("Event link copied.")).toBeVisible();
+
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    expect(copied).toContain("/tailgates/tg-001");
+    expect(copied).toContain("source=host_share");
+    expect(copied).toContain("utm_campaign=host_copy_link");
+
+    await page.getByRole("button", { name: "View QR Code" }).click();
+    const qr = page.getByRole("img", { name: /QR code for Sunday Tailgate/i });
+    await expect(qr).toBeVisible();
+    await expect(qr).toHaveAttribute("src", /^data:image\/png;base64,/);
+
+  });
+
   test("create wizard can progress from type to review for a private event", async ({
     page
   }) => {

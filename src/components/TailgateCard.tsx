@@ -41,6 +41,9 @@ export default function TailgateCard({
   const showHostMetrics = isHost === true;
   const isPaid = event.visibilityType === "open_paid";
   const showPaidOutChip = isHost === true && isPaid && event.payoutStatus === "sent";
+  const showPromotion =
+    isHost === true &&
+    (event.visibilityType === "open_free" || event.visibilityType === "open_paid");
 
   return (
     <article
@@ -154,6 +157,17 @@ export default function TailgateCard({
             }}
           >
             Open check-in
+          </button>
+        ) : null}
+        {showPromotion ? (
+          <button
+            className="link-button card-link-button"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/tailgates/${event.id}/promote`);
+            }}
+          >
+            Share event
           </button>
         ) : null}
         <button

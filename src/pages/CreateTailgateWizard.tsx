@@ -37,6 +37,7 @@ import {
 import { buildConnectCallbackUrl } from "../utils/connectCallbacks";
 import { resolveLocationLabel } from "../utils/location";
 import { estimateHostPayout } from "../utils/tailgate";
+import type { PromotionEvent } from "../features/promotion/promotion";
 
 type WizardStep = {
   key: "type" | "tickets" | "details" | "location" | "invite" | "review";
@@ -1812,6 +1813,7 @@ export default function CreateTailgateWizard() {
   };
 
   const handleCreateTailgate = async () => {
+    if (saving) return;
     const stepsToValidate = activeWizardSteps.filter((step) => step.key !== "review");
     const stepValidity = stepsToValidate.map((step) => validateStep(step.key));
     const firstInvalidStep = stepValidity.findIndex((isValid) => !isValid);
@@ -2119,7 +2121,19 @@ export default function CreateTailgateWizard() {
         console.warn("Firestore is not configured; tailgate saved locally only.");
       }
       setSuccessMessage("Tailgate created successfully.");
-      navigate(`/tailgates/${newId}`);
+      const createdEvent: PromotionEvent = {
+        id: newId,
+        name: eventName.trim(),
+        hostId: user.uid,
+        hostName: hostName || "TailgateTime Host",
+        coHostIds: [],
+        visibilityType,
+        startDateTime,
+        endDateTime,
+        locationSummary: normalizedLocationSummary,
+        coverImageUrl: uploadedCoverImageUrls[0]
+      };
+      navigate(`/tailgates/${newId}/created`, { replace: true, state: { event: createdEvent } });
     } catch (error) {
       console.error("Failed to create tailgate", error);
       setErrors((prev) => ({ ...prev, submit: "Unable to create tailgate. Try again." }));

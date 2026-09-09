@@ -13,6 +13,7 @@ export type PaidTailgateAnalyticsSource =
   | "search"
   | "map"
   | "host_page"
+  | "host_share"
   | "game_page"
   | "direct_link"
   | "instagram"
@@ -42,6 +43,7 @@ const SOURCES = new Set<PaidTailgateAnalyticsSource>([
   "search",
   "map",
   "host_page",
+  "host_share",
   "game_page",
   "direct_link",
   "instagram",

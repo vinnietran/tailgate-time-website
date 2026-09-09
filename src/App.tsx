@@ -29,6 +29,8 @@ const AdminOps = lazy(() => import("./pages/AdminOps"));
 const AdminTicketAnalytics = lazy(() => import("./pages/AdminTicketAnalytics"));
 const PublicHostPage = lazy(() => import("./pages/PublicHostPage"));
 const HostPageSettings = lazy(() => import("./pages/HostPageSettings"));
+const HostPromotionPage = lazy(() => import("./pages/HostPromotionPage"));
+const TailgateCreatedSuccess = lazy(() => import("./pages/TailgateCreatedSuccess"));
 
 function RouteFallback() {
   return <div className="page-shell" aria-busy="true" />;
@@ -113,6 +115,22 @@ export default function App() {
             element={withSuspense(
               <ProtectedRoute>
                 <TailgateEdit />
+              </ProtectedRoute>
+            )}
+          />
+          <Route
+            path="/tailgates/:id/created"
+            element={withSuspense(
+              <ProtectedRoute>
+                <TailgateCreatedSuccess />
+              </ProtectedRoute>
+            )}
+          />
+          <Route
+            path="/tailgates/:id/promote"
+            element={withSuspense(
+              <ProtectedRoute>
+                <HostPromotionPage />
               </ProtectedRoute>
             )}
           />
