@@ -20,6 +20,7 @@ import {
 import tailgateTimeLogo from "../../ttnobg.png";
 import appStoreBadge from "../../screenshots/app-store-badge.svg";
 import playStoreBadge from "../../screenshots/google-play-badge.png";
+import { paidTailgateLink, trackPaidTailgateImpressions } from "../lib/paidTailgateAnalytics";
 
 const IOS_DOWNLOAD_URL =
   "https://apps.apple.com/us/app/tailgatetime/id6748784028";
@@ -524,6 +525,11 @@ export default function Home() {
   const activePartnerListings =
     activePartner.id === "buffalo-tailgates" ? buffaloListings : experienceListings;
 
+  useEffect(() => {
+    trackPaidTailgateImpressions(upcomingTailgateListings, "discover");
+    trackPaidTailgateImpressions(activePartnerListings, "host_page");
+  }, [activePartnerListings, upcomingTailgateListings]);
+
   const selectPartner = (index: number) => {
     setActivePartnerIndex(index);
     setPartnerRotationPaused(true);
@@ -634,7 +640,7 @@ export default function Home() {
                 {upcomingTailgateListings.map((listing) => (
                   <Link
                     key={listing.id}
-                    to={`/tailgates/${listing.id}`}
+                    to={paidTailgateLink(listing.id, "discover")}
                     className="homepage-discover-event-card"
                     aria-label={`View ${listing.name}`}
                   >
@@ -747,7 +753,7 @@ export default function Home() {
                     {activePartnerListings.map((listing) => (
                       <Link
                         key={listing.id}
-                        to={`/tailgates/${listing.id}`}
+                        to={paidTailgateLink(listing.id, "host_page")}
                         className="homepage-partner-listing-panel"
                         aria-label={`View ${listing.name}`}
                       >

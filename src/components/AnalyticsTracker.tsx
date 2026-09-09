@@ -35,6 +35,7 @@ function getAnalyticsPageTitle(pathname: string) {
     { path: "/user-guide", title: "User Guide" },
     { path: "/admin/spotlight", title: "Admin Spotlight" },
     { path: "/admin/metrics", title: "Admin Metrics" },
+    { path: "/admin/ticket-analytics", title: "Paid Event Analytics" },
     { path: "/admin/ops", title: "Admin Ops" }
   ];
 

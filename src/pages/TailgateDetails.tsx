@@ -71,6 +71,10 @@ import {
   resetClientRateLimit
 } from "../utils/abuseGuard";
 import { resolveLocationLabel } from "../utils/location";
+import {
+  capturePaidTailgateAttribution,
+  trackPaidTailgateEvent
+} from "../lib/paidTailgateAnalytics";
 
 const MAPS_API_KEY = (
   import.meta.env.MAPS_API_KEY ??
@@ -2373,6 +2377,19 @@ export default function TailgateDetails() {
     setCheckoutError(null);
   }, [detail?.id]);
 
+  const analyticsTailgateId = detail?.id;
+  const analyticsTailgateHostId = detail?.hostId;
+  const analyticsTailgateVisibility = detail?.visibilityType;
+
+  useEffect(() => {
+    if (!analyticsTailgateId || analyticsTailgateVisibility !== "open_paid") return;
+    trackPaidTailgateEvent("paid_tailgate_view", {
+      tailgateId: analyticsTailgateId,
+      hostId: analyticsTailgateHostId,
+      dedupeKey: `view:${analyticsTailgateId}`
+    });
+  }, [analyticsTailgateHostId, analyticsTailgateId, analyticsTailgateVisibility]);
+
   useEffect(() => {
     if (!detail || detail.visibilityType !== "open_paid" || detail.ticketTypes.length === 0) {
       setSelectedTicketTypeId(null);
@@ -2728,6 +2745,23 @@ export default function TailgateDetails() {
 
     return () => unsubscribe();
   }, [checkoutPurchaseId, checkoutResult]);
+
+  useEffect(() => {
+    if (
+      checkoutPurchaseStatus !== "confirmed" ||
+      !checkoutPurchaseId ||
+      !detail ||
+      detail.visibilityType !== "open_paid"
+    ) {
+      return;
+    }
+    trackPaidTailgateEvent("purchase_completed", {
+      tailgateId: detail.id,
+      hostId: detail.hostId,
+      purchaseId: checkoutPurchaseId,
+      dedupeKey: `purchase:${checkoutPurchaseId}`
+    });
+  }, [checkoutPurchaseId, checkoutPurchaseStatus, detail]);
 
   const attendeeCounts = useMemo(() => {
     if (!detail) {
@@ -4114,11 +4148,18 @@ export default function TailgateDetails() {
         firebaseFunctions,
         "createTailgateCheckoutSession"
       );
+      const attribution = capturePaidTailgateAttribution();
       const result = await createSession({
         tailgateId: detail.id,
         ticketTypeId: selectedTicketType.id,
         quantity: sanitizedQuantity,
         channel: "web",
+        source: attribution.source,
+        utm_source: attribution.source,
+        utm_medium: attribution.medium,
+        utm_campaign: attribution.campaign,
+        utmMedium: attribution.medium,
+        utmCampaign: attribution.campaign,
         successUrl,
         cancelUrl
       });
@@ -4131,6 +4172,16 @@ export default function TailgateDetails() {
         setCheckoutError("Checkout session unavailable. Please try again.");
         return;
       }
+
+      trackPaidTailgateEvent("checkout_started", {
+        tailgateId: detail.id,
+        hostId: detail.hostId,
+        ticketTypeId: selectedTicketType.id,
+        price: selectedTicketType.priceCents / 100,
+        quantity: sanitizedQuantity,
+        purchaseId: data.purchaseId ?? undefined,
+        dedupeKey: `checkout:${data.purchaseId ?? `${detail.id}:${selectedTicketType.id}:${sanitizedQuantity}`}`
+      });
 
       window.location.assign(data.checkoutUrl);
     } catch (checkoutFailure) {
@@ -7698,6 +7749,15 @@ export default function TailgateDetails() {
                 onChange={(nextValue) => {
                   setSelectedTicketTypeId(nextValue);
                   setCheckoutError(null);
+                  const ticketType = eventTicketTypes.find((item) => item.id === nextValue);
+                  trackPaidTailgateEvent("ticket_type_selected", {
+                    tailgateId: detail.id,
+                    hostId: detail.hostId,
+                    ticketTypeId: nextValue,
+                    price: ticketType ? ticketType.priceCents / 100 : undefined,
+                    quantity: ticketQuantity,
+                    dedupeKey: `selection:${detail.id}:${nextValue}`
+                  });
                 }}
               />
             </div>
@@ -7708,9 +7768,18 @@ export default function TailgateDetails() {
                   type="button"
                   className="secondary-button"
                   aria-label="Decrease ticket quantity"
-                  onClick={() =>
-                    setTicketQuantity((current) => Math.max(1, current - 1))
-                  }
+                  onClick={() => {
+                    const nextQuantity = Math.max(1, ticketQuantity - 1);
+                    setTicketQuantity(nextQuantity);
+                    trackPaidTailgateEvent("ticket_type_selected", {
+                      tailgateId: detail.id,
+                      hostId: detail.hostId,
+                      ticketTypeId: selectedTicketType.id,
+                      price: selectedTicketType.priceCents / 100,
+                      quantity: nextQuantity,
+                      dedupeKey: `selection:${detail.id}:${selectedTicketType.id}:${nextQuantity}`
+                    });
+                  }}
                   disabled={ticketQuantity <= 1}
                 >
                   -
@@ -7720,11 +7789,18 @@ export default function TailgateDetails() {
                   type="button"
                   className="secondary-button"
                   aria-label="Increase ticket quantity"
-                  onClick={() =>
-                    setTicketQuantity((current) =>
-                      Math.min(maxSelectableQuantity, current + 1)
-                    )
-                  }
+                  onClick={() => {
+                    const nextQuantity = Math.min(maxSelectableQuantity, ticketQuantity + 1);
+                    setTicketQuantity(nextQuantity);
+                    trackPaidTailgateEvent("ticket_type_selected", {
+                      tailgateId: detail.id,
+                      hostId: detail.hostId,
+                      ticketTypeId: selectedTicketType.id,
+                      price: selectedTicketType.priceCents / 100,
+                      quantity: nextQuantity,
+                      dedupeKey: `selection:${detail.id}:${selectedTicketType.id}:${nextQuantity}`
+                    });
+                  }}
                   disabled={ticketQuantity >= maxSelectableQuantity}
                 >
                   +

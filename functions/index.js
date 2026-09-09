@@ -2,6 +2,10 @@ const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const {
+  getPaidTailgateAnalyticsDashboard,
+  recordPaidTailgateAnalyticsEvent
+} = require("./paid-tailgate-analytics");
 
 initializeApp();
 const db = getFirestore();
@@ -438,11 +442,37 @@ exports.renderHostSitemap = onRequest({ region: REGION }, async (_request, respo
   response.status(200).set({ "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "public, max-age=3600, s-maxage=21600" }).send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>`);
 });
 
+exports.recordPaidTailgateAnalyticsEvent = onCall({ region: REGION }, async (request) => {
+  try {
+    return await recordPaidTailgateAnalyticsEvent(db, request);
+  } catch (error) {
+    console.error("paid_tailgate_analytics_record_failed", {
+      eventName: request.data?.eventName,
+      tailgateId: request.data?.tailgateId,
+      code: error?.code || "unknown"
+    });
+    throw error;
+  }
+});
+
+exports.getPaidTailgateAnalyticsDashboard = onCall({ region: REGION }, async (request) => {
+  try {
+    return await getPaidTailgateAnalyticsDashboard(db, request);
+  } catch (error) {
+    console.error("paid_tailgate_dashboard_failed", {
+      uid: request.auth?.uid || null,
+      code: error?.code || "unknown"
+    });
+    throw error;
+  }
+});
+
 module.exports._test = {
   normalizeSlug,
   publicProfile,
   eventVisibility,
   eventStart,
   requireAuth,
-  renderHtml
+  renderHtml,
+  paidTailgateAnalytics: require("./paid-tailgate-analytics")
 };

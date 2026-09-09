@@ -95,16 +95,17 @@ export function trackPageView(path: string) {
   }
 
   void getAnalyticsInstance().then((analytics) => {
-    if (!analytics) {
-      return;
+    if (!analytics) return;
+    try {
+      logEvent(analytics, "page_view", {
+        page_location: window.location.href,
+        page_path: path,
+        page_title: document.title
+      });
+    } catch (error) {
+      console.warn("Firebase page analytics failed", error);
     }
-
-    logEvent(analytics, "page_view", {
-      page_location: window.location.href,
-      page_path: path,
-      page_title: document.title
-    });
-  });
+  }).catch((error) => console.warn("Firebase page analytics failed", error));
 }
 
 export function trackCustomEvent(
@@ -112,8 +113,13 @@ export function trackCustomEvent(
   params?: Record<string, string | number | boolean | undefined>
 ) {
   void getAnalyticsInstance().then((analytics) => {
-    if (analytics) logEvent(analytics, name, params);
-  });
+    if (!analytics) return;
+    try {
+      logEvent(analytics, name, params);
+    } catch (error) {
+      console.warn("Firebase custom analytics failed", { name, error });
+    }
+  }).catch((error) => console.warn("Firebase custom analytics failed", { name, error }));
 }
 
 export async function getAppCheckTokenValue() {
