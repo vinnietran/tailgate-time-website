@@ -162,17 +162,17 @@ export default function NotificationPreferences() {
 
   return (
     <AppShell header={<div className="simple-header"><h1>Notification Preferences</h1></div>}>
-      <section className="payouts-page account-page-stack">
-        <article className="payouts-card account-hero-card">
+      <section className="payouts-page account-page-stack notification-preferences-page">
+        <article className="payouts-card account-hero-card notification-preferences-hero">
           <div className="account-page-badge">
             <IconBell size={16} />
             <span>Notifications</span>
           </div>
           <div className="account-hero-grid">
             <div>
-              <h2>Keep the right moments loud.</h2>
+              <h2>Choose what reaches you.</h2>
               <p className="section-subtitle">
-                Choose which updates should reach you first across invites, reminders, and hosting.
+                Control alerts for invitations, event activity, reminders, and hosting.
               </p>
             </div>
             <div className="account-hero-actions">
@@ -188,22 +188,22 @@ export default function NotificationPreferences() {
         </article>
 
         {!user ? (
-          <article className="payouts-card">
+          <article className="payouts-card notification-preferences-message-card">
             <p className="error-banner">Sign in to load and save your notification preferences.</p>
           </article>
         ) : loading ? (
-          <article className="payouts-card">
+          <article className="payouts-card notification-preferences-message-card">
             <p className="meta-muted">Loading your notification preferences...</p>
           </article>
         ) : (
           <>
             {error ? (
-              <article className="payouts-card">
+              <article className="payouts-card notification-preferences-message-card">
                 <p className="error-banner">{error}</p>
               </article>
             ) : null}
             {preferenceSections.map((section) => (
-              <article key={section.title} className="payouts-card">
+              <article key={section.title} className="payouts-card notification-preferences-card">
                 <div className="section-header">
                   <div>
                     <h2>{section.title}</h2>

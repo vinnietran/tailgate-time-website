@@ -20,6 +20,7 @@ import AppShell from "../components/AppShell";
 import {
   IconCalendar,
   IconCheckin,
+  IconCopy,
   IconDashboard,
   IconLocation,
   IconMessage,
@@ -217,6 +218,8 @@ type InlineEditDraft = {
   description: string;
   eventDate: string;
   eventStartTime: string;
+  eventEndDate: string;
+  eventEndTime: string;
   locationSummary: string;
   ticketPrice: string;
   capacity: string;
@@ -967,6 +970,34 @@ function combineDateAndTime(dateValue: string, timeValue: string) {
   return combined;
 }
 
+function updateInlineEditStart(
+  draft: InlineEditDraft,
+  changes: Partial<Pick<InlineEditDraft, "eventDate" | "eventStartTime">>
+) {
+  const previousStart = combineDateAndTime(draft.eventDate, draft.eventStartTime);
+  const previousEnd = combineDateAndTime(draft.eventEndDate, draft.eventEndTime);
+  const nextDraft = { ...draft, ...changes };
+  const nextStart = combineDateAndTime(nextDraft.eventDate, nextDraft.eventStartTime);
+
+  if (
+    !previousStart ||
+    !previousEnd ||
+    !nextStart ||
+    previousEnd.getTime() <= previousStart.getTime()
+  ) {
+    return nextDraft;
+  }
+
+  const shiftedEnd = new Date(
+    nextStart.getTime() + (previousEnd.getTime() - previousStart.getTime())
+  );
+  return {
+    ...nextDraft,
+    eventEndDate: toDateInput(shiftedEnd),
+    eventEndTime: toTimeInput(shiftedEnd)
+  };
+}
+
 function parsePriceToCents(value: string) {
   const normalized = value.replace(/[^0-9.]/g, "");
   if (!normalized) return null;
@@ -1530,6 +1561,7 @@ export default function TailgateDetails() {
   const timelineSectionRef = useRef<HTMLElement | null>(null);
   const quizSectionRef = useRef<HTMLElement | null>(null);
   const eventSnapshotSectionRef = useRef<HTMLElement | null>(null);
+  const participationSectionRef = useRef<HTMLDivElement | null>(null);
   const handledEditRouteRef = useRef(false);
   const attemptedCoverImageResolutionRef = useRef<Set<string>>(new Set());
   const attemptedCoverBlobFallbackRef = useRef<Set<string>>(new Set());
@@ -1615,6 +1647,8 @@ export default function TailgateDetails() {
     description: "",
     eventDate: "",
     eventStartTime: "",
+    eventEndDate: "",
+    eventEndTime: "",
     locationSummary: "",
     ticketPrice: "",
     capacity: ""
@@ -1643,6 +1677,9 @@ export default function TailgateDetails() {
     action: "add" | "remove";
   } | null>(null);
   const [coHostProfiles, setCoHostProfiles] = useState<Record<string, CoHostProfile>>({});
+  const [copyEventSaving, setCopyEventSaving] = useState(false);
+  const [copyEventFeedback, setCopyEventFeedback] =
+    useState<HostBroadcastFeedback | null>(null);
   const [isContactHostComposerOpen, setIsContactHostComposerOpen] = useState(false);
   const [contactHostMessage, setContactHostMessage] = useState("");
   const [contactHostSending, setContactHostSending] = useState(false);
@@ -2163,11 +2200,17 @@ export default function TailgateDetails() {
 
   const buildInlineEditDraft = (value: TailgateDetail): InlineEditDraft => {
     const start = value.startDateTime ?? value.eventTargetTime ?? new Date();
+    const end =
+      value.endDateTime && value.endDateTime.getTime() > start.getTime()
+        ? value.endDateTime
+        : new Date(start.getTime() + 3 * 60 * 60 * 1000);
     return {
       eventName: value.eventName,
       description: value.description ?? "",
       eventDate: toDateInput(start),
       eventStartTime: toTimeInput(start),
+      eventEndDate: toDateInput(end),
+      eventEndTime: toTimeInput(end),
       locationSummary:
         value.locationSummary ??
         resolveLocationString(value.locationRaw) ??
@@ -3293,6 +3336,18 @@ export default function TailgateDetails() {
       setInlineEditError("Set a valid event date and start time.");
       return;
     }
+    const endDateTime = combineDateAndTime(
+      inlineEditDraft.eventEndDate,
+      inlineEditDraft.eventEndTime
+    );
+    if (!endDateTime) {
+      setInlineEditError("Set a valid event end date and time.");
+      return;
+    }
+    if (endDateTime.getTime() <= startDateTime.getTime()) {
+      setInlineEditError("The event must end after it starts.");
+      return;
+    }
 
     const updates: Record<string, unknown> = {
       eventName: nextName,
@@ -3301,6 +3356,10 @@ export default function TailgateDetails() {
       startDateTime: startDateTime,
       dateTime: startDateTime,
       eventTargetTime: startDateTime,
+      endDateTime,
+      endAt: endDateTime,
+      eventEndAt: endDateTime,
+      tailgateEndAt: endDateTime,
       locationSummary: nextLocation,
       updatedAt: new Date()
     };
@@ -3449,6 +3508,240 @@ export default function TailgateDetails() {
       setInlineEditError("Unable to save event details. Please try again.");
     } finally {
       setInlineEditSaving(false);
+    }
+  };
+
+  const copyTailgateEvent = async () => {
+    if (!db || !id || !detail || !user?.uid) {
+      setCopyEventFeedback({ tone: "error", text: "Event copy is unavailable right now." });
+      return;
+    }
+    if (!isEventHost) {
+      setCopyEventFeedback({ tone: "error", text: "Only the primary host can copy this event." });
+      return;
+    }
+
+    setCopyEventSaving(true);
+    setCopyEventFeedback(null);
+
+    try {
+      const now = new Date();
+      const eventSnapshot = await getDoc(doc(db, "tailgateEvents", id));
+      const sourceData = eventSnapshot.exists()
+        ? (eventSnapshot.data() as Record<string, unknown>)
+        : {};
+      const sourceMetadata = asRecord(sourceData.metadata);
+      let copiedHostName = firstString(user.displayName, detail.hostName) ?? "Host";
+
+      try {
+        const hostProfile = await getDoc(doc(db, "users", user.uid));
+        if (hostProfile.exists()) {
+          const hostData = hostProfile.data() as Record<string, unknown>;
+          copiedHostName =
+            firstString(hostData.displayName, hostData.name, hostData.fullName, copiedHostName) ??
+            copiedHostName;
+        }
+      } catch (hostProfileError) {
+        console.warn("Failed to resolve host profile for copied tailgate", hostProfileError);
+      }
+
+      const copiedTitle = `${detail.eventName} (Copy)`;
+      const copiedCoverImageUrls = detail.coverImageUrls;
+      const primaryCover = copiedCoverImageUrls[0] ?? null;
+      const copiedStartDateTime = detail.startDateTime ?? detail.eventTargetTime;
+      const copiedTicketSalesCloseDaysBefore =
+        detail.visibilityType === "open_paid"
+          ? copiedStartDateTime && detail.ticketSalesCloseAt
+            ? Math.max(
+                0,
+                Math.round(
+                  (copiedStartDateTime.getTime() - detail.ticketSalesCloseAt.getTime()) /
+                    DAY_IN_MS
+                )
+              )
+            : 0
+          : null;
+      const copiedTicketSalesCloseAt =
+        copiedStartDateTime && copiedTicketSalesCloseDaysBefore !== null
+          ? new Date(
+              copiedStartDateTime.getTime() - copiedTicketSalesCloseDaysBefore * DAY_IN_MS
+            )
+          : null;
+      const copiedTicketTypes = Array.isArray(sourceData.ticketTypes)
+        ? sourceData.ticketTypes.map((ticketType, index) => {
+            const ticketTypeRecord = asRecord(ticketType);
+            if (!ticketTypeRecord) return ticketType;
+            return {
+              ...ticketTypeRecord,
+              sortOrder: coerceNumber(ticketTypeRecord.sortOrder) ?? index,
+              createdAt: ticketTypeRecord.createdAt ?? now,
+              updatedAt: now
+            };
+          })
+        : detail.ticketTypes.map((ticketType, index) => ({
+            ...ticketType,
+            sortOrder: ticketType.sortOrder ?? index,
+            createdAt: ticketType.createdAt ?? now,
+            updatedAt: now
+          }));
+      const copiedQuizQuestions = (
+        quizQuestions.length > 0 ? quizQuestions : detail.quiz?.questions ?? []
+      )
+        .filter((question) => question.questionText.trim() !== "")
+        .map((question) => ({
+          id: question.id,
+          questionText: question.questionText.trim(),
+          choices: question.choices.map((choice) => ({
+            id: choice.id,
+            text: choice.text.trim()
+          })),
+          correctChoiceId: question.correctChoiceId,
+          type: question.type
+        }));
+      const copiedQuizTitle = quizTitle.trim() || detail.quiz?.title.trim() || "";
+      const shouldCopyQuiz =
+        detail.visibilityType === "private" &&
+        copiedQuizTitle.length > 0 &&
+        copiedQuizQuestions.length > 0;
+      const scheduleStepsToCopy = timelineEnabledForEvent
+        ? timelineSteps.filter((step) => step.timestampStart.getTime() > 0)
+        : [];
+      const shouldCopySchedule = scheduleStepsToCopy.length > 0;
+
+      const copyPayload: Record<string, unknown> = {
+        ...sourceData,
+        eventName: copiedTitle,
+        name: copiedTitle,
+        hostUserId: user.uid,
+        hostId: user.uid,
+        hostName: copiedHostName,
+        hostEmail: user.email ?? firstString(sourceData.hostEmail) ?? "",
+        attendees: [],
+        attendeeIds: [],
+        attendeeUserIds: [],
+        attendeesUserIds: [],
+        goingUserIds: [],
+        rsvpUserIds: [],
+        pendingUserIds: [],
+        rsvpPendingUserIds: [],
+        invitedUserIds: [],
+        coHostIds: [],
+        coHostInvites: [],
+        rsvpsConfirmed: 0,
+        confirmedCount: 0,
+        rsvpConfirmedCount: 0,
+        attendeeCount: 0,
+        rsvpsPending: 0,
+        pendingCount: 0,
+        rsvpPendingCount: 0,
+        confirmedPaidCount: 0,
+        confirmedPurchaseCount: 0,
+        purchaseCount: 0,
+        ticketsSold: 0,
+        soldCount: 0,
+        ticketsPurchased: 0,
+        paidAttendees: 0,
+        checkedInCount: 0,
+        grossRevenueCents: 0,
+        platformFeeRevenueCents: 0,
+        ticketTypeConfirmedSoldCount: {},
+        ticketSalesCloseDaysBefore: copiedTicketSalesCloseDaysBefore,
+        ticketSalesCutoffDays: copiedTicketSalesCloseDaysBefore,
+        ticketSalesCloseAt: copiedTicketSalesCloseAt,
+        ticketSalesCutoffAt: copiedTicketSalesCloseAt,
+        salesCloseAt: copiedTicketSalesCloseAt,
+        payoutStatus: "pending",
+        stripePayoutStatus: null,
+        transferStatus: null,
+        payout: null,
+        payouts: null,
+        status: "upcoming",
+        eventStatus: "upcoming",
+        cancelledAt: null,
+        cancellationReason: null,
+        coverImageUrls: copiedCoverImageUrls,
+        coverImageUrl: primaryCover,
+        coverPhotoUrl: primaryCover,
+        imageUrl: primaryCover,
+        cover: primaryCover
+          ? {
+              url: primaryCover,
+              imageUrl: primaryCover,
+              downloadUrl: primaryCover,
+              coverImageUrls: copiedCoverImageUrls
+            }
+          : null,
+        media: primaryCover
+          ? {
+              coverImageUrl: primaryCover,
+              coverImageUrls: copiedCoverImageUrls,
+              imageUrl: primaryCover
+            }
+          : null,
+        hasEventFeed: true,
+        timelineEnabled: shouldCopySchedule,
+        schedulePublished: false,
+        copiedFromEventId: id,
+        copiedAt: now,
+        createdVia: "web",
+        metadata: {
+          ...(sourceMetadata ?? {}),
+          copiedFromEventId: id,
+          copiedViaWebsite: true
+        },
+        createdAt: now,
+        updatedAt: now
+      };
+
+      copyPayload.ticketTypes = copiedTicketTypes;
+      copyPayload.quiz = shouldCopyQuiz
+        ? {
+            title: copiedQuizTitle,
+            questions: copiedQuizQuestions
+          }
+        : null;
+
+      const created = await addDoc(collection(db, "tailgateEvents"), copyPayload);
+
+      try {
+        if (shouldCopyQuiz) {
+          await addDoc(collection(db, "tailgateEvents", created.id, "quizzes"), {
+            eventId: created.id,
+            title: copiedQuizTitle,
+            questions: copiedQuizQuestions,
+            createdBy: user.uid,
+            createdAt: now,
+            updatedAt: now
+          });
+        }
+        if (shouldCopySchedule) {
+          const scheduleCollection = collection(db, "tailgateEvents", created.id, "schedule");
+          await Promise.all(
+            scheduleStepsToCopy.map((step) =>
+              addDoc(scheduleCollection, {
+                title: step.title,
+                description: step.description ?? "",
+                timestampStart: step.timestampStart,
+                timestampEnd: step.timestampEnd ?? null,
+                createdAt: now,
+                updatedAt: now
+              })
+            )
+          );
+        }
+      } catch (addOnCopyError) {
+        console.warn("Tailgate copied, but optional add-ons were not fully copied", addOnCopyError);
+      }
+
+      navigate(`/tailgates/${created.id}?edit=event`);
+    } catch (copyError) {
+      console.error("Failed to copy tailgate event", copyError);
+      setCopyEventFeedback({
+        tone: "error",
+        text: "Unable to copy this event. Please try again."
+      });
+    } finally {
+      setCopyEventSaving(false);
     }
   };
 
@@ -5113,6 +5406,8 @@ export default function TailgateDetails() {
             !isTicketSalesClosed
               ? " has-sticky-cart"
               : ""
+          }${!isHostUser ? " tailgate-details-guest-view" : ""}${
+            !isHostUser && activeCoverImageUrl ? " has-cover" : ""
           }`}
         >
           {checkoutResult === "success" ? (
@@ -5366,6 +5661,40 @@ export default function TailgateDetails() {
                       {hasExactPin ? "Live pin shared" : canOpenMaps ? "Venue mapped" : "No live pin"}
                     </span>
                   </div>
+                  {canShowWhosComingSection ? (
+                    <div className="tailgate-command-guest-preview">
+                      <div className="tailgate-command-guest-preview-header">
+                        <div>
+                          <p>Guest list</p>
+                          <strong>{attendeeSummaryLabel}</strong>
+                        </div>
+                        <button type="button" className="link-button" onClick={scrollToAttendees}>
+                          View all
+                        </button>
+                      </div>
+                      <div className="tailgate-command-guest-preview-list">
+                        {detail.attendees.filter((attendee) => attendee.status !== "Host").length > 0 ? (
+                          detail.attendees
+                            .filter((attendee) => attendee.status !== "Host")
+                            .slice(0, 3)
+                            .map((attendee) => {
+                              const meta = attendeeStatusMeta[attendee.status];
+                              return (
+                                <div className="tailgate-command-guest-preview-row" key={attendee.id}>
+                                  <span className="tailgate-command-guest-preview-avatar" aria-hidden="true">
+                                    {attendee.name.charAt(0).toUpperCase()}
+                                  </span>
+                                  <span>{attendee.name}</span>
+                                  <span className={`chip ${meta.className}`}>{meta.label}</span>
+                                </div>
+                              );
+                            })
+                        ) : (
+                          <p className="meta-muted">No guests have been invited yet.</p>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
                 </aside>
               </div>
 
@@ -5394,6 +5723,22 @@ export default function TailgateDetails() {
                         <small>Update title, kickoff, pricing, and host notes.</small>
                       </span>
                     </button>
+                    {isEventHost ? (
+                      <button
+                        type="button"
+                        className="tailgate-command-action-card"
+                        onClick={() => void copyTailgateEvent()}
+                        disabled={!db || copyEventSaving}
+                      >
+                        <span className="tailgate-command-action-icon" aria-hidden="true">
+                          <IconCopy size={16} />
+                        </span>
+                        <span className="tailgate-command-action-copy">
+                          <strong>{copyEventSaving ? "Copying event..." : "Copy event"}</strong>
+                          <small>Duplicate details, tickets, photos, schedule, and quiz.</small>
+                        </span>
+                      </button>
+                    ) : null}
                     {detail.visibilityType === "open_paid" ? (
                       <button
                         type="button"
@@ -5526,6 +5871,9 @@ export default function TailgateDetails() {
                       </span>
                     </button>
                   </div>
+                  {copyEventFeedback?.tone === "error" ? (
+                    <p className="tailgate-details-ticket-error">{copyEventFeedback.text}</p>
+                  ) : null}
                   {isHostUser && isHostBroadcastComposerOpen ? (
                     <div className="tailgate-details-host-broadcast tailgate-details-host-contact">
                       <label className="input-group" htmlFor="host-broadcast-message">
@@ -5582,8 +5930,8 @@ export default function TailgateDetails() {
                     </div>
                   ) : null}
                   {canManageCoHosts || activeCoHostIds.length > 0 || pendingCoHostInvites.length > 0 ? (
-                    <div className="tailgate-command-subsection">
-                      <div className="tailgate-command-cohost-header">
+                    <details className="tailgate-command-subsection tailgate-command-cohost-details" open>
+                      <summary className="tailgate-command-cohost-header">
                         <div>
                           <h3>Co-hosts</h3>
                           <p>
@@ -5596,7 +5944,8 @@ export default function TailgateDetails() {
                               : "No co-hosts yet"}
                           </p>
                         </div>
-                      </div>
+                        <span className="tailgate-command-cohost-disclosure">Manage</span>
+                      </summary>
                       {activeCoHostIds.length === 0 && pendingCoHostInvites.length === 0 ? (
                         <p className="tailgate-command-cohost-empty">
                           {detail.visibilityType === "private"
@@ -5688,15 +6037,8 @@ export default function TailgateDetails() {
                           <div className="tailgate-command-cohost-compose-copy">
                             <h4>Add by phone</h4>
                             <p>
-                              <strong>{hostDisplayName}</strong> has added you as a co-host for{" "}
-                              <strong>{detail.eventName}</strong>. You can now assist with{" "}
-                              {detail.visibilityType === "private"
-                                ? "managing invites, the guest list, and event details."
-                                : "checking in guest tickets."}
-                            </p>
-                            <p>
-                              If this phone number is not tied to a TailgateTime account yet, they
-                              will need to sign up with the same number before access is granted.
+                              Send access by text. New co-hosts must sign up with the same phone
+                              number to join this event.
                             </p>
                           </div>
                           <div className="tailgate-command-cohost-compose-row">
@@ -5739,7 +6081,7 @@ export default function TailgateDetails() {
                       {coHostFeedback?.tone === "error" ? (
                         <p className="tailgate-details-ticket-error">{coHostFeedback.text}</p>
                       ) : null}
-                    </div>
+                    </details>
                   ) : null}
                   <button
                     type="button"
@@ -5818,10 +6160,11 @@ export default function TailgateDetails() {
                             type="date"
                             value={inlineEditDraft.eventDate}
                             onChange={(event) =>
-                              setInlineEditDraft((previous) => ({
-                                ...previous,
-                                eventDate: event.target.value
-                              }))
+                              setInlineEditDraft((previous) =>
+                                updateInlineEditStart(previous, {
+                                  eventDate: event.target.value
+                                })
+                              )
                             }
                           />
                         </label>
@@ -5832,9 +6175,38 @@ export default function TailgateDetails() {
                             type="time"
                             value={inlineEditDraft.eventStartTime}
                             onChange={(event) =>
+                              setInlineEditDraft((previous) =>
+                                updateInlineEditStart(previous, {
+                                  eventStartTime: event.target.value
+                                })
+                              )
+                            }
+                          />
+                        </label>
+                        <label className="input-group">
+                          <span className="input-label">End date</span>
+                          <input
+                            className="text-input"
+                            type="date"
+                            value={inlineEditDraft.eventEndDate}
+                            onChange={(event) =>
                               setInlineEditDraft((previous) => ({
                                 ...previous,
-                                eventStartTime: event.target.value
+                                eventEndDate: event.target.value
+                              }))
+                            }
+                          />
+                        </label>
+                        <label className="input-group">
+                          <span className="input-label">End time</span>
+                          <input
+                            className="text-input"
+                            type="time"
+                            value={inlineEditDraft.eventEndTime}
+                            onChange={(event) =>
+                              setInlineEditDraft((previous) => ({
+                                ...previous,
+                                eventEndTime: event.target.value
                               }))
                             }
                           />
@@ -5925,29 +6297,63 @@ export default function TailgateDetails() {
             </article>
           ) : (
             <article className="tailgate-details-hero">
+              <p className="tailgate-details-eyebrow">Game-day experience</p>
               <div className="tailgate-details-hero-top">
                 <div>
-                  <p className="tailgate-details-eyebrow">Tailgate details</p>
                   <h2>{detail.eventName}</h2>
-                  <p className="tailgate-details-subtitle">
-                    {formatDateTimeRange(detail.startDateTime, detail.endDateTime)}
-                  </p>
                 </div>
                 <div className="tailgate-details-status-wrap">
                   <span className="chip chip-outline">{getVisibilityLabel(detail.visibilityType)}</span>
                   {status ? <span className={`chip chip-status chip-${status}`}>{status}</span> : null}
                 </div>
               </div>
-              <p className="tailgate-details-meta">
-                <strong>Location:</strong> {locationLabel}
-              </p>
-              <div className="tailgate-details-hero-host">
-                <span className="tailgate-details-hero-host-label">Hosted by</span>
-                <strong>{publicHostDisplayName}</strong>
+              <div className="tailgate-details-hero-facts">
+                <p className="tailgate-details-subtitle">
+                  <IconCalendar size={20} />
+                  <span>{formatDateTimeRange(detail.startDateTime, detail.endDateTime)}</span>
+                </p>
+                <p className="tailgate-details-meta">
+                  <IconLocation size={20} />
+                  <span>{locationLabel}</span>
+                </p>
               </div>
+              <div className="tailgate-details-hero-host">
+                <span className="tailgate-details-host-avatar" aria-hidden="true">
+                  <IconUser size={18} />
+                </span>
+                <span>
+                  <span className="tailgate-details-hero-host-label">Hosted by</span>
+                  <strong>{publicHostDisplayName}</strong>
+                </span>
+              </div>
+              {showTicketPurchase ? (
+                <div className="tailgate-details-hero-ticket-summary">
+                  <span>Tickets</span>
+                  <strong>{ticketInfoLabel}</strong>
+                  <small>{isSoldOut ? "Sold out" : isTicketSalesClosed ? "Sales closed" : "Secure checkout"}</small>
+                </div>
+              ) : null}
               <div className="tailgate-details-hero-actions">
+                {showGuestRsvpSection || showOpenFreeRsvpSection || showTicketPurchase ? (
+                  <button
+                    type="button"
+                    className="primary-button tailgate-details-primary-action"
+                    onClick={() =>
+                      participationSectionRef.current?.scrollIntoView({
+                        behavior: "smooth",
+                        block: "center"
+                      })
+                    }
+                  >
+                    {showTicketPurchase
+                      ? "Choose tickets"
+                      : showOpenFreeRsvpSection
+                      ? "RSVP now"
+                      : "Respond to invite"}
+                  </button>
+                ) : null}
                 {canOpenMaps ? (
-                  <button className="primary-button" onClick={openMaps}>
+                  <button className="secondary-button" onClick={openMaps}>
                     Open maps
                   </button>
                 ) : null}
@@ -6035,8 +6441,8 @@ export default function TailgateDetails() {
           <article className="tailgate-details-card" ref={eventSnapshotSectionRef}>
             <div className="section-header">
               <div>
-                <h2>Event Snapshot</h2>
-                <p className="section-subtitle">Essential details guests need.</p>
+                <h2>Key details</h2>
+                <p className="section-subtitle">The essentials for game day.</p>
               </div>
               {isHostUser ? (
                 <button
@@ -6093,10 +6499,11 @@ export default function TailgateDetails() {
                       type="date"
                       value={inlineEditDraft.eventDate}
                       onChange={(event) =>
-                        setInlineEditDraft((previous) => ({
-                          ...previous,
-                          eventDate: event.target.value
-                        }))
+                        setInlineEditDraft((previous) =>
+                          updateInlineEditStart(previous, {
+                            eventDate: event.target.value
+                          })
+                        )
                       }
                     />
                   </label>
@@ -6107,9 +6514,38 @@ export default function TailgateDetails() {
                       type="time"
                       value={inlineEditDraft.eventStartTime}
                       onChange={(event) =>
+                        setInlineEditDraft((previous) =>
+                          updateInlineEditStart(previous, {
+                            eventStartTime: event.target.value
+                          })
+                        )
+                      }
+                    />
+                  </label>
+                  <label className="input-group">
+                    <span className="input-label">End date</span>
+                    <input
+                      className="text-input"
+                      type="date"
+                      value={inlineEditDraft.eventEndDate}
+                      onChange={(event) =>
                         setInlineEditDraft((previous) => ({
                           ...previous,
-                          eventStartTime: event.target.value
+                          eventEndDate: event.target.value
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="input-group">
+                    <span className="input-label">End time</span>
+                    <input
+                      className="text-input"
+                      type="time"
+                      value={inlineEditDraft.eventEndTime}
+                      onChange={(event) =>
+                        setInlineEditDraft((previous) => ({
+                          ...previous,
+                          eventEndTime: event.target.value
                         }))
                       }
                     />
@@ -6156,38 +6592,50 @@ export default function TailgateDetails() {
             {inlineEditSuccess ? (
               <p className="tailgate-details-inline-editor-success">{inlineEditSuccess}</p>
             ) : null}
-            <div className="tailgate-details-info-grid">
-              <div className="tailgate-details-info-card">
-                <p>When</p>
-                <strong>{detail.startDateTime ? detail.startDateTime.toLocaleDateString() : "TBD"}</strong>
-                <span>{formatTimeRange(detail.startDateTime, detail.endDateTime)}</span>
+            <div className="tailgate-details-key-facts">
+              <div className="tailgate-details-key-fact">
+                <span className="tailgate-details-key-fact-icon"><IconCalendar size={20} /></span>
+                <span className="tailgate-details-key-fact-copy">
+                  <small>Date &amp; time</small>
+                  <strong>{detail.startDateTime ? detail.startDateTime.toLocaleDateString() : "TBD"}</strong>
+                  <span>{formatTimeRange(detail.startDateTime, detail.endDateTime)}</span>
+                </span>
               </div>
-              <div className="tailgate-details-info-card">
-                <p>Where</p>
-                <strong>{locationLabel}</strong>
-                {canOpenMaps ? (
-                  <button className="link-button" onClick={openMaps}>
-                    Open in maps
-                  </button>
-                ) : null}
+              <div className="tailgate-details-key-fact">
+                <span className="tailgate-details-key-fact-icon"><IconLocation size={20} /></span>
+                <span className="tailgate-details-key-fact-copy">
+                  <small>Location</small>
+                  <strong>{locationLabel}</strong>
+                  {canOpenMaps ? (
+                    <button className="link-button" onClick={openMaps}>View directions</button>
+                  ) : null}
+                </span>
               </div>
-              <div className="tailgate-details-info-card">
-                <p>Type</p>
-                <strong>{getVisibilityLabel(detail.visibilityType)}</strong>
-                {detail.visibilityType === "open_paid" ? (
-                  <span>{ticketInfoLabel}</span>
-                ) : (
-                  <span>{detail.capacity ? `${detail.capacity} max guests` : "No capacity limit"}</span>
-                )}
+              <div className="tailgate-details-key-fact">
+                <span className="tailgate-details-key-fact-icon"><IconCheckin size={20} /></span>
+                <span className="tailgate-details-key-fact-copy">
+                  <small>Entry</small>
+                  <strong>{getVisibilityLabel(detail.visibilityType)}</strong>
+                  <span>
+                    {detail.visibilityType === "open_paid"
+                      ? ticketInfoLabel
+                      : detail.capacity
+                      ? `${detail.capacity} max guests`
+                      : "No capacity limit"}
+                  </span>
+                </span>
               </div>
-              <div className="tailgate-details-info-card">
-                <p>Event Size</p>
-                <strong>{eventSizeTag}</strong>
-                <span>{eventSizeSummary}</span>
+              <div className="tailgate-details-key-fact">
+                <span className="tailgate-details-key-fact-icon"><IconUser size={20} /></span>
+                <span className="tailgate-details-key-fact-copy">
+                  <small>Crowd</small>
+                  <strong>{eventSizeTag}</strong>
+                  <span>{eventSizeSummary}</span>
+                </span>
               </div>
             </div>
             {showGuestRsvpSection ? (
-              <div className="tailgate-details-rsvp-block">
+              <div className="tailgate-details-rsvp-block" ref={participationSectionRef}>
                 <div className="tailgate-details-ticket-row">
                   <p className="tailgate-details-ticket-title">Your RSVP</p>
                   <span className={`tailgate-details-rsvp-status ${rsvpStatusMeta.className}`}>
@@ -6368,7 +6816,7 @@ export default function TailgateDetails() {
               </div>
             ) : null}
             {showOpenFreeRsvpSection ? (
-              <div className="tailgate-details-rsvp-block">
+              <div className="tailgate-details-rsvp-block" ref={participationSectionRef}>
                 <div className="tailgate-details-ticket-row">
                   <p className="tailgate-details-ticket-title">Join this tailgate</p>
                   <span
@@ -6452,7 +6900,7 @@ export default function TailgateDetails() {
               </div>
             ) : null}
             {showTicketPurchase ? (
-              <div className="tailgate-details-ticket-block">
+              <div className="tailgate-details-ticket-block" ref={participationSectionRef}>
                 <div className="tailgate-details-ticket-row">
                   <p className="tailgate-details-ticket-title">Buy tickets</p>
                   <span className="chip chip-upcoming">{ticketInfoLabel}</span>
@@ -7379,7 +7827,13 @@ export default function TailgateDetails() {
   }
 
   return (
-    <AppShell header={<div className="simple-header"><h1>Tailgate Details</h1></div>}>
+    <AppShell
+      header={
+        <div className="simple-header">
+          <h1>{isHostUser ? "Manage Tailgate" : "Tailgate Details"}</h1>
+        </div>
+      }
+    >
       {pageContent}
       {cancelTailgateModal}
       {stickyCartBar}

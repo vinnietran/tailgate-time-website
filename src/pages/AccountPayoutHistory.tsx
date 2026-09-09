@@ -151,8 +151,8 @@ export default function AccountPayoutHistory() {
 
   return (
     <AppShell header={<div className="simple-header"><h1>Payout History</h1></div>}>
-      <section className="payouts-page">
-        <article className="payouts-card">
+      <section className="payouts-page payout-history-page">
+        <article className="payouts-card payout-history-card">
           <div className="section-header">
             <div>
               <h2>Payout history</h2>

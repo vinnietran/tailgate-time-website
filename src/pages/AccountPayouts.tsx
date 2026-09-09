@@ -459,7 +459,18 @@ export default function AccountPayouts() {
   return (
     <AppShell header={<div className="simple-header"><h1>Account & Payouts</h1></div>}>
       <section className="payouts-page">
-        <article className="payouts-card">
+        <header className="payouts-dashboard-intro">
+          <div>
+            <p className="payouts-dashboard-eyebrow">Host finance</p>
+            <h2>Account &amp; payouts</h2>
+            <p>Track ticket revenue, keep payouts ready, and manage your account.</p>
+          </div>
+          <Link className="secondary-button" to="/account/payout-history">
+            Payout history
+          </Link>
+        </header>
+
+        <article className="payouts-card payouts-profile-card">
           <div className="section-header">
             <div>
               <h2>Profile details</h2>
@@ -528,7 +539,7 @@ export default function AccountPayouts() {
           {profileSuccess ? <p className="success-banner">{profileSuccess}</p> : null}
         </article>
 
-        <article className="payouts-card">
+        <article className="payouts-card payouts-connect-card">
           <div className="section-header">
             <div>
               <h2>Payout account</h2>
@@ -587,7 +598,7 @@ export default function AccountPayouts() {
           )}
         </article>
 
-        <article className="payouts-card">
+        <article className="payouts-card payouts-overview-card">
           <div className="section-header">
             <div>
               <h2>Payout overview</h2>
@@ -630,16 +641,11 @@ export default function AccountPayouts() {
                   <strong>{formatCurrencyFromCentsExact(payoutSummary.payoutSentCents)}</strong>
                 </div>
               </div>
-              <div className="payouts-overview-actions">
-                <Link className="secondary-button" to="/account/payout-history">
-                  View payout history
-                </Link>
-              </div>
             </>
           )}
         </article>
 
-        <article className="payouts-card">
+        <article className="payouts-card payouts-options-card">
           <div className="section-header">
             <div>
               <h2>Profile options</h2>

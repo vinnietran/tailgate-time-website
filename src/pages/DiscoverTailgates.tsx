@@ -4,6 +4,7 @@ import { getBlob, getDownloadURL, ref } from "firebase/storage";
 import { useLocation, useNavigate } from "react-router-dom";
 import tailgateTimeLogo from "../../ttnobg.png";
 import AppShell from "../components/AppShell";
+import { IconCalendar, IconLocation, IconUser } from "../components/Icons";
 import { PublicTopNav } from "../components/PublicTopNav";
 import SiteFooter from "../components/SiteFooter";
 import { mockTailgates } from "../data/mockTailgates";
@@ -1836,27 +1837,36 @@ export default function DiscoverTailgates() {
 
   const discoverContent = (
     <section className="discover-page">
-        <div className="discover-header-row">
-          <div>
-            <h1 className="discover-title">Discover</h1>
-            <div className="discover-pill-row">
-              <div className="discover-location-pill">
-                <span className="discover-location-dot" aria-hidden="true" />
-                <span className="discover-location-pill-text">{locationPillText}</span>
-              </div>
-              {loadingState === "initial" ? <span className="discover-header-loading">Loading...</span> : null}
-            </div>
+        <div className="discover-hero">
+          <div className="discover-hero-copy">
+            <p className="discover-eyebrow">Game day starts here</p>
+            <h1 className="discover-title" aria-label="Discover">
+              Find your next tailgate
+            </h1>
+            <p className="discover-subtitle">
+              Discover trusted hosts, compare experiences, and lock in your spot.
+            </p>
           </div>
-          <div className="discover-result-count" aria-live="polite">
-            {resultCountLabel}
+          <div className="discover-hero-status">
+            <div className="discover-result-count" aria-live="polite">
+              <strong>{resultCountLabel}</strong>
+              <span>available now</span>
+            </div>
+            <div className="discover-location-pill">
+              <IconLocation size={16} />
+              <span className="discover-location-pill-text">{locationPillText}</span>
+            </div>
           </div>
         </div>
 
         <div className="discover-search-section">
           <div className="discover-search-row">
             <div className="discover-search-input-wrap">
+              <IconLocation className="discover-search-icon" size={20} />
+              <span className="discover-search-label">Where</span>
               <input
                 className="text-input discover-search-input"
+                aria-label="Search by ZIP, city, or address"
                 placeholder="Search by ZIP, city, or address"
                 value={searchText}
                 onChange={(event) => setSearchText(event.target.value)}
@@ -1909,22 +1919,25 @@ export default function DiscoverTailgates() {
               onClick={() => void handleSearchSubmit()}
               disabled={searching}
             >
-              {searching ? "..." : "Go"}
+              {searching ? "Searching…" : "Search events"}
             </button>
           </div>
           <button
             type="button"
             className="discover-location-button"
+            aria-label="Use my location"
             onClick={handleUseMyLocation}
             disabled={locating}
           >
-            {locating ? "Locating..." : "Use my location"}
+            <IconLocation size={16} />
+            {locating ? "Locating..." : "Use my current location"}
           </button>
           <div className="discover-filter-panel" aria-label="Discover filters">
             <div className="discover-filter-panel-header">
-              <span>
-                Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
-              </span>
+              <div>
+                <strong>Refine your search</strong>
+                <span>{activeFilterCount > 0 ? `${activeFilterCount} active filters` : "All upcoming events"}</span>
+              </div>
               <button
                 type="button"
                 className="discover-clear-filters"
@@ -2240,39 +2253,49 @@ export default function DiscoverTailgates() {
                           Sold Out
                         </span>
                       ) : null}
+                      <span
+                        className={`discover-card-type ${
+                          item.visibilityType === "open_paid" ? "paid" : "free"
+                        }`}
+                      >
+                        {item.visibilityType === "open_paid" ? "Ticketed" : "Free entry"}
+                      </span>
                     </div>
                     <div>
                       <div className="discover-card-heading">
                         <h3>{item.eventName}</h3>
-                        <span
-                          className={`chip discover-card-chip ${
-                            item.visibilityType === "open_paid" ? "chip-upcoming" : "chip-live"
-                          }`}
-                        >
-                          {item.visibilityType === "open_paid" ? "Open Paid" : "Open Free"}
-                        </span>
                       </div>
-                      <p>{formatDiscoverDate(item.startDateTime, item.endDateTime)}</p>
+                      <p className="discover-card-detail">
+                        <IconCalendar size={17} />
+                        <span>{formatDiscoverDate(item.startDateTime, item.endDateTime)}</span>
+                      </p>
+                      <p className="discover-card-detail">
+                        <IconLocation size={17} />
+                        <span>{item.locationSummary ?? "Location coming soon"}</span>
+                      </p>
                       {item.hostName ? (
-                        <p className="discover-card-host">Hosted by {item.hostName}</p>
+                        <p className="discover-card-host">
+                          <IconUser size={17} />
+                          <span>Hosted by {item.hostName}</span>
+                        </p>
                       ) : null}
                     </div>
                   </div>
                   <div className="discover-card-body">
                     <div className="discover-card-copy">
-                      <p>{item.locationSummary ?? "Location coming soon"}</p>
                       <p className="discover-card-size">{item.eventSizeSummary}</p>
                       {cutoffLabel ? <p className="discover-cutoff-pill">{cutoffLabel}</p> : null}
                     </div>
                     <div className="discover-card-meta">
-                      <strong>
-                        {item.priceLabel}
-                      </strong>
-                      <span>
-                        {item.confirmedAttendanceCount} confirmed
-                      </span>
+                      <span>From</span>
+                      <strong>{item.priceLabel}</strong>
+                      <span>{item.confirmedAttendanceCount} going</span>
                       {item.distanceLabel ? <span>{item.distanceLabel} away</span> : null}
                     </div>
+                  </div>
+                  <div className="discover-card-action" aria-hidden="true">
+                    <span>View event</span>
+                    <span>→</span>
                   </div>
                 </article>
               );

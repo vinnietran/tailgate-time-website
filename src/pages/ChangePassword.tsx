@@ -48,9 +48,9 @@ export default function ChangePassword() {
 
   const currentUser = auth?.currentUser ?? user;
   const userEmail = currentUser?.email?.trim() ?? "";
-  const supportsPasswordChange = currentUser?.providerData.some(
-    (provider) => provider.providerId === "password"
-  );
+  const supportsPasswordChange = currentUser
+    ? !auth || currentUser.providerData?.some((provider) => provider.providerId === "password")
+    : false;
 
   const passwordRules: PasswordRule[] = useMemo(
     () => [
@@ -125,8 +125,8 @@ export default function ChangePassword() {
 
   return (
     <AppShell header={<div className="simple-header"><h1>Change Password</h1></div>}>
-      <section className="payouts-page account-page-stack">
-        <article className="payouts-card account-hero-card">
+      <section className="payouts-page account-page-stack change-password-page">
+        <article className="payouts-card account-hero-card change-password-hero">
           <div className="account-page-badge">
             <IconUser size={16} />
             <span>Security</span>
@@ -151,18 +151,18 @@ export default function ChangePassword() {
         </article>
 
         {!currentUser ? (
-          <article className="payouts-card">
+          <article className="payouts-card change-password-status-card">
             <p className="error-banner">Sign in to change your password.</p>
           </article>
         ) : !supportsPasswordChange ? (
-          <article className="payouts-card">
+          <article className="payouts-card change-password-status-card">
             <p className="meta-muted">
               This account signs in with Google. Update your password through your Google account.
             </p>
           </article>
         ) : (
           <>
-            <article className="payouts-card">
+            <article className="payouts-card change-password-form-card">
               <div className="section-header">
                 <div>
                   <h2>Update credentials</h2>
@@ -247,7 +247,7 @@ export default function ChangePassword() {
               </form>
             </article>
 
-            <article className="payouts-card">
+            <article className="payouts-card change-password-checklist-card">
               <div className="section-header">
                 <div>
                   <h2>Password checklist</h2>
