@@ -5,12 +5,14 @@ import { useAuth } from "../hooks/useAuth";
 import { useHostProfile } from "../hooks/useHostProfile";
 import { useUserProfile } from "../hooks/useUserProfile";
 import {
+  getPublicHostPage,
   saveHostProfile,
   trackHostPageEvent,
   uploadHostGalleryImage,
   uploadHostPageImage
 } from "../lib/hostProfile";
-import type { HostProfileDraft } from "../types/hostProfile";
+import { HostPageView } from "./PublicHostPage";
+import type { PublicHostEvent, HostProfileDraft } from "../types/hostProfile";
 import { getFirstName } from "../utils/format";
 import { normalizeHostSlug, validateHostSlug } from "../utils/hostSlug";
 
@@ -30,6 +32,10 @@ export default function HostPageSettings() {
   const { profile: userProfile } = useUserProfile(user?.uid);
   const { profile, setProfile, loading, error, refresh } = useHostProfile(Boolean(user));
   const [draft, setDraft] = useState<HostProfileDraft>(EMPTY_DRAFT);
+  const [view, setView] = useState<"edit" | "preview">("edit");
+  const [previewSize, setPreviewSize] = useState<"desktop" | "mobile">("desktop");
+  const [events, setEvents] = useState<PublicHostEvent[]>([]);
+  const [eventsError, setEventsError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState<"logo" | "cover" | null>(null);
   const [uploadingGallery, setUploadingGallery] = useState(false);
@@ -55,7 +61,24 @@ export default function HostPageSettings() {
   }, [user?.uid]);
 
   const origin = typeof window === "undefined" ? "https://tailgatetime.com" : window.location.origin;
-  const publicUrl = `${origin}/hosts/${draft.slug || "your-host-page"}`;
+  const publicUrl = `${origin}/hosts/${profile?.slug || "your-host-page"}`;
+  const dirty = Boolean(profile && (Object.keys(EMPTY_DRAFT) as (keyof HostProfileDraft)[]).some(
+    (key) => JSON.stringify(draft[key] || (key === "galleryImageUrls" ? [] : "")) !== JSON.stringify(profile[key] || (key === "galleryImageUrls" ? [] : ""))
+  ));
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  useEffect(() => {
+    if (!profile?.slug) return;
+    let active = true;
+    getPublicHostPage(profile.slug).then((result) => {
+      if (active) { setEvents(result.upcomingTailgates); setEventsError(false); }
+    }).catch(() => { if (active) setEventsError(true); });
+    return () => { active = false; };
+  }, [profile?.slug]);
   const slugError = useMemo(() => (draft.slug ? validateHostSlug(draft.slug) : null), [draft.slug]);
   const firstName = getFirstName(userProfile?.displayName || user?.displayName || user?.email);
 
@@ -179,8 +202,12 @@ export default function HostPageSettings() {
   };
 
   const copyLink = async () => {
-    await navigator.clipboard.writeText(publicUrl);
-    setNotice("Public link copied.");
+    try {
+      await navigator.clipboard.writeText(publicUrl);
+      setNotice("Public link copied.");
+    } catch {
+      setFormError("Couldn’t copy the link. You can copy your public URL below.");
+    }
   };
 
   return (
@@ -194,7 +221,7 @@ export default function HostPageSettings() {
           </div>
           <div className="host-settings-actions">
             <button type="button" className="outline-button" onClick={copyLink} disabled={!profile}>Copy Link</button>
-            <a className="primary-button" href={publicUrl} target="_blank" rel="noreferrer">View Public Page</a>
+            {profile ? <a className="primary-button" href={publicUrl} target="_blank" rel="noreferrer">View Public Page</a> : null}
           </div>
         </div>
 
@@ -211,10 +238,44 @@ export default function HostPageSettings() {
           </div>
         ) : null}
         {!loading && profile ? (
-          <form className="host-settings-card" onSubmit={submit}>
-            <div className="host-settings-url">
-              <span>Your public URL</span>
-              <strong>{publicUrl}</strong>
+          <form className="host-designer" onSubmit={submit}>
+            <div className="host-designer-toolbar">
+              <div className="host-designer-tabs" role="group" aria-label="Designer view">
+                <button type="button" aria-pressed={view === "edit"} onClick={() => setView("edit")}>Edit page</button>
+                <button type="button" aria-pressed={view === "preview"} onClick={() => setView("preview")}>Live preview</button>
+              </div>
+              <span>{dirty ? "Unsaved changes" : "Saved version"}</span>
+              <button className="primary-button" type="submit" disabled={saving || Boolean(uploading) || uploadingGallery}>
+                {saving ? "Saving…" : "Save Host Page"}
+              </button>
+            </div>
+            {formError ? <div className="error-banner" role="alert">{formError}</div> : null}
+            {notice ? <div className="host-settings-success" role="status">{notice}</div> : null}
+            {view === "preview" ? (
+              <section className="host-designer-preview" aria-label="Live page preview">
+                <div className="host-designer-preview-heading">
+                  <p>Your changes appear here before you save. Sharing and event links are disabled in preview.</p>
+                  <div className="host-designer-tabs" role="group" aria-label="Preview size">
+                    <button type="button" aria-pressed={previewSize === "desktop"} onClick={() => setPreviewSize("desktop")}>Desktop</button>
+                    <button type="button" aria-pressed={previewSize === "mobile"} onClick={() => setPreviewSize("mobile")}>Mobile</button>
+                  </div>
+                </div>
+                {eventsError ? <p role="status">Event preview is unavailable. Your public events are managed separately.</p> : null}
+                <div className={`host-designer-preview-frame ${previewSize}`}>
+                  <HostPageView preview data={{ profile: { ...profile, ...draft, displayName: draft.displayName || "Your host name" }, upcomingTailgates: events }} />
+                </div>
+              </section>
+            ) : (
+            <fieldset disabled={saving} className="host-settings-card">
+            <nav className="host-designer-steps" aria-label="Page editor sections">
+              <a href="#host-story">01 · Your story</a>
+              <a href="#host-visuals">02 · Look & feel</a>
+              <a href="#host-sharing">03 · Share & events</a>
+            </nav>
+            <div className="host-designer-section-intro" id="host-story">
+              <p className="host-settings-kicker">01 / Make it personal</p>
+              <h2>Let fans get to know you.</h2>
+              <p>A memorable name, a quick introduction, and your story make guests feel welcome before they arrive.</p>
             </div>
             <div className="host-settings-grid">
               <label>
@@ -232,38 +293,28 @@ export default function HostPageSettings() {
               <label className="host-settings-wide">
                 About your tailgates
                 <textarea value={draft.description} maxLength={3000} rows={9} placeholder="Tell fans about your group, traditions, food, and what to expect…" onChange={(e) => update("description", e.target.value)} />
+                <small>Introduce yourself, share your traditions, and explain what a first-time guest can expect. Use short paragraphs.</small>
                 <small>{draft.description?.length || 0} / 3000</small>
-              </label>
-              <label className="host-settings-wide">
-                Public URL slug
-                <div className="host-settings-slug-row">
-                  <span>{origin}/hosts/</span>
-                  <input
-                    value={draft.slug}
-                    maxLength={64}
-                    onBlur={() => update("slug", normalizeHostSlug(draft.slug))}
-                    onChange={(e) => update("slug", e.target.value.toLowerCase())}
-                  />
-                </div>
-                {slugError ? <small className="host-settings-field-error">{slugError}</small> : null}
-                {profile.slug !== normalizeHostSlug(draft.slug) ? (
-                  <small>Changing this URL may break links you have shared previously.</small>
-                ) : null}
               </label>
             </div>
 
+            <div className="host-designer-section-intro" id="host-visuals">
+              <p className="host-settings-kicker">02 / Set the scene</p>
+              <h2>Show what game day feels like.</h2>
+              <p>Use a recognizable portrait or logo, a wide cover, and photos of real moments with your guests.</p>
+            </div>
             <div className="host-settings-image-grid">
               <label className="host-settings-image-field">
                 <span>Logo / profile image</span>
                 {draft.logoUrl ? <img className="host-settings-logo-preview" src={draft.logoUrl} alt="Logo preview" /> : <div className="host-settings-image-placeholder">Logo</div>}
-                <input type="file" accept="image/*" onChange={(e) => void handleImage("logo", e)} />
-                <small>{uploading === "logo" ? "Uploading…" : "Square images work best."}</small>
+                <input type="file" accept="image/*" disabled={Boolean(uploading) || saving} onChange={(e) => void handleImage("logo", e)} />
+                <small>{uploading === "logo" ? "Uploading…" : "Use a square image, at least 400 × 400. Up to 8 MB."}</small>
               </label>
               <label className="host-settings-image-field">
                 <span>Cover image</span>
                 {draft.coverImageUrl ? <img className="host-settings-cover-preview" src={draft.coverImageUrl} alt="Cover preview" /> : <div className="host-settings-image-placeholder cover">Cover</div>}
-                <input type="file" accept="image/*" onChange={(e) => void handleImage("cover", e)} />
-                <small>{uploading === "cover" ? "Uploading…" : "Wide images work best."}</small>
+                <input type="file" accept="image/*" disabled={Boolean(uploading) || saving} onChange={(e) => void handleImage("cover", e)} />
+                <small>{uploading === "cover" ? "Uploading…" : "Try a 1600 × 600 image. Keep the main subject near the center. Up to 8 MB."}</small>
               </label>
             </div>
 
@@ -327,13 +378,36 @@ export default function HostPageSettings() {
               <small className="host-settings-gallery-help">Select multiple images at once. Each image can be up to 8 MB.</small>
             </section>
 
-            {formError ? <div className="error-banner">{formError}</div> : null}
-            {notice ? <div className="host-settings-success">{notice}</div> : null}
-            <div className="host-settings-save-row">
-              <button className="primary-button" type="submit" disabled={saving || Boolean(uploading) || uploadingGallery}>
-                {saving ? "Saving…" : "Save Host Page"}
-              </button>
+            <div className="host-designer-section-intro" id="host-sharing">
+              <p className="host-settings-kicker">03 / One link for every game day</p>
+              <h2>Your home for upcoming events.</h2>
+              <p>Your upcoming public events appear automatically. Private and cancelled events stay off this page.</p>
+              <a className="outline-button" href="/dashboard">Manage your events →</a>
             </div>
+            <div className="host-settings-url">
+              <span>Your saved public URL</span><strong>{publicUrl}</strong>
+              <small>Share this link in your social bio, group chats, and event promotions.</small>
+            </div>
+            <div className="host-settings-grid">
+              <label className="host-settings-wide">
+                Public URL slug
+                <div className="host-settings-slug-row">
+                  <span>{origin}/hosts/</span>
+                  <input
+                    value={draft.slug}
+                    maxLength={64}
+                    onBlur={() => update("slug", normalizeHostSlug(draft.slug))}
+                    onChange={(e) => update("slug", e.target.value.toLowerCase())}
+                  />
+                </div>
+                {slugError ? <small className="host-settings-field-error">{slugError}</small> : null}
+                {profile.slug !== normalizeHostSlug(draft.slug) ? (
+                  <small>Your previous URL will redirect to the new address after saving.</small>
+                ) : null}
+              </label>
+            </div>
+            </fieldset>
+            )}
           </form>
         ) : null}
       </div>

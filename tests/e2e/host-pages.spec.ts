@@ -51,6 +51,24 @@ test.describe("Public Host Page", () => {
     await expect(page.getByText("3 / 8")).toBeVisible();
     await expect(page.getByText("Add gallery images")).toBeVisible();
     await page.getByLabel("Public URL slug").fill("updated-host");
-    await expect(page.getByText(/changing this URL may break/i)).toBeVisible();
+    await expect(page.getByText(/previous URL will redirect/i)).toBeVisible();
   });
+});
+
+ test("designer previews unsaved content and shares only the saved URL", async ({ page }) => {
+  await page.goto("/dashboard/host-page");
+  await page.getByLabel("Public host or organization name").fill("Sunday Crew");
+  await page.getByLabel("About your tailgates").fill("Meet our crew.\nEveryone is welcome.");
+  await page.getByLabel("Public URL slug").fill("sunday-crew");
+  await expect(page.getByRole("link", { name: "View Public Page" })).toHaveAttribute("href", /\/hosts\/demo-host$/);
+  await page.getByRole("button", { name: "Live preview", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Sunday Crew", exact: true })).toBeVisible();
+  await expect(page.getByText("Meet our crew. Everyone is welcome.")).toBeVisible();
+  await page.getByRole("button", { name: "Mobile", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Share Host Page" })).toBeDisabled();
+  await page.getByRole("button", { name: "Save Host Page" }).click();
+  await expect(page.locator(".host-settings-success")).toContainText("live and up to date");
+  await expect(page.getByRole("link", { name: "View Public Page" })).toHaveAttribute("href", /\/hosts\/sunday-crew$/);
+  await page.getByRole("button", { name: "Edit page", exact: true }).click();
+  await expect(page.getByLabel("Public host or organization name")).toHaveValue("Sunday Crew");
 });

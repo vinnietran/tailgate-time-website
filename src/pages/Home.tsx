@@ -564,8 +564,8 @@ export default function Home() {
               </a>
             </div>
             <div className="homepage-secondary-links">
-              <Link to="/release-2-0" className="homepage-inline-link">
-                See what is new in 2.0
+              <Link to="/about" className="homepage-inline-link">
+                Get to know TailgateTime
               </Link>
             </div>
           </div>

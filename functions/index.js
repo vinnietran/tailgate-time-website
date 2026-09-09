@@ -355,6 +355,7 @@ function renderHtml(page, origin) {
     .public-nav-shell{padding:18px 16px 0}.public-nav{width:min(1120px,100%);min-height:70px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px;border:1px solid #ccd7eb;border-radius:18px;background:rgba(255,255,255,.9);box-shadow:0 10px 24px #1d2f4d14}
     .brand{display:flex;align-items:center;gap:10px;text-decoration:none;font-weight:800}.brand img{width:34px;height:34px;object-fit:contain}.nav-links{display:flex;align-items:center;gap:4px;margin-left:auto}.nav-links a{padding:7px 10px;border-radius:999px;color:#5f7194;text-decoration:none;font-size:.9rem;font-weight:700}.nav-links a:hover{color:#172844;background:#eef3ff}.dashboard-link{padding:10px 16px;border-radius:999px;background:#f2c94c;text-decoration:none;font-size:.9rem;font-weight:800;white-space:nowrap}
     main,footer{max-width:1100px;margin:auto}.hero{min-height:330px;margin-top:28px;padding:44px;border-radius:28px;background:linear-gradient(90deg,rgba(11,27,48,.92),rgba(19,42,70,.45)),url('${escapeHtml(image)}') center/cover;color:white;display:flex;align-items:end;gap:22px;box-shadow:0 26px 60px rgba(20,41,68,.25)}.logo{width:105px;height:105px;object-fit:cover;border-radius:22px;background:white}.hero h1{font-size:clamp(2.3rem,6vw,4.5rem);line-height:1;margin:0}.hero p{font-size:1.1rem}.share{margin-left:auto;border:0;border-radius:99px;padding:12px 18px;color:#172844;background:white;font:inherit;font-weight:800;cursor:pointer}.content{padding:58px 18px 80px}.content>section{padding:30px;border:1px solid rgba(255,255,255,.78);border-radius:26px;background:rgba(255,255,255,.5);box-shadow:0 18px 44px rgba(28,47,77,.075);backdrop-filter:blur(14px)}.content>section+section{margin-top:32px}.about{max-width:820px;white-space:pre-line;line-height:1.7}.gallery{display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:180px;gap:12px}.gallery img{width:100%;height:100%;object-fit:cover;border-radius:18px}.gallery img:first-child{grid-column:span 2;grid-row:span 2}.events{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}.event{overflow:hidden;border-radius:20px;background:white;color:#172844;text-decoration:none;box-shadow:0 14px 30px #1a2b4a17}.event-image{aspect-ratio:16/9;background:#dce5f1 center/cover}.event-copy{padding:18px}.event-copy span{color:#987510;font-weight:800}.event-copy h3{margin:8px 0}.event-copy p{color:#637493;margin:6px 0}.event-copy strong{display:block;margin-top:15px}.empty{padding:32px;border:1px dashed #9aabc2;border-radius:18px;text-align:center}
+    .hero-actions{display:flex;flex-direction:column;gap:10px;margin-left:auto;flex-shrink:0}.events-cta{padding:12px 18px;border-radius:99px;background:#f4c542;color:#172844;font-weight:800;text-align:center;text-decoration:none}.section-nav{display:flex;justify-content:center;gap:32px;padding:22px 16px;border-bottom:1px solid #c7d3e3}.section-nav a{padding:10px 0;text-decoration:none;font-weight:800}.content{padding-top:32px}.content>section{scroll-margin-top:24px}.about{max-width:none}.about p{max-width:70ch}.hero>div{min-width:0}h1,h3,.about p{overflow-wrap:anywhere}a:focus-visible,button:focus-visible{outline:3px solid #bb8610;outline-offset:4px}@media(max-width:850px){.hero-actions{margin-left:0;width:100%}}
     footer{padding:24px 18px 50px;color:#65758d}.footer-links{display:flex;flex-wrap:wrap;gap:18px;margin-bottom:10px}.footer-links a{text-decoration:none;font-weight:700}
     @media(max-width:850px){.public-nav{flex-wrap:wrap}.nav-links{order:3;width:100%;margin:0;overflow-x:auto}.dashboard-link{margin-left:auto}.hero{margin:18px 10px 0;min-height:420px;padding:25px;flex-direction:column;align-items:flex-start;justify-content:end}.share{margin:0;width:100%}.gallery{grid-template-columns:repeat(2,1fr);grid-auto-rows:140px}.gallery img:first-child{grid-column:span 2;grid-row:span 1}.events{grid-template-columns:1fr}}
   </style>
@@ -364,7 +365,7 @@ function renderHtml(page, origin) {
     <div class="public-nav">
       <a class="brand" href="/"><img src="/ttnobg.png" alt="TailgateTime"><strong>TailgateTime</strong></a>
       <nav class="nav-links" aria-label="Public site">
-        <a href="/">Home</a><a href="/release-2-0">2.0</a><a href="/discover">Discover</a><a href="/contact.html">Contact &amp; Support</a>
+        <a href="/">Home</a><a href="/about">About</a><a href="/discover">Discover</a><a href="/contact.html">Contact &amp; Support</a>
       </nav>
       <a class="dashboard-link" href="/dashboard">My Dashboard</a>
     </div>
@@ -373,15 +374,16 @@ function renderHtml(page, origin) {
     <section class="hero">
       ${profile.logoUrl ? `<img class="logo" src="${escapeHtml(profile.logoUrl)}" alt="${escapeHtml(profile.displayName)} logo">` : ""}
       <div><small>TAILGATETIME HOST</small><h1>${escapeHtml(profile.displayName)}</h1>${profile.tagline ? `<p>${escapeHtml(profile.tagline)}</p>` : ""}${profile.location ? `<small>${escapeHtml(profile.location)}</small>` : ""}</div>
-      <button id="share-host-page" class="share" type="button">Share Host Page</button>
+      <div class="hero-actions"><a class="events-cta" href="#host-events">Explore events ↓</a><button id="share-host-page" class="share" type="button">Share Host Page</button></div>
     </section>
+    <nav class="section-nav" aria-label="Host page sections"><a href="#host-events">Events (${upcomingTailgates.length})</a>${profile.description ? '<a href="#host-about">About</a>' : ""}${gallery ? '<a href="#host-gallery">Photos</a>' : ""}</nav>
     <div class="content">
-      ${profile.description ? `<section class="about"><small>ABOUT THE HOST</small><h2>Welcome to our tailgate</h2><p>${escapeHtml(profile.description)}</p></section>` : ""}
-      ${gallery ? `<section><small>THE EXPERIENCE</small><h2>Tailgate gallery</h2><div class="gallery">${gallery}</div></section>` : ""}
-      <section><h2>Upcoming Tailgates</h2>${cards ? `<div class="events">${cards}</div>` : `<div class="empty"><h3>No upcoming tailgates are currently listed.</h3><p>Check back soon.</p></div>`}</section>
+      <section id="host-events"><h2>Upcoming Tailgates</h2>${cards ? `<div class="events">${cards}</div>` : `<div class="empty"><h3>No upcoming tailgates are currently listed.</h3><p>New dates will appear here. Save this page for your next game day.</p></div>`}</section>
+      ${profile.description ? `<section id="host-about" class="about"><small>ABOUT THE HOST</small><h2>Meet your host</h2><p>${escapeHtml(profile.description)}</p></section>` : ""}
+      ${gallery ? `<section id="host-gallery"><small>THE EXPERIENCE</small><h2>Tailgate gallery</h2><div class="gallery">${gallery}</div></section>` : ""}
     </div>
   </main>
-  <footer><div class="footer-links"><a href="/">Home</a><a href="/release-2-0">Release 2.0</a><a href="/discover">Discover</a><a href="/contact.html">Contact &amp; Support</a><a href="/privacy-policy.html">Privacy</a><a href="/terms.html">Terms</a></div>© TailgateTime</footer>
+  <footer><div class="footer-links"><a href="/">Home</a><a href="/about">About</a><a href="/discover">Discover</a><a href="/contact.html">Contact &amp; Support</a><a href="/privacy-policy.html">Privacy</a><a href="/terms.html">Terms</a></div>© TailgateTime</footer>
   <script>
     (() => {
       const button = document.getElementById("share-host-page");
