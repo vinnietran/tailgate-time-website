@@ -18,6 +18,10 @@ import { db, storage as firebaseStorage } from "../lib/firebase";
 import { loadGoogleMapsSdk } from "../lib/googleMapsSdk";
 import { buildEventSizeSummary, formatTicketPricingLabel } from "../utils/tailgate";
 import { resolveLocationLabel } from "../utils/location";
+import {
+  paidTailgateLink,
+  trackPaidTailgateImpressions
+} from "../lib/paidTailgateAnalytics";
 
 type ViewMode = "list" | "map";
 type MapPanelMode = "results" | "details";
@@ -1593,8 +1597,13 @@ export default function DiscoverTailgates() {
     [mapPins, selectedId]
   );
   const selectedMapDetailsHref = selectedMapTailgate
-    ? `/tailgates/${selectedMapTailgate.id}?embed=discover-map`
+    ? `${paidTailgateLink(selectedMapTailgate.id, "map")}&embed=discover-map`
     : null;
+
+  useEffect(() => {
+    const source = viewMode === "map" ? "map" : searchText.trim() ? "search" : "discover";
+    trackPaidTailgateImpressions(tailgates, source);
+  }, [searchText, tailgates, viewMode]);
 
   const updateManualLocationUrl = useCallback(
     (coords: LatLng, label: string) => {
@@ -1720,9 +1729,9 @@ export default function DiscoverTailgates() {
 
   const handleOpenDetails = useCallback(
     (id: string) => {
-      navigate(`/tailgates/${id}`);
+      navigate(paidTailgateLink(id, searchText.trim() ? "search" : "discover"));
     },
-    [navigate]
+    [navigate, searchText]
   );
 
   const handleDiscoverCoverImageError = (rawUrl: string, renderedUrl: string) => {

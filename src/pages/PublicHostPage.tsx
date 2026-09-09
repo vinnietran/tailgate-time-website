@@ -8,6 +8,7 @@ import type { PublicHostPageData } from "../types/hostProfile";
 import { formatDateTimeRange } from "../utils/format";
 import { buildTailgatePricingSummary, formatTicketPricingLabel } from "../utils/tailgate";
 import tailgateTimeLogo from "../../ttnobg.png";
+import { paidTailgateLink, trackPaidTailgateImpressions } from "../lib/paidTailgateAnalytics";
 
 export default function PublicHostPage() {
   const { slug = "" } = useParams();
@@ -54,6 +55,10 @@ export default function PublicHostPage() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [activeGalleryIndex, data?.profile.galleryImageUrls?.length]);
+
+  useEffect(() => {
+    trackPaidTailgateImpressions(data?.upcomingTailgates ?? [], "host_page");
+  }, [data?.upcomingTailgates]);
 
   const share = async () => {
     if (!data) return;
@@ -175,7 +180,7 @@ export default function PublicHostPage() {
                     <Link
                       key={event.id}
                       className="host-public-event-card"
-                      to={`/tailgates/${event.id}`}
+                      to={paidTailgateLink(event.id, "host_page")}
                       onClick={() => void trackHostPageEvent("host_page_event_click", {
                         hostSlug: profile.slug,
                         eventId: event.id

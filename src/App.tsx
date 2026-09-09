@@ -26,6 +26,7 @@ const Release20 = lazy(() => import("./pages/Release20"));
 const AdminSpotlight = lazy(() => import("./pages/AdminSpotlight"));
 const AdminMetrics = lazy(() => import("./pages/AdminMetrics"));
 const AdminOps = lazy(() => import("./pages/AdminOps"));
+const AdminTicketAnalytics = lazy(() => import("./pages/AdminTicketAnalytics"));
 const PublicHostPage = lazy(() => import("./pages/PublicHostPage"));
 const HostPageSettings = lazy(() => import("./pages/HostPageSettings"));
 
@@ -162,6 +163,14 @@ export default function App() {
             element={withSuspense(
               <AdminRoute>
                 <AdminMetrics />
+              </AdminRoute>
+            )}
+          />
+          <Route
+            path="/admin/ticket-analytics"
+            element={withSuspense(
+              <AdminRoute>
+                <AdminTicketAnalytics />
               </AdminRoute>
             )}
           />

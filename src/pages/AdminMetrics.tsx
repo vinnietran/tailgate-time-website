@@ -186,11 +186,11 @@ function MetricCard({
   tone?: MetricCardTone;
 }) {
   return (
-    <section className={`admin-ops-metric-card ${tone ? `is-${tone}` : ""}`}>
+    <article className={`paid-analytics-summary-card platform-metrics-summary-card ${tone ? `is-${tone}` : ""}`}>
       <p>{label}</p>
       <strong>{value}</strong>
       <span>{helper}</span>
-    </section>
+    </article>
   );
 }
 
@@ -225,7 +225,7 @@ function TrendCard({
   const average = total > 0 ? total / Math.max(1, series.length) : 0;
 
   return (
-    <article className="admin-metrics-trend-card">
+    <article className="paid-analytics-chart-card platform-metrics-trend-card">
       <div className="admin-metrics-trend-card-header">
         <div>
           <p>{definition.label}</p>
@@ -373,24 +373,49 @@ export default function AdminMetrics() {
 
   return (
     <AppShell header={<TopBar firstName={firstName} />} showHeaderActions={false}>
-      <section className="admin-console-stack">
-        <article className="tailgate-card admin-console-card admin-ops-hero">
-          <div className="section-header">
+      <section className="admin-console-stack paid-analytics-dashboard platform-metrics-dashboard">
+        <article className="paid-analytics-hero">
+          <div className="paid-analytics-hero-heading">
             <div>
-              <h2>Owner Metrics Dashboard</h2>
-              <p className="section-subtitle">
-                Firebase aggregate metrics for growth, marketplace activity, and operational health.
-              </p>
+              <p className="paid-analytics-eyebrow">Admin · Platform overview</p>
+              <h2>Platform Metrics</h2>
+              <p>Track audience growth, event supply, ticket revenue, and operating health.</p>
             </div>
             <AdminConsoleNav />
           </div>
-          <div className="admin-console-note">
-            Tailgate size is estimated from confirmed paid tickets first, then RSVP counts, then any explicit size
-            field. Revenue values are shown in USD from aggregate cents fields.
+          <div className="paid-analytics-range-bar">
+            <div className="paid-analytics-preset-group" aria-label="Metrics trend range">
+              <button
+                type="button"
+                className={rangeDays === 7 ? "active" : ""}
+                aria-pressed={rangeDays === 7}
+                onClick={() => setRangeDays(7)}
+              >
+                Last 7 Days
+              </button>
+              <button
+                type="button"
+                className={rangeDays === 30 ? "active" : ""}
+                aria-pressed={rangeDays === 30}
+                onClick={() => setRangeDays(30)}
+              >
+                Last 30 Days
+              </button>
+            </div>
+            <span>
+              Last updated: {summary.updatedAt ? formatRelativeDate(summary.updatedAt) : "Awaiting data"}
+            </span>
           </div>
-          {loading ? <p className="meta-muted">Loading admin metrics...</p> : null}
-          {error ? <p className="error-banner">{error}</p> : null}
-          <div className="admin-ops-metric-grid">
+        </article>
+
+        <div className="platform-metrics-context-note">
+          Revenue and ticket totals use confirmed purchases. Tailgate size uses confirmed tickets,
+          then RSVPs, then the event estimate when needed.
+        </div>
+        {loading ? <div className="paid-analytics-loading" aria-live="polite">Loading platform metrics…</div> : null}
+        {error ? <p className="error-banner">{error}</p> : null}
+
+        <div className="paid-analytics-summary-grid">
             {summaryCards.map((metric) => (
               <MetricCard
                 key={metric.label}
@@ -400,44 +425,22 @@ export default function AdminMetrics() {
                 tone={metric.tone}
               />
             ))}
-          </div>
-          <div className="admin-metrics-footer">
-            <span>Last updated: {summary.updatedAt ? formatRelativeDate(summary.updatedAt) : "Awaiting data"}</span>
-            <span>Schema v{summary.schemaVersion}</span>
-          </div>
-        </article>
+        </div>
 
-        <article className="tailgate-card admin-console-card">
+        <article className="tailgate-card admin-console-card paid-analytics-section">
           <div className="section-header">
             <div>
-              <h2>Trend Charts</h2>
-              <p className="section-subtitle">
-                Aggregate daily buckets for signups, supply, ticket volume, and revenue.
-              </p>
-            </div>
-            <div className="admin-metrics-range-toggle" aria-label="Trend range">
-              <button
-                type="button"
-                className={`secondary-button${rangeDays === 7 ? " active" : ""}`}
-                aria-pressed={rangeDays === 7}
-                onClick={() => setRangeDays(7)}
-              >
-                7D
-              </button>
-              <button
-                type="button"
-                className={`secondary-button${rangeDays === 30 ? " active" : ""}`}
-                aria-pressed={rangeDays === 30}
-                onClick={() => setRangeDays(30)}
-              >
-                30D
-              </button>
+              <h2>Platform Trends</h2>
+              <p className="section-subtitle">Daily movement across growth, event supply, tickets, and revenue.</p>
             </div>
           </div>
           {selectedSeries.length === 0 ? (
-            <p className="meta-muted">No daily metric buckets have been written yet.</p>
+            <div className="paid-analytics-empty">
+              <strong>No trend data yet.</strong>
+              <span>Daily metrics will appear as aggregate buckets are recorded.</span>
+            </div>
           ) : (
-            <div className="admin-metrics-trend-grid">
+            <div className="paid-analytics-chart-grid platform-metrics-trend-grid">
               {TREND_CARD_DEFINITIONS.map((definition) => (
                 <TrendCard key={definition.key} definition={definition} series={selectedSeries} />
               ))}
@@ -445,12 +448,12 @@ export default function AdminMetrics() {
           )}
         </article>
 
-        <div className="admin-metrics-insight-grid">
-          <article className="tailgate-card admin-console-card">
+        <div className="platform-metrics-overview-grid">
+          <article className="tailgate-card admin-console-card paid-analytics-section">
             <div className="section-header">
               <div>
-                <h2>Tailgate Breakdown</h2>
-                <p className="section-subtitle">Marketplace supply by visibility and monetization type.</p>
+                <h2>Event Mix</h2>
+                <p className="section-subtitle">How current tailgate supply is distributed.</p>
               </div>
             </div>
             <div className="admin-metrics-breakdown-list">
@@ -472,11 +475,11 @@ export default function AdminMetrics() {
             </div>
           </article>
 
-          <article className="tailgate-card admin-console-card">
+          <article className="tailgate-card admin-console-card paid-analytics-section">
             <div className="section-header">
               <div>
-                <h2>Engagement Snapshot</h2>
-                <p className="section-subtitle">Clear labels so size metrics do not imply exact attendance.</p>
+                <h2>Engagement</h2>
+                <p className="section-subtitle">Audience size and activity across tailgates.</p>
               </div>
             </div>
             <div className="admin-metrics-detail-list">
@@ -498,11 +501,11 @@ export default function AdminMetrics() {
             </div>
           </article>
 
-          <article className="tailgate-card admin-console-card">
+          <article className="tailgate-card admin-console-card paid-analytics-section">
             <div className="section-header">
               <div>
                 <h2>Operational Health</h2>
-                <p className="section-subtitle">Backend-owned metrics that help flag payout and refund pressure.</p>
+                <p className="section-subtitle">Payout readiness and issues needing attention.</p>
               </div>
             </div>
             <div className="admin-metrics-detail-list">
@@ -525,57 +528,49 @@ export default function AdminMetrics() {
           </article>
         </div>
 
-        <div className="admin-ops-grid">
-          <article className="tailgate-card admin-console-card">
+        <div className="platform-metrics-leader-grid">
+          <article className="tailgate-card admin-console-card paid-analytics-section">
             <div className="section-header">
               <div>
                 <h2>Top Hosts</h2>
-                <p className="section-subtitle">Backed by host aggregate docs instead of raw client-side scans.</p>
+                <p className="section-subtitle">Hosts leading in event volume and ticket activity.</p>
               </div>
             </div>
             {topHosts.length === 0 ? (
-              <p className="meta-muted">No host aggregates yet.</p>
+              <div className="paid-analytics-empty"><strong>No host metrics yet.</strong><span>Host rankings will appear as activity is recorded.</span></div>
             ) : (
-              <div className="admin-ops-list">
+              <div className="paid-analytics-ranking-list platform-metrics-ranking-list">
                 {topHosts.map((host) => (
-                  <article className="admin-ops-list-item" key={host.id}>
-                    <div className="admin-ops-list-top">
-                      <div>
+                  <div className="platform-metrics-ranking-row" key={host.id}>
+                    <div>
                         <h3>{host.displayNameSnapshot}</h3>
-                        <p>
+                        <small>
                           {host.stripeConnected === null
                             ? "Stripe status unavailable"
                             : host.stripeConnected
                               ? "Stripe connected"
                               : "Stripe not connected"}
-                        </p>
-                      </div>
-                      <strong>{formatCompactNumber(host.tailgatesCreated)}</strong>
+                        </small>
                     </div>
-                    <p className="admin-ops-list-note">
-                      {formatCompactNumber(host.openTailgatesCreated)} open tailgates ·{" "}
-                      {formatCompactNumber(host.paidTailgatesCreated)} paid tailgates
-                    </p>
-                    <div className="admin-ops-list-meta">
-                      <span>{formatCompactNumber(host.ticketsSold)} tickets sold</span>
-                      <span>{formatCurrencyFromCents(host.grossRevenueCents)} gross</span>
-                      <span>{formatCompactNumber(host.upcomingTailgates)} upcoming</span>
+                    <div>
+                      <strong>{formatCompactNumber(host.tailgatesCreated)} events</strong>
+                      <small>{formatCompactNumber(host.ticketsSold)} tickets · {formatCurrencyFromCents(host.grossRevenueCents)} gross</small>
                     </div>
-                  </article>
+                  </div>
                 ))}
               </div>
             )}
           </article>
 
-          <article className="tailgate-card admin-console-card">
+          <article className="tailgate-card admin-console-card paid-analytics-section">
             <div className="section-header">
               <div>
                 <h2>Largest Upcoming Tailgates</h2>
-                <p className="section-subtitle">Estimated size from confirmed tickets, RSVPs, or explicit counts.</p>
+                <p className="section-subtitle">Upcoming events with the strongest expected attendance.</p>
               </div>
             </div>
             {largestUpcomingTailgates.length === 0 ? (
-              <p className="meta-muted">No upcoming aggregate tailgate sizes yet.</p>
+              <div className="paid-analytics-empty"><strong>No upcoming event metrics yet.</strong><span>Attendance estimates will appear here.</span></div>
             ) : (
               <div className="admin-ops-list">
                 {largestUpcomingTailgates.map((tailgate) => (
@@ -584,43 +579,44 @@ export default function AdminMetrics() {
               </div>
             )}
           </article>
+        </div>
 
-          <article className="tailgate-card admin-console-card admin-metrics-activity-card">
+        <article className="tailgate-card admin-console-card paid-analytics-section platform-metrics-activity-card">
             <div className="section-header">
               <div>
-                <h2>Recent Platform Activity</h2>
+                <h2>Recent Activity</h2>
                 <p className="section-subtitle">Latest user, tailgate, ticket, refund, and feed events.</p>
               </div>
             </div>
             {recentActivity.length === 0 ? (
-              <p className="meta-muted">No recent activity has been recorded yet.</p>
+              <div className="paid-analytics-empty"><strong>No recent activity.</strong><span>New platform events will appear here.</span></div>
             ) : (
-              <div className="admin-ops-list">
+              <div className="platform-metrics-activity-list">
                 {recentActivity.map((item) => (
                   <ActivityRow item={item} key={item.id} />
                 ))}
               </div>
             )}
-          </article>
-        </div>
+        </article>
 
-        <article className="tailgate-card admin-console-card">
+        <article className="tailgate-card admin-console-card paid-analytics-section platform-metrics-revenue-card">
           <div className="section-header">
             <div>
-              <h2>Revenue Notes</h2>
-              <p className="section-subtitle">Quick context for interpreting the aggregate dashboard.</p>
+              <h2>Revenue Accounting</h2>
+              <p className="section-subtitle">Confirmed volume, platform fees, and refunds kept separate.</p>
             </div>
+            <span className="platform-metrics-schema">Schema v{summary.schemaVersion}</span>
           </div>
           <div className="admin-metrics-note-grid">
             <DetailMetricRow
               label="Gross revenue"
               value={formatCurrencyFromCentsExact(summary.grossRevenueCents)}
-              helper="Before refunds"
+              helper="Confirmed volume before refunds"
             />
             <DetailMetricRow
               label="Platform fees"
               value={formatCurrencyFromCentsExact(summary.platformFeeRevenueCents)}
-              helper="Fees collected by the platform"
+              helper="Recorded fees collected"
             />
             <DetailMetricRow
               label="Refunded revenue"

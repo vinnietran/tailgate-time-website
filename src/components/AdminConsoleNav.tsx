@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 
 const navItems = [
+  { to: "/admin/ticket-analytics", label: "Ticket analytics" },
   { to: "/admin/metrics", label: "Metrics dashboard" },
   { to: "/admin/ops", label: "Ops dashboard" },
   { to: "/admin/spotlight", label: "Spotlight editor" }
