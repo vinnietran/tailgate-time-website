@@ -165,6 +165,7 @@ export default function HostDashboard() {
 
   return (
     <AppShell header={<TopBar firstName={firstName} />} showHeaderActions={false}>
+      <div className="host-dashboard-page">
       {hostProfile && !hostPagePromptDismissed ? (
         <section className="host-page-setup-banner" aria-labelledby="host-page-announcement-title">
           <button
@@ -436,6 +437,7 @@ export default function HostDashboard() {
           </div>
         )}
       </section>
+      </div>
     </AppShell>
   );
 }

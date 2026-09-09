@@ -8,7 +8,7 @@ import {
   query,
   updateDoc
 } from "firebase/firestore";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import { useAuth } from "../hooks/useAuth";
 import { db } from "../lib/firebase";
@@ -257,7 +257,19 @@ export default function Messages() {
 
   return (
     <AppShell header={<div className="simple-header"><h1>Notifications</h1></div>}>
-      <section className="notifications-page">
+      <section className="notifications-page notifications-inbox-page">
+        <header className="notifications-overview">
+          <div className="notifications-overview-copy">
+            <span className="notifications-overview-dot" aria-hidden="true" />
+            <p>
+              <strong>{unreadIds.length} unread</strong>
+              <span>{notifications.length} total</span>
+            </p>
+          </div>
+          <Link className="secondary-button" to="/account/notifications">
+            Notification settings
+          </Link>
+        </header>
         {loading ? (
           <article className="notifications-card">
             <p className="meta-muted">Loading notifications...</p>
@@ -330,7 +342,9 @@ export default function Messages() {
                     return (
                       <div
                         key={item.id}
-                        className={`notifications-item ${selected ? "selected" : ""}`}
+                        className={`notifications-item${!item.read ? " is-unread" : ""}${
+                          selected ? " selected" : ""
+                        }`}
                       >
                         <button
                           type="button"
@@ -346,7 +360,12 @@ export default function Messages() {
                             >
                               {selected ? "✓" : ""}
                             </span>
-                          ) : null}
+                          ) : (
+                            <span
+                              className={`notifications-unread-dot${item.read ? " is-read" : ""}`}
+                              aria-hidden="true"
+                            />
+                          )}
                           <span className="notifications-item-copy">
                             <strong>{item.description}</strong>
                             <small>{formatDateTime(item.createdAt)}</small>
