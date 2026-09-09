@@ -31,7 +31,7 @@ function getAnalyticsPageTitle(pathname: string) {
     { path: "/checkin", title: "Check-in Hub" },
     { path: "/messages", title: "Messages" },
     { path: "/discover", title: "Discover Tailgates" },
-    { path: "/release-2-0", title: "Release 2.0" },
+    { path: "/about", title: "About | TailgateTime" },
     { path: "/user-guide", title: "User Guide" },
     { path: "/admin/spotlight", title: "Admin Spotlight" },
     { path: "/admin/metrics", title: "Admin Metrics" },
