@@ -73,3 +73,32 @@ test("view and checkout conversion calculations use behavioral denominators", ()
   assert.equal(dashboard.summary.viewConversionRate, 0.25);
   assert.equal(dashboard.summary.checkoutConversionRate, 0.5);
 });
+
+test("host promotion traffic remains attributable in source reporting", () => {
+  const dashboard = build([], [
+    {
+      id: "host-view",
+      data: {
+        eventName: "paid_tailgate_view",
+        tailgateId: "paid-1",
+        occurredAt: "2026-09-09",
+        visitorId: "host-visitor",
+        source: "host_share",
+        campaign: "host_copy_link",
+        medium: "host_promotion"
+      }
+    }
+  ]);
+  assert.equal(dashboard.summary.views, 1);
+  assert.deepEqual(
+    dashboard.sources.find((source) => source.source === "host_share"),
+    {
+      source: "host_share",
+      views: 1,
+      checkoutStarts: 0,
+      purchases: 0,
+      revenueCents: 0,
+      conversionRate: 0
+    }
+  );
+});

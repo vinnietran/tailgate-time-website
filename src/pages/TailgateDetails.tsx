@@ -5652,6 +5652,15 @@ export default function TailgateDetails() {
                       <button type="button" className="secondary-button" onClick={copyEventShareLink}>
                         Copy share link
                       </button>
+                      {detail.visibilityType === "open_free" || detail.visibilityType === "open_paid" ? (
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={() => navigate(`/tailgates/${detail.id}/promote`)}
+                        >
+                          Share Event
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 </section>

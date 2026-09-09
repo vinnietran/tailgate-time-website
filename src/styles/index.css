@@ -15743,6 +15743,231 @@ a.secondary-button {
 .paid-analytics-hero .admin-console-nav { justify-content: flex-end; }
 .paid-analytics-hero .admin-console-nav .secondary-button { border-color: rgba(255,255,255,.24); color: #fff; background: rgba(255,255,255,.08); }
 
+/* Tailgate creation success + host promotion toolkit */
+.creation-success-page,
+.promotion-page {
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+  padding-top: 42px;
+  padding-bottom: 64px;
+}
+
+.creation-success-card,
+.promotion-state-card,
+.promotion-toolkit {
+  border: 1px solid #dce4ec;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 22px 56px rgba(25, 44, 73, 0.11);
+}
+
+.creation-success-card {
+  max-width: 850px;
+  margin: 0 auto;
+  padding: clamp(26px, 5vw, 54px);
+  text-align: center;
+}
+
+.creation-success-icon {
+  width: 70px;
+  height: 70px;
+  margin: 0 auto 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #e8f7ef;
+  border: 1px solid #bce6cf;
+  color: #17734d;
+  font-size: 2rem;
+  font-weight: 800;
+}
+
+.creation-success-kicker,
+.promotion-kicker,
+.promotion-tool-label {
+  margin: 0 0 6px;
+  color: #86610c;
+  font-size: .74rem;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.creation-success-card h1 {
+  margin: 0;
+  color: #172844;
+  font: 700 clamp(2rem, 5vw, 3.1rem)/1.08 "Space Grotesk", sans-serif;
+}
+
+.creation-success-lead {
+  max-width: 660px;
+  margin: 16px auto 28px;
+  color: #526178;
+  font-size: 1.08rem;
+  line-height: 1.65;
+}
+
+.creation-success-event {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 22px;
+  align-items: center;
+  padding: 18px;
+  border: 1px solid #e0e6ed;
+  border-radius: 18px;
+  background: #f8fafc;
+  text-align: left;
+}
+
+.creation-success-event img,
+.creation-success-cover-fallback {
+  width: 180px;
+  height: 132px;
+  border-radius: 13px;
+  object-fit: cover;
+}
+
+.creation-success-cover-fallback {
+  display: grid;
+  place-items: center;
+  color: #f2c94c;
+  background: linear-gradient(145deg, #172844, #315888);
+  font: 800 2.6rem "Space Grotesk", sans-serif;
+}
+
+.creation-success-cover-fallback .creation-success-logo {
+  width: 82%;
+  height: 82%;
+  object-fit: contain;
+}
+
+.creation-success-event h2 {
+  margin: 8px 0;
+  color: #172844;
+  font: 700 1.35rem "Space Grotesk", sans-serif;
+}
+
+.creation-success-event p { margin: 4px 0; color: #5f6e82; }
+.creation-success-type { color: #8a6410; font-size: .76rem; font-weight: 800; text-transform: uppercase; }
+
+.creation-success-actions,
+.promotion-primary-actions,
+.promotion-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.creation-success-actions { justify-content: center; margin-top: 28px; }
+.creation-success-actions .secondary-button,
+.promotion-toolkit .secondary-button,
+.promotion-state-card .secondary-button {
+  background: #ffffff;
+  border-color: #b8c6d7;
+  color: #244a78;
+  box-shadow: 0 3px 10px rgba(23, 40, 68, 0.06);
+}
+
+.creation-success-actions .secondary-button:hover,
+.promotion-toolkit .secondary-button:hover,
+.promotion-state-card .secondary-button:hover {
+  background: #eef4fa;
+  border-color: #7f99b7;
+  color: #173b68;
+}
+
+.creation-success-actions .outline-button,
+.promotion-toolkit .outline-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border-color: #8ca0b8;
+  color: #365675;
+  text-decoration: none;
+}
+
+.creation-success-actions .outline-button:hover,
+.promotion-toolkit .outline-button:hover {
+  background: #f3f6f9;
+  border-color: #607c9b;
+  color: #1f4269;
+}
+
+.creation-success-actions .primary-button,
+.creation-success-actions .secondary-button,
+.creation-success-actions .outline-button {
+  min-height: 48px;
+}
+.creation-success-note { margin: 18px 0 0; color: #778396; font-size: .88rem; }
+
+.promotion-breadcrumb {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 14px;
+  color: #68778b;
+  font-size: .9rem;
+}
+.promotion-breadcrumb a { color: #294f80; font-weight: 700; }
+.promotion-state-card { padding: 36px; }
+.promotion-state-card h1 { margin-top: 0; color: #172844; }
+
+.promotion-toolkit { padding: clamp(22px, 4vw, 42px); }
+.promotion-toolkit-heading { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }
+.promotion-toolkit-heading h2 { margin: 0; color: #172844; font: 700 clamp(1.8rem, 4vw, 2.6rem) "Space Grotesk", sans-serif; }
+.promotion-toolkit-heading p:not(.promotion-kicker) { margin: 9px 0 0; color: #5f6e82; font-size: 1.02rem; }
+.promotion-type { flex: 0 0 auto; padding: 8px 12px; border-radius: 999px; font-size: .75rem; font-weight: 800; text-transform: uppercase; }
+.promotion-type-paid { background: #fff3c9; color: #6f5008; }
+.promotion-type-free { background: #e4f5ec; color: #176344; }
+.promotion-primary-actions { margin-top: 24px; }
+.promotion-feedback { margin: 14px 0 0; padding: 10px 13px; border-radius: 10px; font-weight: 700; }
+.promotion-feedback.success { color: #176344; background: #e8f7ef; }
+.promotion-feedback.error { color: #9b2c2c; background: #fff0f0; }
+
+.promotion-tool-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 640px);
+  gap: 18px;
+  margin-top: 28px;
+  padding-top: 28px;
+  border-top: 1px solid #e3e8ee;
+}
+
+.promotion-tool-card {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  padding: 22px;
+  border: 1px solid #dfe6ed;
+  border-radius: 18px;
+  background: #f8fafc;
+}
+.promotion-tool-card h3 { margin: 0; color: #172844; font: 700 1.22rem "Space Grotesk", sans-serif; }
+.promotion-tool-card p:not(.promotion-tool-label) { margin: 7px 0 0; color: #657388; line-height: 1.5; }
+.promotion-tool-placeholder {
+  min-height: 230px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed #c9d3df;
+  border-radius: 15px;
+  color: #315888;
+  background: #fff;
+  font-size: 4.5rem;
+}
+.promotion-qr-preview { width: 100%; max-height: 440px; padding: 18px; object-fit: contain; border-radius: 15px; background: #fff; }
+
+@media (max-width: 720px) {
+  .creation-success-page,
+  .promotion-page { width: min(100% - 20px, 1120px); padding-top: 18px; }
+  .creation-success-event { grid-template-columns: 1fr; }
+  .creation-success-event img,
+  .creation-success-cover-fallback { width: 100%; height: 180px; }
+  .creation-success-actions > *,
+  .promotion-primary-actions > * { width: 100%; justify-content: center; }
+  .promotion-toolkit-heading { display: grid; }
+  .promotion-card-actions > * { flex: 1 1 120px; }
+}
+
 .paid-analytics-range-bar {
   display: flex;
   align-items: center;
