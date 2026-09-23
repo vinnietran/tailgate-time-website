@@ -111,6 +111,8 @@ test.describe("Host flows", () => {
   test("create wizard can progress from type to review for a private event", async ({
     page
   }) => {
+    await page.route("**/src/lib/eventTimeZone.ts", (route) => route.fulfill({ contentType: "application/javascript", body: "export async function lookupEventTimeZone() { return Intl.DateTimeFormat().resolvedOptions().timeZone; }" }));
+    await page.route("https://maps.googleapis.com/maps/api/geocode/json**", (route) => route.fulfill({ json: { status: "OK", results: [{ formatted_address: "Stadium St, Pittsburgh, PA, USA", geometry: { location: { lat: 40.44, lng: -79.99 } } }] } }));
     await page.goto("/#/tailgates/new");
 
     await expect(
@@ -131,6 +133,7 @@ test.describe("Host flows", () => {
 
     await page.getByLabel("Location").fill("Lot 4, Stadium Drive, Pittsburgh, PA");
     await page.getByRole("button", { name: /next: invite/i }).click();
+    await page.getByRole("button", { name: /next: invite/i }).click();
 
     await expect(
       page.getByRole("heading", { name: /step 4: invite friends/i })
@@ -141,7 +144,7 @@ test.describe("Host flows", () => {
     await expect(
       page.getByRole("heading", { name: /step 5: review and create/i })
     ).toBeVisible();
-    await expect(page.getByText("Codex Private Tailgate")).toBeVisible();
+    await expect(page.getByRole("definition").filter({ hasText: "Codex Private Tailgate" })).toBeVisible();
     await expect(
       page.getByRole("definition").filter({ hasText: /Pittsburgh\s+PA\s+USA/ }).first()
     ).toBeVisible();

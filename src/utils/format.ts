@@ -1,51 +1,40 @@
+import { validTimeZone } from "./eventTimeZone";
+
 function isValidDate(value: Date | null | undefined): value is Date {
   return value instanceof Date && !Number.isNaN(value.getTime());
 }
 
-function isSameDay(start: Date, end: Date) {
-  return (
-    start.getFullYear() === end.getFullYear() &&
-    start.getMonth() === end.getMonth() &&
-    start.getDate() === end.getDate()
-  );
+function formatDateLabel(date: Date, timeZone?: string) {
+  return new Intl.DateTimeFormat("en-US", { weekday: "long", month: "short", day: "numeric", timeZone }).format(date);
 }
 
-function formatDateLabel(date: Date) {
+function formatTimeLabel(date: Date, timeZone?: string) {
   return new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    month: "short",
-    day: "numeric"
+    hour: "numeric", minute: "2-digit", timeZone, ...(timeZone ? { timeZoneName: "short" as const } : {})
   }).format(date);
 }
 
-function formatTimeLabel(date: Date) {
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit"
-  }).format(date);
+export function formatDateTime(date: Date, timeZone?: string) {
+  const zone = validTimeZone(timeZone);
+  return `${formatDateLabel(date, zone)} · ${formatTimeLabel(date, zone)}`;
 }
 
-export function formatDateTime(date: Date) {
-  return `${formatDateLabel(date)} · ${formatTimeLabel(date)}`;
-}
-
-export function formatTimeRange(startDate: Date | null | undefined, endDate?: Date | null) {
+export function formatTimeRange(startDate: Date | null | undefined, endDate?: Date | null, timeZone?: string) {
   if (!isValidDate(startDate)) return "TBD";
-  if (!isValidDate(endDate) || startDate.getTime() === endDate.getTime()) {
-    return formatTimeLabel(startDate);
-  }
-  return `${formatTimeLabel(startDate)} - ${formatTimeLabel(endDate)}`;
+  const zone = validTimeZone(timeZone);
+  if (!isValidDate(endDate) || startDate.getTime() === endDate.getTime()) return formatTimeLabel(startDate, zone);
+  return `${formatTimeLabel(startDate, zone)} - ${formatTimeLabel(endDate, zone)}`;
 }
 
-export function formatDateTimeRange(startDate: Date | null | undefined, endDate?: Date | null) {
+export function formatDateTimeRange(startDate: Date | null | undefined, endDate?: Date | null, timeZone?: string) {
   if (!isValidDate(startDate)) return "Date TBD";
-  if (!isValidDate(endDate) || startDate.getTime() === endDate.getTime()) {
-    return formatDateTime(startDate);
+  const zone = validTimeZone(timeZone);
+  if (!isValidDate(endDate) || startDate.getTime() === endDate.getTime()) return formatDateTime(startDate, zone);
+  const dayFormatter = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "numeric", day: "numeric", timeZone: zone });
+  if (dayFormatter.format(startDate) === dayFormatter.format(endDate)) {
+    return `${formatDateLabel(startDate, zone)} · ${formatTimeRange(startDate, endDate, zone)}`;
   }
-  if (isSameDay(startDate, endDate)) {
-    return `${formatDateLabel(startDate)} · ${formatTimeRange(startDate, endDate)}`;
-  }
-  return `${formatDateTime(startDate)} - ${formatDateTime(endDate)}`;
+  return `${formatDateTime(startDate, zone)} - ${formatDateTime(endDate, zone)}`;
 }
 
 export function formatCurrencyFromCents(valueCents?: number) {

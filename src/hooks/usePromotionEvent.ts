@@ -1,3 +1,4 @@
+import { validTimeZone } from "../utils/eventTimeZone";
 import { useEffect, useState } from "react";
 import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "../lib/firebase";
@@ -38,7 +39,8 @@ function normalizeEvent(id: string, data: Record<string, unknown>): PromotionEve
       ? data.coHostIds.filter((value): value is string => typeof value === "string")
       : [],
     visibilityType: normalizeVisibility(data.visibilityType),
-    startDateTime: normalizeDate(data.startDateTime ?? data.dateTime ?? data.eventTargetTime),
+    timeZone: validTimeZone(data.timeZone),
+    startDateTime: normalizeDate(data.startDateTime ?? data.dateTime),
     endDateTime: normalizeDate(data.endDateTime ?? data.endAt),
     locationSummary: firstString(data.locationSummary, location) ?? "Location to be announced",
     coverImageUrl: firstString(
@@ -73,6 +75,7 @@ export function usePromotionEvent(eventId?: string, fallback?: PromotionEvent | 
           hostName: "TailgateTime Host",
           coHostIds: [],
           visibilityType: mock.visibilityType,
+          timeZone: mock.timeZone,
           startDateTime: mock.startDateTime,
           endDateTime: mock.endDateTime ?? null,
           locationSummary: mock.locationSummary ?? "Location to be announced",

@@ -1,3 +1,4 @@
+import { validTimeZone } from "../utils/eventTimeZone";
 import { useEffect, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { Link } from "react-router-dom";
@@ -41,6 +42,7 @@ type HomepageTailgateListing = {
   name: string;
   hostName?: string;
   visibilityType: "open_free" | "open_paid";
+  timeZone?: string;
   startDateTime: Date | null;
   endDateTime: Date | null;
   locationSummary?: string;
@@ -323,7 +325,6 @@ function toHomepageTailgateListing(
 
   const startDateTime =
     normalizeDate(data.dateTime) ??
-    normalizeDate(data.eventTargetTime) ??
     normalizeDate(data.startDateTime) ??
     normalizeDate(data.startAt) ??
     normalizeDate(data.eventDateTime) ??
@@ -358,6 +359,7 @@ function toHomepageTailgateListing(
     visibilityType,
     startDateTime,
     endDateTime,
+    timeZone: validTimeZone(data.timeZone),
     locationSummary: resolveListingLocation(data),
     coverImageUrl: resolveListingCoverImageUrl(data),
     priceLabel:
@@ -664,7 +666,7 @@ export default function Home() {
                       </span>
                     </div>
                     <p className="homepage-discover-event-date">
-                      {formatDateTimeRange(listing.startDateTime, listing.endDateTime)}
+                      {formatDateTimeRange(listing.startDateTime, listing.endDateTime, listing.timeZone)}
                     </p>
                     <div className="homepage-discover-event-footer">
                       <span>{listing.locationSummary ?? "Location coming soon"}</span>
@@ -777,7 +779,7 @@ export default function Home() {
                           </span>
                         </div>
                         <p className="homepage-partner-listing-date">
-                          {formatDateTimeRange(listing.startDateTime, listing.endDateTime)}
+                          {formatDateTimeRange(listing.startDateTime, listing.endDateTime, listing.timeZone)}
                         </p>
                         <div className="homepage-partner-listing-body">
                           <div className="homepage-partner-listing-copy">

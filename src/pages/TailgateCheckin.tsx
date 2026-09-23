@@ -1,3 +1,4 @@
+import { validTimeZone } from "../utils/eventTimeZone";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { httpsCallable } from "firebase/functions";
 import {
@@ -34,6 +35,7 @@ type CheckedInTicketRow = {
 type CheckinEventDetail = {
   id: string;
   eventName: string;
+  timeZone?: string;
   startDateTime: Date | null;
   endDateTime?: Date | null;
   hostId: string;
@@ -151,9 +153,9 @@ function toCheckinDetailFromFirestore(
   return {
     id,
     eventName: firstString(data.eventName, data.name, data.title) ?? "Untitled Tailgate",
+    timeZone: validTimeZone(data.timeZone),
     startDateTime:
       resolveDate(data.dateTime) ??
-      resolveDate(data.eventTargetTime) ??
       resolveDate(data.startDateTime) ??
       resolveDate(data.startAt) ??
       resolveDate(data.eventDateTime) ??
@@ -183,6 +185,7 @@ function toCheckinDetailFromMock(id: string): CheckinEventDetail | null {
   return {
     id: mock.id,
     eventName: mock.name,
+    timeZone: mock.timeZone,
     startDateTime: mock.startDateTime,
     endDateTime: mock.endDateTime,
     hostId: mock.hostUserId,
@@ -493,7 +496,7 @@ export default function TailgateCheckin() {
             </div>
             <div className="tailgate-checkin-event-meta">
               <strong>{detail.eventName}</strong>
-              <span>{formatDateTimeRange(detail.startDateTime, detail.endDateTime)}</span>
+              <span>{formatDateTimeRange(detail.startDateTime, detail.endDateTime, detail.timeZone)}</span>
             </div>
             {!isHostUser ? (
               <div className="error-banner">

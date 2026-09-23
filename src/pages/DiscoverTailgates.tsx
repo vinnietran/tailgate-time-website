@@ -1,5 +1,7 @@
+import { formatDateTimeRange } from "../utils/format";
+import { validTimeZone } from "../utils/eventTimeZone";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { collection, onSnapshot } from "firebase/firestore";
 import { getBlob, getDownloadURL, ref } from "firebase/storage";
 import { useLocation, useNavigate } from "react-router-dom";
 import tailgateTimeLogo from "../../ttnobg.png";
@@ -37,6 +39,7 @@ type DiscoverTailgateRecord = {
   id: string;
   eventName: string;
   hostName?: string;
+  timeZone?: string;
   startDateTime: Date | null;
   endDateTime?: Date | null;
   visibilityType: "open_free" | "open_paid";
@@ -62,7 +65,6 @@ type DiscoverTailgate = DiscoverTailgateRecord & {
 const DEFAULT_RADIUS_MILES = 50;
 const EARTH_RADIUS_MILES = 3958.8;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
-const PUBLIC_DISCOVER_VISIBILITY_TYPES = ["open_free", "open_paid"] as const;
 const DISCOVER_DATE_FILTERS: Array<{ value: DiscoverDateFilter; label: string }> = [
   { value: "all", label: "Any date" },
   { value: "today", label: "Today" },
@@ -534,19 +536,18 @@ function resolveTicketSalesCloseAt(
   data: Record<string, unknown>,
   startDateTime: Date | null
 ): Date | null {
+  const daysBefore =
+    coerceNumber(data.ticketSalesCloseDaysBefore) ?? coerceNumber(data.ticketSalesCutoffDays);
+  if (typeof daysBefore === "number" && startDateTime) {
+    return new Date(startDateTime.getTime() - Math.max(0, daysBefore) * DAY_IN_MS);
+  }
+
   const direct =
     normalizeDate(data.ticketSalesCloseAt) ??
     normalizeDate(data.ticketSalesCutoffAt) ??
     normalizeDate(data.salesCloseAt);
   if (direct) return direct;
-
-  const daysBefore =
-    coerceNumber(data.ticketSalesCloseDaysBefore) ?? coerceNumber(data.ticketSalesCutoffDays);
-  if (typeof daysBefore !== "number" || !startDateTime) {
-    return null;
-  }
-
-  return new Date(startDateTime.getTime() - Math.max(0, daysBefore) * DAY_IN_MS);
+  return null;
 }
 
 function countConfirmedDiscoverAttendees(
@@ -644,7 +645,6 @@ function toDiscoverTailgateRecord(
 
   const startDateTime =
     normalizeDate(data.dateTime) ??
-    normalizeDate(data.eventTargetTime) ??
     normalizeDate(data.startDateTime) ??
     normalizeDate(data.startAt) ??
     normalizeDate(data.eventDateTime) ??
@@ -685,6 +685,7 @@ function toDiscoverTailgateRecord(
     hostName: resolveHostName(data),
     startDateTime,
     endDateTime,
+    timeZone: validTimeZone(data.timeZone),
     visibilityType,
     coverImageUrl: resolveCoverImageUrl(data) ?? DEFAULT_TAILGATE_COVER_IMAGE,
     description: resolveDescription(data),
@@ -749,6 +750,7 @@ function fromMockTailgates(): DiscoverTailgateRecord[] {
         id: item.id,
         eventName: item.name,
         hostName: resolveHostName(mockData) ?? "Demo Host",
+        timeZone: item.timeZone,
         startDateTime: item.startDateTime,
         visibilityType,
         coverImageUrl: item.coverImageUrl ?? DEFAULT_TAILGATE_COVER_IMAGE,
@@ -789,41 +791,6 @@ function haversineMiles(a: LatLng, b: LatLng) {
     Math.cos(lat1) * Math.cos(lat2) * sinHalfLng * sinHalfLng;
 
   return 2 * EARTH_RADIUS_MILES * Math.asin(Math.sqrt(h));
-}
-
-function formatDiscoverDate(startDate: Date | null, endDate?: Date | null) {
-  if (!startDate || Number.isNaN(startDate.getTime())) return "Time TBD";
-
-  const fullFormatter = new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit"
-  });
-  if (!endDate || Number.isNaN(endDate.getTime()) || startDate.getTime() === endDate.getTime()) {
-    return fullFormatter.format(startDate);
-  }
-
-  const sameDay =
-    startDate.getFullYear() === endDate.getFullYear() &&
-    startDate.getMonth() === endDate.getMonth() &&
-    startDate.getDate() === endDate.getDate();
-  const dateLabel = new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric"
-  }).format(startDate);
-  const timeFormatter = new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit"
-  });
-
-  if (sameDay) {
-    return `${dateLabel} · ${timeFormatter.format(startDate)} - ${timeFormatter.format(endDate)}`;
-  }
-
-  return `${dateLabel} · ${timeFormatter.format(startDate)} - ${fullFormatter.format(endDate)}`;
 }
 
 function formatDistance(miles: number) {
@@ -1331,13 +1298,8 @@ export default function DiscoverTailgates() {
     setLoadingState("initial");
     setError(null);
 
-    const publicTailgatesQuery = query(
-      collection(db, "tailgateEvents"),
-      where("visibilityType", "in", [...PUBLIC_DISCOVER_VISIBILITY_TYPES])
-    );
-
     const unsubscribe = onSnapshot(
-      publicTailgatesQuery,
+      collection(db, "tailgateEvents"),
       (snapshot) => {
         const items = snapshot.docs
           .map((doc) => toDiscoverTailgateRecord(doc.id, doc.data() as Record<string, unknown>))
@@ -2155,7 +2117,7 @@ export default function DiscoverTailgates() {
                             <span className="discover-map-result-index">{index + 1}</span>
                             <span className="discover-map-result-main">
                               <strong>{item.eventName}</strong>
-                              <small>{formatDiscoverDate(item.startDateTime, item.endDateTime)}</small>
+                              <small>{formatDateTimeRange(item.startDateTime, item.endDateTime, item.timeZone)}</small>
                               {item.hostName ? <small>Hosted by {item.hostName}</small> : null}
                             </span>
                             <span className="discover-map-result-price">
@@ -2276,7 +2238,7 @@ export default function DiscoverTailgates() {
                       </div>
                       <p className="discover-card-detail">
                         <IconCalendar size={17} />
-                        <span>{formatDiscoverDate(item.startDateTime, item.endDateTime)}</span>
+                        <span>{formatDateTimeRange(item.startDateTime, item.endDateTime, item.timeZone)}</span>
                       </p>
                       <p className="discover-card-detail">
                         <IconLocation size={17} />

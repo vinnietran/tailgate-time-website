@@ -176,6 +176,7 @@ export async function createTailgate(params: {
   ticketPrice?: string;
   capacity?: string;
   ticketSalesCutoffDays?: string;
+  timeZone?: string;
 }) {
   const {
     page,
@@ -209,11 +210,20 @@ export async function createTailgate(params: {
   await page.getByRole("button", { name: /next: event location/i }).click();
 
   await page.getByLabel("Location").fill(location);
-  if (visibilityLabel !== "Invite only") {
-    await page.getByRole("button", { name: /find on map/i }).click();
-    await expect(page.getByTitle("Tailgate location preview")).toBeVisible({ timeout: 20000 });
+  const mapButton = page.getByRole("button", { name: /find on map/i });
+  if (await mapButton.isEnabled()) {
+    await mapButton.click();
   }
-
+  const zoneField = page.locator(".create-wizard-time-zone");
+  await expect(zoneField.getByText("Finding the timezone for this location…")).toHaveCount(0, { timeout: 20000 });
+  const useLocationZone = page.getByRole("button", { name: "Use location timezone", exact: true });
+  if (await useLocationZone.isVisible()) {
+    await useLocationZone.click();
+  } else if (await page.getByRole("button", { name: "Confirm timezone", exact: true }).isVisible()) {
+    // Existing QA fixtures are Pittsburgh venues; other fixtures may provide a zone explicitly.
+    await page.getByLabel("Event timezone", { exact: true }).selectOption(params.timeZone || "America/New_York");
+    await page.getByRole("button", { name: "Confirm timezone", exact: true }).click();
+  }
   await page.getByRole("button", { name: /next:/i }).click();
   await page.getByRole("button", { name: /next: review and create/i }).click();
 

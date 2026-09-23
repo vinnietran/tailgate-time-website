@@ -12,6 +12,7 @@ export type PromotionEvent = {
   hostName: string;
   coHostIds: string[];
   visibilityType: VisibilityType;
+  timeZone?: string;
   startDateTime: Date | null;
   endDateTime: Date | null;
   locationSummary: string;

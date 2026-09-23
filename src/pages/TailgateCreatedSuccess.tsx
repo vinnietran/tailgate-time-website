@@ -90,7 +90,7 @@ export default function TailgateCreatedSuccess() {
               <div>
                 <span className="creation-success-type">{paid ? "Open Paid" : eligible ? "Open Free" : "Invite Only"}</span>
                 <h2>{event.name}</h2>
-                <p>{formatDateTimeRange(event.startDateTime, event.endDateTime)}</p>
+                <p>{formatDateTimeRange(event.startDateTime, event.endDateTime, event.timeZone)}</p>
                 <p>{event.locationSummary}</p>
               </div>
             </article>
