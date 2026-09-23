@@ -96,7 +96,7 @@ export default function TailgateCard({
         <div className="card-left">
           <div className="meta-row">
             <IconCalendar />
-            <span>{formatDateTimeRange(event.startDateTime, event.endDateTime)}</span>
+            <span>{formatDateTimeRange(event.startDateTime, event.endDateTime, event.timeZone)}</span>
           </div>
           <div className="meta-row">
             <IconLocation />

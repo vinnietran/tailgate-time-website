@@ -1,3 +1,4 @@
+import { validTimeZone } from "../utils/eventTimeZone";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   addDoc,
@@ -216,6 +217,7 @@ export default function EventFeed() {
   const createdBlobImageUrlsRef = useRef<string[]>([]);
 
   const [eventName, setEventName] = useState("Tailgate");
+  const [eventTimeZone, setEventTimeZone] = useState<string | undefined>();
   const [eventStartAt, setEventStartAt] = useState<Date | null>(null);
   const [eventEndAt, setEventEndAt] = useState<Date | null>(null);
   const [posts, setPosts] = useState<EventFeedPost[]>([]);
@@ -311,10 +313,10 @@ export default function EventFeed() {
         }
 
         const data = snapshot.data() as Record<string, unknown>;
+        setEventTimeZone(validTimeZone(data.timeZone));
         setEventName(firstString(data.eventName, data.name, data.title) ?? "Tailgate");
         setEventStartAt(
           normalizeDate(data.dateTime) ??
-            normalizeDate(data.eventTargetTime) ??
             normalizeDate(data.startDateTime) ??
             normalizeDate(data.startAt) ??
             null
@@ -887,7 +889,7 @@ export default function EventFeed() {
             </button>
           </div>
           {eventStartAt ? (
-            <p className="meta-muted">Starts {formatDateTimeRange(eventStartAt, eventEndAt)}</p>
+            <p className="meta-muted">Starts {formatDateTimeRange(eventStartAt, eventEndAt, eventTimeZone)}</p>
           ) : null}
         </article>
 

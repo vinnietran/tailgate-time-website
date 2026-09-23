@@ -1,3 +1,5 @@
+import { formatDateTimeRange } from "../utils/format";
+import { validTimeZone } from "../utils/eventTimeZone";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { getBlob, getDownloadURL, ref } from "firebase/storage";
@@ -37,6 +39,7 @@ type DiscoverTailgateRecord = {
   id: string;
   eventName: string;
   hostName?: string;
+  timeZone?: string;
   startDateTime: Date | null;
   endDateTime?: Date | null;
   visibilityType: "open_free" | "open_paid";
@@ -644,7 +647,6 @@ function toDiscoverTailgateRecord(
 
   const startDateTime =
     normalizeDate(data.dateTime) ??
-    normalizeDate(data.eventTargetTime) ??
     normalizeDate(data.startDateTime) ??
     normalizeDate(data.startAt) ??
     normalizeDate(data.eventDateTime) ??
@@ -685,6 +687,7 @@ function toDiscoverTailgateRecord(
     hostName: resolveHostName(data),
     startDateTime,
     endDateTime,
+    timeZone: validTimeZone(data.timeZone),
     visibilityType,
     coverImageUrl: resolveCoverImageUrl(data) ?? DEFAULT_TAILGATE_COVER_IMAGE,
     description: resolveDescription(data),
@@ -749,6 +752,7 @@ function fromMockTailgates(): DiscoverTailgateRecord[] {
         id: item.id,
         eventName: item.name,
         hostName: resolveHostName(mockData) ?? "Demo Host",
+        timeZone: item.timeZone,
         startDateTime: item.startDateTime,
         visibilityType,
         coverImageUrl: item.coverImageUrl ?? DEFAULT_TAILGATE_COVER_IMAGE,
@@ -789,41 +793,6 @@ function haversineMiles(a: LatLng, b: LatLng) {
     Math.cos(lat1) * Math.cos(lat2) * sinHalfLng * sinHalfLng;
 
   return 2 * EARTH_RADIUS_MILES * Math.asin(Math.sqrt(h));
-}
-
-function formatDiscoverDate(startDate: Date | null, endDate?: Date | null) {
-  if (!startDate || Number.isNaN(startDate.getTime())) return "Time TBD";
-
-  const fullFormatter = new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit"
-  });
-  if (!endDate || Number.isNaN(endDate.getTime()) || startDate.getTime() === endDate.getTime()) {
-    return fullFormatter.format(startDate);
-  }
-
-  const sameDay =
-    startDate.getFullYear() === endDate.getFullYear() &&
-    startDate.getMonth() === endDate.getMonth() &&
-    startDate.getDate() === endDate.getDate();
-  const dateLabel = new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric"
-  }).format(startDate);
-  const timeFormatter = new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit"
-  });
-
-  if (sameDay) {
-    return `${dateLabel} · ${timeFormatter.format(startDate)} - ${timeFormatter.format(endDate)}`;
-  }
-
-  return `${dateLabel} · ${timeFormatter.format(startDate)} - ${fullFormatter.format(endDate)}`;
 }
 
 function formatDistance(miles: number) {
@@ -2155,7 +2124,7 @@ export default function DiscoverTailgates() {
                             <span className="discover-map-result-index">{index + 1}</span>
                             <span className="discover-map-result-main">
                               <strong>{item.eventName}</strong>
-                              <small>{formatDiscoverDate(item.startDateTime, item.endDateTime)}</small>
+                              <small>{formatDateTimeRange(item.startDateTime, item.endDateTime, item.timeZone)}</small>
                               {item.hostName ? <small>Hosted by {item.hostName}</small> : null}
                             </span>
                             <span className="discover-map-result-price">
@@ -2276,7 +2245,7 @@ export default function DiscoverTailgates() {
                       </div>
                       <p className="discover-card-detail">
                         <IconCalendar size={17} />
-                        <span>{formatDiscoverDate(item.startDateTime, item.endDateTime)}</span>
+                        <span>{formatDateTimeRange(item.startDateTime, item.endDateTime, item.timeZone)}</span>
                       </p>
                       <p className="discover-card-detail">
                         <IconLocation size={17} />

@@ -1,3 +1,4 @@
+import { validTimeZone } from "../utils/eventTimeZone";
 import { useEffect, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "../lib/firebase";
@@ -52,7 +53,6 @@ function normalizeDate(value: unknown) {
 function pickDate(data: Record<string, unknown>) {
   const candidates: unknown[] = [
     data.dateTime,
-    data.eventTargetTime,
     data.startDateTime,
     data.startTime,
     data.startAt,
@@ -258,6 +258,7 @@ function normalizeTailgate(id: string, data: Record<string, unknown>): TailgateE
     ),
     name: firstString(data.name, data.eventName, data.title) ?? "Untitled Tailgate",
     visibilityType: deriveVisibilityType(data),
+    timeZone: validTimeZone(data.timeZone),
     startDateTime: pickDate(data),
     endDateTime: pickEndDate(data),
     locationSummary: deriveLocationSummary(data),

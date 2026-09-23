@@ -208,7 +208,7 @@ function asDate(value) {
 }
 
 function eventStart(data) {
-  for (const value of [data.startDateTime, data.dateTime, data.eventTargetTime, data.startAt, data.eventDateTime, data.eventDate, data.date]) {
+  for (const value of [data.startDateTime, data.dateTime, data.startAt, data.eventDateTime, data.eventDate, data.date]) {
     const date = asDate(value);
     if (date) return date;
   }
@@ -236,6 +236,7 @@ function normalizeEvent(snapshot) {
     hostUserId: firstString(data.hostUserId, data.hostId, data.ownerId, data.createdByUid) || "",
     name: firstString(data.name, data.eventName, data.title) || "Untitled Tailgate",
     visibilityType: eventVisibility(data),
+    timeZone: normalizedTimeZone(data.timeZone),
     startDateTime: start?.toISOString(),
     endDateTime: end?.toISOString(),
     coverImageUrl: safeUrl(firstString(data.coverImageUrl, data.coverPhotoUrl, data.imageUrl)),
@@ -316,8 +317,17 @@ function escapeHtml(value) {
   })[character]);
 }
 
-function formatDate(value) {
-  return new Intl.DateTimeFormat("en-US", { dateStyle: "full", timeStyle: "short" }).format(new Date(value));
+function normalizedTimeZone(value) {
+  if (typeof value !== "string") return undefined;
+  try { return new Intl.DateTimeFormat("en-US", { timeZone: value }).resolvedOptions().timeZone; }
+  catch { return undefined; }
+}
+
+function formatDate(value, timeZone) {
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit",
+    timeZone: normalizedTimeZone(timeZone), ...(timeZone ? { timeZoneName: "short" } : {})
+  }).format(new Date(value));
 }
 
 function renderHtml(page, origin) {
@@ -328,7 +338,7 @@ function renderHtml(page, origin) {
   const gallery = (profile.galleryImageUrls || []).map(
     (url, index) => `<img src="${escapeHtml(url)}" alt="${escapeHtml(profile.displayName)} gallery image ${index + 1}" loading="lazy">`
   ).join("");
-  const cards = upcomingTailgates.map((event) => `<a class="event" href="/tailgates/${encodeURIComponent(event.id)}"><div class="event-image"${event.coverImageUrl ? ` style="background-image:url('${escapeHtml(event.coverImageUrl)}')"` : ""}></div><div class="event-copy"><span>${event.visibilityType === "open_free" ? "Free" : event.ticketPriceCents ? `From $${(event.ticketPriceCents / 100).toFixed(2)}` : "Paid"}</span><h3>${escapeHtml(event.name)}</h3><p>${escapeHtml(formatDate(event.startDateTime))}</p><p>${escapeHtml(event.locationSummary || "Location coming soon")}</p><strong>View tailgate →</strong></div></a>`).join("");
+  const cards = upcomingTailgates.map((event) => `<a class="event" href="/tailgates/${encodeURIComponent(event.id)}"><div class="event-image"${event.coverImageUrl ? ` style="background-image:url('${escapeHtml(event.coverImageUrl)}')"` : ""}></div><div class="event-copy"><span>${event.visibilityType === "open_free" ? "Free" : event.ticketPriceCents ? `From $${(event.ticketPriceCents / 100).toFixed(2)}` : "Paid"}</span><h3>${escapeHtml(event.name)}</h3><p>${escapeHtml(formatDate(event.startDateTime, event.timeZone))}</p><p>${escapeHtml(event.locationSummary || "Location coming soon")}</p><strong>View tailgate →</strong></div></a>`).join("");
   const schema = JSON.stringify({ "@context": "https://schema.org", "@type": "Organization", name: profile.displayName, description, url: canonical, logo: profile.logoUrl, image }).replace(/</g, "\\u003c");
   const sharePayload = JSON.stringify({ title: profile.displayName, url: canonical }).replace(/</g, "\\u003c");
 
@@ -478,3 +488,25 @@ module.exports._test = {
   renderHtml,
   paidTailgateAnalytics: require("./paid-tailgate-analytics")
 };
+
+const { defineSecret } = require("firebase-functions/params");
+const { validateCoordinates, resolveEventTimeZone } = require("./event-time-zone");
+const timeZoneApiKey = defineSecret("GOOGLE_MAPS_TIME_ZONE_API_KEY");
+
+exports.resolveEventTimeZone = onCall(
+  { region: REGION, secrets: [timeZoneApiKey], timeoutSeconds: 15, maxInstances: 5 },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Sign in to look up an event timezone.");
+    try {
+      validateCoordinates(request.data);
+    } catch {
+      throw new HttpsError("invalid-argument", "Provide valid event coordinates.");
+    }
+    try {
+      return await resolveEventTimeZone(request.data, timeZoneApiKey.value());
+    } catch {
+      // Never log the upstream URL: it contains the server API key.
+      throw new HttpsError("unavailable", "Timezone lookup is unavailable. Choose the event timezone manually.");
+    }
+  }
+);

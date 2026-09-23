@@ -1,3 +1,5 @@
+import { scheduleTargetUpdate, scheduleTimeRemaining } from "../utils/schedule";
+import { dateTimeInputs, eventDateTime, eventTimelineWindow, deviceTimeZone, timeZoneLabel, TIME_ZONE_DATE_ERROR, validTimeZone } from "../utils/eventTimeZone";
 import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   addDoc,
@@ -318,6 +320,7 @@ type TailgateDetail = {
   hostName: string;
   coHostIds: string[];
   coHostInvites: CoHostInviteRecord[];
+  timeZone?: string;
   startDateTime: Date | null;
   endDateTime?: Date | null;
   locationRaw: unknown;
@@ -945,43 +948,19 @@ function formatDurationCountdown(diffMs: number) {
     .join(":");
 }
 
-function toTimeInput(date: Date) {
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  return `${hours}:${minutes}`;
-}
-
-function toDateInput(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function combineDateAndTime(dateValue: string, timeValue: string) {
-  const [yearRaw, monthRaw, dayRaw] = dateValue.split("-");
-  const [hoursRaw, minutesRaw] = timeValue.split(":");
-  const year = Number(yearRaw);
-  const month = Number(monthRaw);
-  const day = Number(dayRaw);
-  const hours = Number(hoursRaw);
-  const minutes = Number(minutesRaw);
-  if ([year, month, day, hours, minutes].some((value) => !Number.isFinite(value))) {
-    return null;
-  }
-  const combined = new Date(year, month - 1, day, hours, minutes, 0, 0);
-  if (Number.isNaN(combined.getTime())) return null;
-  return combined;
-}
+function toTimeInput(date: Date, timeZone?: string) { return dateTimeInputs(date, timeZone).time; }
+function toDateInput(date: Date, timeZone?: string) { return dateTimeInputs(date, timeZone).date; }
+function combineDateAndTime(date: string, time: string, timeZone?: string) { return eventDateTime(date, time, timeZone); }
 
 function updateInlineEditStart(
   draft: InlineEditDraft,
-  changes: Partial<Pick<InlineEditDraft, "eventDate" | "eventStartTime">>
+  changes: Partial<Pick<InlineEditDraft, "eventDate" | "eventStartTime">>,
+  timeZone?: string
 ) {
-  const previousStart = combineDateAndTime(draft.eventDate, draft.eventStartTime);
-  const previousEnd = combineDateAndTime(draft.eventEndDate, draft.eventEndTime);
+  const previousStart = combineDateAndTime(draft.eventDate, draft.eventStartTime, timeZone);
+  const previousEnd = combineDateAndTime(draft.eventEndDate, draft.eventEndTime, timeZone);
   const nextDraft = { ...draft, ...changes };
-  const nextStart = combineDateAndTime(nextDraft.eventDate, nextDraft.eventStartTime);
+  const nextStart = combineDateAndTime(nextDraft.eventDate, nextDraft.eventStartTime, timeZone);
 
   if (
     !previousStart ||
@@ -997,8 +976,8 @@ function updateInlineEditStart(
   );
   return {
     ...nextDraft,
-    eventEndDate: toDateInput(shiftedEnd),
-    eventEndTime: toTimeInput(shiftedEnd)
+    eventEndDate: toDateInput(shiftedEnd, timeZone),
+    eventEndTime: toTimeInput(shiftedEnd, timeZone)
   };
 }
 
@@ -1017,39 +996,7 @@ function parseCapacity(value: string) {
   return Math.floor(parsed);
 }
 
-function buildTimelineWindow(
-  baseDate: Date,
-  startTime: string,
-  durationHours: number,
-  durationMinutes: number,
-  durationSeconds: number
-) {
-  const matches = startTime.match(/^(\d{2}):(\d{2})$/);
-  if (!matches) return null;
-  const hours = Number(matches[1]);
-  const minutes = Number(matches[2]);
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
-
-  const start = new Date(
-    baseDate.getFullYear(),
-    baseDate.getMonth(),
-    baseDate.getDate(),
-    hours,
-    minutes,
-    0,
-    0
-  );
-  if (Number.isNaN(start.getTime())) return null;
-
-  const safeHours = Math.max(0, Math.floor(durationHours));
-  const safeMinutes = Math.max(0, Math.floor(durationMinutes));
-  const safeSeconds = Math.max(0, Math.floor(durationSeconds));
-  const durationMs =
-    safeHours * 60 * 60 * 1000 + safeMinutes * 60 * 1000 + safeSeconds * 1000;
-  const end = new Date(start.getTime() + durationMs);
-
-  return { start, end };
-}
+const buildTimelineWindow = eventTimelineWindow;
 
 function resolveVisibilityType(raw: unknown): VisibilityType {
   if (raw === "private" || raw === "open_free" || raw === "open_paid") {
@@ -1391,7 +1338,6 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
   const hostName = firstString(data.hostName, data.displayName) ?? "Host";
   const startDateTime =
     normalizeDate(data.dateTime) ??
-    normalizeDate(data.eventTargetTime) ??
     normalizeDate(data.startDateTime) ??
     normalizeDate(data.startAt) ??
     normalizeDate(data.createdAt);
@@ -1440,6 +1386,7 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     coHostInvites: resolveCoHostInvites(data.coHostInvites),
     startDateTime,
     endDateTime,
+    timeZone: validTimeZone(data.timeZone),
     locationRaw: data.location,
     locationSummary:
       firstString(
@@ -1470,7 +1417,7 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
     status: firstString(data.status, data.eventStatus),
     cancelledAt: normalizeDate(data.cancelledAt),
     eventTargetTime:
-      startDateTime ?? normalizeDate(data.gameTime) ?? normalizeDate(data.eventTargetTime),
+      normalizeDate(data.eventTargetTime) ?? normalizeDate(data.gameTime),
     timelineEnabled: data.timelineEnabled === true || data.schedulePublished === true,
     schedulePublished: data.schedulePublished === true,
     quiz,
@@ -1517,6 +1464,7 @@ function toDetailFromMock(event: TailgateEvent): TailgateDetail {
     hostName: "Host",
     coHostIds: [],
     coHostInvites: [],
+    timeZone: event.timeZone,
     startDateTime: event.startDateTime,
     endDateTime: event.endDateTime,
     locationRaw: event.locationSummary,
@@ -2148,23 +2096,21 @@ export default function TailgateDetails() {
     setShowQuizEditor(false);
   }, [detail?.id]);
 
+  const savedCountdownTimeMs = (detail?.eventTargetTime ?? detail?.startDateTime)?.getTime();
+  const savedTailgateStartMs = detail?.startDateTime?.getTime();
   useEffect(() => {
-    const baseEventTime = detail?.startDateTime ?? detail?.eventTargetTime;
-    if (!baseEventTime) return;
+    if (savedCountdownTimeMs === undefined) return;
+    setEventStartInput(toTimeInput(new Date(savedCountdownTimeMs), detail?.timeZone));
+  }, [savedCountdownTimeMs, detail?.timeZone]);
 
-    const timeValue = toTimeInput(baseEventTime);
-    setEventStartInput(timeValue);
+  useEffect(() => {
+    if (savedTailgateStartMs === undefined) return;
+    const timeValue = toTimeInput(new Date(savedTailgateStartMs), detail?.timeZone);
     setTimelineDraft((previous) => {
-      if (editingTimelineId) return previous;
-      if (previous.title.trim() || previous.description.trim()) {
-        return previous;
-      }
-      return {
-        ...previous,
-        startTime: timeValue
-      };
+      if (editingTimelineId || previous.title.trim() || previous.description.trim()) return previous;
+      return { ...previous, startTime: timeValue };
     });
-  }, [detail?.eventTargetTime, detail?.startDateTime, editingTimelineId]);
+  }, [savedTailgateStartMs, detail?.timeZone, editingTimelineId]);
 
   const status = useMemo(() => (detail ? resolveStatus(detail) : null), [detail]);
   const isHostUser = useMemo(() => {
@@ -2175,7 +2121,7 @@ export default function TailgateDetails() {
     if (!detail || !user?.uid) return false;
     return detail.hostId === user.uid;
   }, [detail, user?.uid]);
-  const eventStartForCancellation = detail?.startDateTime ?? detail?.eventTargetTime ?? null;
+  const eventStartForCancellation = detail?.startDateTime ?? null;
   const hasEventStarted =
     eventStartForCancellation instanceof Date &&
     eventStartForCancellation.getTime() <= Date.now();
@@ -2203,7 +2149,7 @@ export default function TailgateDetails() {
   }, []);
 
   const buildInlineEditDraft = (value: TailgateDetail): InlineEditDraft => {
-    const start = value.startDateTime ?? value.eventTargetTime ?? new Date();
+    const start = value.startDateTime ?? new Date();
     const end =
       value.endDateTime && value.endDateTime.getTime() > start.getTime()
         ? value.endDateTime
@@ -2211,10 +2157,10 @@ export default function TailgateDetails() {
     return {
       eventName: value.eventName,
       description: value.description ?? "",
-      eventDate: toDateInput(start),
-      eventStartTime: toTimeInput(start),
-      eventEndDate: toDateInput(end),
-      eventEndTime: toTimeInput(end),
+      eventDate: toDateInput(start, value.timeZone),
+      eventStartTime: toTimeInput(start, value.timeZone),
+      eventEndDate: toDateInput(end, value.timeZone),
+      eventEndTime: toTimeInput(end, value.timeZone),
       locationSummary:
         value.locationSummary ??
         resolveLocationString(value.locationRaw) ??
@@ -3147,7 +3093,8 @@ export default function TailgateDetails() {
       ? "Availability updated"
       : "Checkout issue"
     : null;
-  const timelineBaseEventTime = detail?.startDateTime ?? detail?.eventTargetTime ?? null;
+  const timelineBaseEventTime = detail?.startDateTime ?? null;
+  const timelineCountdownTarget = detail?.eventTargetTime ?? detail?.startDateTime ?? null;
   const hasTimelineSteps = timelineSteps.length > 0;
   const timelineEnabledForEvent =
     detail?.timelineEnabled === true ||
@@ -3364,18 +3311,18 @@ export default function TailgateDetails() {
 
     const startDateTime = combineDateAndTime(
       inlineEditDraft.eventDate,
-      inlineEditDraft.eventStartTime
+      inlineEditDraft.eventStartTime, detail.timeZone
     );
     if (!startDateTime) {
-      setInlineEditError("Set a valid event date and start time.");
+      setInlineEditError(TIME_ZONE_DATE_ERROR);
       return;
     }
     const endDateTime = combineDateAndTime(
       inlineEditDraft.eventEndDate,
-      inlineEditDraft.eventEndTime
+      inlineEditDraft.eventEndTime, detail.timeZone
     );
     if (!endDateTime) {
-      setInlineEditError("Set a valid event end date and time.");
+      setInlineEditError(TIME_ZONE_DATE_ERROR);
       return;
     }
     if (endDateTime.getTime() <= startDateTime.getTime()) {
@@ -3389,7 +3336,6 @@ export default function TailgateDetails() {
       description: nextDescription,
       startDateTime: startDateTime,
       dateTime: startDateTime,
-      eventTargetTime: startDateTime,
       endDateTime,
       endAt: endDateTime,
       eventEndAt: endDateTime,
@@ -3582,7 +3528,7 @@ export default function TailgateDetails() {
       const copiedTitle = `${detail.eventName} (Copy)`;
       const copiedCoverImageUrls = detail.coverImageUrls;
       const primaryCover = copiedCoverImageUrls[0] ?? null;
-      const copiedStartDateTime = detail.startDateTime ?? detail.eventTargetTime;
+      const copiedStartDateTime = detail.startDateTime;
       const copiedTicketSalesCloseDaysBefore =
         detail.visibilityType === "open_paid"
           ? copiedStartDateTime && detail.ticketSalesCloseAt
@@ -3644,6 +3590,7 @@ export default function TailgateDetails() {
 
       const copyPayload: Record<string, unknown> = {
         ...sourceData,
+        creatorTimeZone: deviceTimeZone(),
         eventName: copiedTitle,
         name: copiedTitle,
         hostUserId: user.uid,
@@ -4673,7 +4620,7 @@ export default function TailgateDetails() {
     setTimelineDraft({
       title: "",
       description: "",
-      startTime: eventStartInput || "09:00",
+      startTime: detail?.startDateTime ? toTimeInput(detail.startDateTime, detail.timeZone) : "09:00",
       durationHours: "0",
       durationMinutes: "0",
       durationSeconds: "0"
@@ -4684,32 +4631,21 @@ export default function TailgateDetails() {
     if (!db || !id) return;
     const matches = eventStartInput.match(/^(\d{2}):(\d{2})$/);
     if (!matches) {
-      setTimelineError("Event start time is invalid.");
+      setTimelineError("Countdown target time is invalid.");
       return;
     }
 
-    const baseDate = timelineBaseEventTime ?? detail?.startDateTime ?? new Date();
-    const nextEventStart = new Date(
-      baseDate.getFullYear(),
-      baseDate.getMonth(),
-      baseDate.getDate(),
-      Number(matches[1]),
-      Number(matches[2]),
-      0,
-      0
-    );
+    const baseDate = timelineCountdownTarget;
+    if (!baseDate) { setTimelineError("Set the tailgate date before setting a countdown target."); return; }
+    const targetUpdate = scheduleTargetUpdate(baseDate, eventStartInput, detail?.timeZone);
+    if (!targetUpdate) { setTimelineError(TIME_ZONE_DATE_ERROR); return; }
 
     try {
       setTimelineError(null);
-      await updateDoc(doc(db, "tailgateEvents", id), {
-        dateTime: nextEventStart,
-        startDateTime: nextEventStart,
-        eventTargetTime: nextEventStart,
-        updatedAt: new Date()
-      });
+      await updateDoc(doc(db, "tailgateEvents", id), targetUpdate);
     } catch (saveError) {
-      console.error("Failed to save event start time", saveError);
-      setTimelineError("Unable to save event start time.");
+      console.error("Failed to save countdown target time", saveError);
+      setTimelineError("Unable to save countdown target time.");
     }
   };
 
@@ -4733,7 +4669,8 @@ export default function TailgateDetails() {
       timelineDraft.startTime,
       durationHours,
       durationMinutes,
-      durationSeconds
+      durationSeconds,
+      detail?.timeZone
     );
     if (!window) {
       setTimelineError("Timeline start time is invalid.");
@@ -4782,7 +4719,7 @@ export default function TailgateDetails() {
     setTimelineDraft({
       title: step.title,
       description: step.description ?? "",
-      startTime: toTimeInput(step.timestampStart),
+      startTime: toTimeInput(step.timestampStart, detail?.timeZone),
       durationHours: String(hours),
       durationMinutes: String(minutes),
       durationSeconds: String(seconds)
@@ -5618,7 +5555,7 @@ export default function TailgateDetails() {
                       <p className="tailgate-details-eyebrow">Event command center</p>
                       <h2>{detail.eventName}</h2>
                       <p className="tailgate-details-subtitle">
-                        {formatDateTimeRange(detail.startDateTime, detail.endDateTime)}
+                        {formatDateTimeRange(detail.startDateTime, detail.endDateTime, detail.timeZone)}
                       </p>
                     </div>
                     <div className="tailgate-details-status-wrap">
@@ -6223,13 +6160,13 @@ export default function TailgateDetails() {
                               setInlineEditDraft((previous) =>
                                 updateInlineEditStart(previous, {
                                   eventDate: event.target.value
-                                })
+                                }, detail.timeZone)
                               )
                             }
                           />
                         </label>
                         <label className="input-group">
-                          <span className="input-label">Start time</span>
+                          <span className="input-label">Start time{detail.timeZone ? ` · ${timeZoneLabel(detail.timeZone)}` : ""}</span>
                           <input
                             className="text-input"
                             type="time"
@@ -6238,7 +6175,7 @@ export default function TailgateDetails() {
                               setInlineEditDraft((previous) =>
                                 updateInlineEditStart(previous, {
                                   eventStartTime: event.target.value
-                                })
+                                }, detail.timeZone)
                               )
                             }
                           />
@@ -6317,9 +6254,9 @@ export default function TailgateDetails() {
                     <div className="tailgate-details-info-card">
                       <p>When</p>
                       <strong>
-                        {detail.startDateTime ? detail.startDateTime.toLocaleDateString() : "TBD"}
+                        {detail.startDateTime ? detail.startDateTime.toLocaleDateString([], { timeZone: detail.timeZone }) : "TBD"}
                       </strong>
-                      <span>{formatTimeRange(detail.startDateTime, detail.endDateTime)}</span>
+                      <span>{formatTimeRange(detail.startDateTime, detail.endDateTime, detail.timeZone)}</span>
                     </div>
                     <div className="tailgate-details-info-card">
                       <p>Where</p>
@@ -6370,7 +6307,7 @@ export default function TailgateDetails() {
               <div className="tailgate-details-hero-facts">
                 <p className="tailgate-details-subtitle">
                   <IconCalendar size={20} />
-                  <span>{formatDateTimeRange(detail.startDateTime, detail.endDateTime)}</span>
+                  <span>{formatDateTimeRange(detail.startDateTime, detail.endDateTime, detail.timeZone)}</span>
                 </p>
                 <p className="tailgate-details-meta">
                   <IconLocation size={20} />
@@ -6562,13 +6499,13 @@ export default function TailgateDetails() {
                         setInlineEditDraft((previous) =>
                           updateInlineEditStart(previous, {
                             eventDate: event.target.value
-                          })
+                          }, detail.timeZone)
                         )
                       }
                     />
                   </label>
                   <label className="input-group">
-                    <span className="input-label">Start time</span>
+                    <span className="input-label">Start time{detail.timeZone ? ` · ${timeZoneLabel(detail.timeZone)}` : ""}</span>
                     <input
                       className="text-input"
                       type="time"
@@ -6577,7 +6514,7 @@ export default function TailgateDetails() {
                         setInlineEditDraft((previous) =>
                           updateInlineEditStart(previous, {
                             eventStartTime: event.target.value
-                          })
+                          }, detail.timeZone)
                         )
                       }
                     />
@@ -6657,8 +6594,8 @@ export default function TailgateDetails() {
                 <span className="tailgate-details-key-fact-icon"><IconCalendar size={20} /></span>
                 <span className="tailgate-details-key-fact-copy">
                   <small>Date &amp; time</small>
-                  <strong>{detail.startDateTime ? detail.startDateTime.toLocaleDateString() : "TBD"}</strong>
-                  <span>{formatTimeRange(detail.startDateTime, detail.endDateTime)}</span>
+                  <strong>{detail.startDateTime ? detail.startDateTime.toLocaleDateString([], { timeZone: detail.timeZone }) : "TBD"}</strong>
+                  <span>{formatTimeRange(detail.startDateTime, detail.endDateTime, detail.timeZone)}</span>
                 </span>
               </div>
               <div className="tailgate-details-key-fact">
@@ -7078,7 +7015,7 @@ export default function TailgateDetails() {
                 <div className="tailgate-timeline-host-tools">
                   <div className="tailgate-timeline-time-row">
                     <label className="input-label" htmlFor="tailgate-event-start-time">
-                      Event Start Time
+                      Countdown target time
                     </label>
                     <div className="tailgate-timeline-time-actions">
                       <input
@@ -7093,10 +7030,11 @@ export default function TailgateDetails() {
                         className="secondary-button"
                         onClick={() => void saveEventStartTime()}
                       >
-                        Save start time
+                        Save countdown time
                       </button>
                     </div>
                   </div>
+                  <p className="meta-muted">Used only for “Time until event” on schedule cards. This does not change the tailgate’s start or end time.</p>
                   <div className="tailgate-timeline-publish-row">
                     <p className="meta-muted">{timelinePublishLabel}</p>
                     <button
@@ -7129,7 +7067,7 @@ export default function TailgateDetails() {
                         />
                       </label>
                       <label className="input-group">
-                        <span className="input-label">Start time</span>
+                        <span className="input-label">Start time{detail.timeZone ? ` · ${timeZoneLabel(detail.timeZone)}` : ""}</span>
                         <input
                           className="text-input"
                           type="time"
@@ -7238,9 +7176,9 @@ export default function TailgateDetails() {
                 ) : timelineSteps.length > 0 ? (
                   timelineSteps.map((step) => {
                     const endTime = step.timestampEnd ?? step.timestampStart;
-                    const timeUntilEvent = timelineBaseEventTime
+                    const timeUntilEvent = timelineCountdownTarget
                       ? formatDurationCountdown(
-                          timelineBaseEventTime.getTime() - endTime.getTime()
+                          scheduleTimeRemaining(timelineCountdownTarget, endTime)
                         )
                       : "--:--:--";
                     return (
@@ -7253,12 +7191,12 @@ export default function TailgateDetails() {
                             </p>
                           ) : null}
                           <p className="tailgate-details-attendee-meta">
-                            {step.timestampStart.toLocaleTimeString([], {
+                            {step.timestampStart.toLocaleTimeString([], { timeZone: detail.timeZone, timeZoneName: "short",
                               hour: "numeric",
                               minute: "2-digit"
                             })}{" "}
                             -{" "}
-                            {endTime.toLocaleTimeString([], {
+                            {endTime.toLocaleTimeString([], { timeZone: detail.timeZone, timeZoneName: "short",
                               hour: "numeric",
                               minute: "2-digit"
                             })}

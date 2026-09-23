@@ -217,7 +217,7 @@ export default function HostDashboard() {
             <>
               <h3>{nextTailgate.name}</h3>
               <p className="dashboard-next-meta">
-                {formatDateTimeRange(nextTailgate.startDateTime, nextTailgate.endDateTime)}
+                {formatDateTimeRange(nextTailgate.startDateTime, nextTailgate.endDateTime, nextTailgate.timeZone)}
               </p>
               <p className="dashboard-next-meta">
                 {nextTailgate.locationSummary ?? "Location TBD"}

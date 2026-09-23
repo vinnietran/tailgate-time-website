@@ -170,7 +170,7 @@ export function HostPageView({ data, preview = false }: { data: PublicHostPageDa
                       </div>
                       <div className="host-public-event-copy">
                         <h3>{event.name}</h3>
-                        <p>{formatDateTimeRange(event.startDateTime, event.endDateTime)}</p>
+                        <p>{formatDateTimeRange(event.startDateTime, event.endDateTime, event.timeZone)}</p>
                         <p>{event.locationSummary || "Location coming soon"}</p>
                         <strong>View tailgate →</strong>
                       </div>

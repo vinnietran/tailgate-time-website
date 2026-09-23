@@ -7,6 +7,7 @@ export type TailgateEvent = {
   hostUserId: string;
   name: string;
   visibilityType: VisibilityType;
+  timeZone?: string;
   startDateTime: Date;
   endDateTime?: Date | null;
   coverImageUrl?: string;

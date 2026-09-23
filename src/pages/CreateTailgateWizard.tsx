@@ -3,6 +3,9 @@ import { httpsCallable } from "firebase/functions";
 import { addDoc, collection, doc, getDoc, updateDoc } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { useLocation, useNavigate } from "react-router-dom";
+import EventTimeZoneField from "../components/EventTimeZoneField";
+import { useEventTimeZone } from "../hooks/useEventTimeZone";
+import { deviceTimeZone, dateTimeInputs, eventDateTime, eventEndDateTime, eventTimelineWindow, timeZoneLabel, TIME_ZONE_DATE_ERROR } from "../utils/eventTimeZone";
 import AppShell from "../components/AppShell";
 import { IconLocation } from "../components/Icons";
 import {
@@ -405,114 +408,10 @@ function formatDurationCountdown(diffMs: number) {
     .join(":");
 }
 
-function buildTimelineWindow(
-  baseDate: Date,
-  startTime: string,
-  durationHours: number,
-  durationMinutes: number,
-  durationSeconds: number
-) {
-  const matches = startTime.match(/^(\d{2}):(\d{2})$/);
-  if (!matches) return null;
-
-  const hours = Number(matches[1]);
-  const minutes = Number(matches[2]);
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
-
-  const start = new Date(
-    baseDate.getFullYear(),
-    baseDate.getMonth(),
-    baseDate.getDate(),
-    hours,
-    minutes,
-    0,
-    0
-  );
-  if (Number.isNaN(start.getTime())) return null;
-
-  const safeHours = Math.max(0, Math.floor(durationHours));
-  const safeMinutes = Math.max(0, Math.floor(durationMinutes));
-  const safeSeconds = Math.max(0, Math.floor(durationSeconds));
-  const durationMs =
-    safeHours * 60 * 60 * 1000 + safeMinutes * 60 * 1000 + safeSeconds * 1000;
-  const end = new Date(start.getTime() + durationMs);
-
-  return { start, end };
-}
-
-function toStartDateTime(eventDate: string, eventTime: string) {
-  const [yearRaw, monthRaw, dayRaw] = eventDate.split("-");
-  const [hoursRaw, minutesRaw] = eventTime.split(":");
-  const year = Number(yearRaw);
-  const month = Number(monthRaw);
-  const day = Number(dayRaw);
-  const hours = Number(hoursRaw);
-  const minutes = Number(minutesRaw);
-  if ([year, month, day, hours, minutes].some((value) => !Number.isFinite(value))) {
-    return null;
-  }
-  const combined = new Date(year, month - 1, day, hours, minutes, 0, 0);
-  if (Number.isNaN(combined.getTime())) return null;
-  return combined;
-}
-
-function toEndDateTime(eventDate: string, eventTime: string, eventEndTime: string) {
-  const start = toStartDateTime(eventDate, eventTime);
-  if (!start) return null;
-
-  const [hoursRaw, minutesRaw] = eventEndTime.split(":");
-  const hours = Number(hoursRaw);
-  const minutes = Number(minutesRaw);
-  if (![hours, minutes].every((value) => Number.isFinite(value))) {
-    return null;
-  }
-
-  const end = new Date(
-    start.getFullYear(),
-    start.getMonth(),
-    start.getDate(),
-    hours,
-    minutes,
-    0,
-    0
-  );
-  if (Number.isNaN(end.getTime())) return null;
-
-  if (end <= start) {
-    end.setDate(end.getDate() + 1);
-  }
-
-  return end;
-}
-
 function floorToMinute(value: Date) {
   const next = new Date(value);
   next.setSeconds(0, 0);
   return next;
-}
-
-function formatDateInputValue(value: Date) {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function formatTimeInputValue(value: Date) {
-  const hours = String(value.getHours()).padStart(2, "0");
-  const minutes = String(value.getMinutes()).padStart(2, "0");
-  return `${hours}:${minutes}`;
-}
-
-function getStartDateTimeError(eventDate: string, eventTime: string, now = new Date()) {
-  const startDateTime = toStartDateTime(eventDate, eventTime);
-  if (!startDateTime) {
-    return "Start time is invalid.";
-  }
-  if (startDateTime < floorToMinute(now)) {
-    return "Start time must be in the future.";
-  }
-  return null;
 }
 
 function formatAddressBlock(value: string | undefined): string | undefined {
@@ -624,6 +523,9 @@ export default function CreateTailgateWizard() {
 
   const [stepIndex, setStepIndex] = useState(0);
   const [saving, setSaving] = useState(false);
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
+  const advancingRef = useRef(false);
+  const [advancing, setAdvancing] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [payoutModalOpen, setPayoutModalOpen] = useState(false);
   const [paidFeeModalOpen, setPaidFeeModalOpen] = useState(false);
@@ -640,8 +542,21 @@ export default function CreateTailgateWizard() {
   const [locationSummary, setLocationSummary] = useState("");
   const [locationRecord, setLocationRecord] = useState<LocationRecord | null>(null);
   const [locationCoords, setLocationCoords] = useState<LatLng | null>(null);
+  const locationRequestVersion = useRef(0);
   const [resolvingLocation, setResolvingLocation] = useState(false);
   const [locationInputFocused, setLocationInputFocused] = useState(false);
+
+  const eventZone = useEventTimeZone(locationSummary, locationCoords);
+  const timeZone = eventZone.timeZone;
+  const toStartDateTime = (date: string, time: string) => eventDateTime(date, time, timeZone);
+  const toEndDateTime = (date: string, start: string, end: string) => eventEndDateTime(date, start, end, timeZone);
+  const buildTimelineWindow = (base: Date, time: string, hours: number, minutes: number, seconds: number) =>
+    eventTimelineWindow(base, time, hours, minutes, seconds, timeZone);
+  const getStartDateTimeError = (date: string, time: string) => {
+    const start = toStartDateTime(date, time);
+    if (!start) return TIME_ZONE_DATE_ERROR;
+    return start < floorToMinute(new Date()) ? "Start time must be in the future." : null;
+  };
 
   const [visibilityType, setVisibilityType] = useState<VisibilityType>("private");
   const [ticketTypes, setTicketTypes] = useState<EventTicketType[]>([]);
@@ -781,10 +696,29 @@ export default function CreateTailgateWizard() {
         ? "Invite Friends + Add-ons"
         : "Optional Add-ons"
       : currentStep.subtitle;
+  const stepGuidance: Record<WizardStep["key"], string> = {
+    type: "Start with your guest list. Choose who can join and how they get in.",
+    tickets: "Build your ticket options, set quantities, and see what you’ll earn.",
+    details: "Give your tailgate a name and a time. Then make it your own with photos and extras.",
+    location: "Help guests find your setup. Search for a venue or enter your meeting spot.",
+    invite: guestInvitesEnabled
+      ? "Bring your people together. Add guests now, or leave the optional extras for later."
+      : "Make game day flow with an optional timeline. You can continue without adding one.",
+    review: "Take one last look. Use an edit shortcut below to make any changes before creating."
+  };
+  const stepLabel = (step: WizardStep) => step.key === "invite"
+    ? guestInvitesEnabled ? "Guests & extras" : "Extras"
+    : ({ type: "Type", tickets: "Tickets", details: "Details", location: "Location", review: "Review" }[step.key]);
+
+  useEffect(() => {
+    stepHeadingRef.current?.focus({ preventScroll: true });
+    stepHeadingRef.current?.scrollIntoView({ block: "start" });
+  }, [currentStepKey]);
+
   const minimumEventDateTime = floorToMinute(new Date());
-  const minimumEventDate = formatDateInputValue(minimumEventDateTime);
+  const minimumEventDate = dateTimeInputs(minimumEventDateTime, timeZone).date;
   const minimumEventTime =
-    eventDate === minimumEventDate ? formatTimeInputValue(minimumEventDateTime) : undefined;
+    eventDate === minimumEventDate ? dateTimeInputs(minimumEventDateTime, timeZone).time : undefined;
   const resolvedLocationDisplay = resolveLocationLabel(locationRecord);
   const locationDisplayText =
     formatAddressBlock(resolvedLocationDisplay ?? locationSummary) ?? locationSummary;
@@ -1016,6 +950,7 @@ export default function CreateTailgateWizard() {
     const query = locationSummary.trim();
     if (!query) return null;
     if (!MAPS_API_KEY) return null;
+    const requestVersion = ++locationRequestVersion.current;
     setResolvingLocation(true);
     try {
       const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
@@ -1037,7 +972,7 @@ export default function CreateTailgateWizard() {
           geometry?: { location?: { lat?: number; lng?: number } };
         }>;
       };
-      if (payload.status !== "OK") return null;
+      if (requestVersion !== locationRequestVersion.current || payload.status !== "OK") return null;
       const first = payload.results?.[0];
       const lat = first?.geometry?.location?.lat;
       const lng = first?.geometry?.location?.lng;
@@ -1087,6 +1022,7 @@ export default function CreateTailgateWizard() {
             }
       );
       setLocationSummary(label);
+      setLocationInputFocused(false);
       clearFieldError("locationSummary");
       clearLocationSuggestions();
       return next;
@@ -1094,7 +1030,7 @@ export default function CreateTailgateWizard() {
       console.error("Failed to resolve address", error);
       return null;
     } finally {
-      setResolvingLocation(false);
+      if (requestVersion === locationRequestVersion.current) setResolvingLocation(false);
     }
   };
 
@@ -1109,9 +1045,11 @@ export default function CreateTailgateWizard() {
       terms?: Array<{ value: string; offset?: number }>;
     }
   ) => {
+    const requestVersion = ++locationRequestVersion.current;
     setResolvingLocation(true);
     try {
       const resolved = await resolveLocationSuggestion(place);
+      if (requestVersion !== locationRequestVersion.current) return;
       const locationPayload: LocationRecord = {
         label: resolved?.label ?? place.primaryText,
         description: place.description,
@@ -1146,7 +1084,7 @@ export default function CreateTailgateWizard() {
       clearLocationSuggestions();
       setLocationInputFocused(false);
     } finally {
-      setResolvingLocation(false);
+      if (requestVersion === locationRequestVersion.current) setResolvingLocation(false);
     }
   };
 
@@ -1619,20 +1557,21 @@ export default function CreateTailgateWizard() {
       if (!eventDescription.trim()) nextErrors.eventDescription = "Description is required.";
       if (eventDate && eventTime) {
         const startDateTimeError = getStartDateTimeError(eventDate, eventTime);
-        if (startDateTimeError) {
+        if (startDateTimeError && eventZone.confirmed) {
           nextErrors.eventTime = startDateTimeError;
         }
       }
       if (eventDate && eventTime && eventEndTime && !nextErrors.eventTime) {
         const endDateTime = toEndDateTime(eventDate, eventTime, eventEndTime);
         if (!endDateTime) {
-          nextErrors.eventEndTime = "End time is invalid.";
+          nextErrors.eventEndTime = TIME_ZONE_DATE_ERROR;
         }
       }
     }
 
     if (stepKey === "location") {
       if (!locationSummary.trim()) nextErrors.locationSummary = "Location is required.";
+      if (!eventZone.confirmed) nextErrors.timeZone = "Confirm the event timezone before continuing.";
     }
 
     if (stepKey === "invite") {
@@ -1661,20 +1600,31 @@ export default function CreateTailgateWizard() {
   };
 
   const handleNext = async () => {
+    if (advancingRef.current) return;
     setSuccessMessage(null);
-    if (!validateStep(currentStepKey)) return;
-
-    if (currentStepKey === "location" && !locationCoords) {
-      const resolvedCoords = await resolveAddressToCoords();
-      if (requiresDiscoverableLocation(visibilityType) && !resolvedCoords) {
-        setErrors((prev) => ({
-          ...prev,
-          locationSummary: OPEN_TAILGATE_LOCATION_ERROR
-        }));
-        return;
+    if (currentStepKey === "location" && !locationCoords && locationSummary.trim() && !resolvingLocation) {
+      advancingRef.current = true;
+      setAdvancing(true);
+      try {
+        const coords = await resolveAddressToCoords();
+        if (coords) return;
+        if (requiresDiscoverableLocation(visibilityType)) {
+          setErrors((prev) => ({ ...prev, locationSummary: OPEN_TAILGATE_LOCATION_ERROR }));
+          return;
+        }
+      } finally {
+        advancingRef.current = false;
+        setAdvancing(false);
       }
     }
-
+    if (!validateStep(currentStepKey)) {
+      requestAnimationFrame(() => document.querySelector<HTMLElement>(".create-wizard-body .create-wizard-error")?.scrollIntoView({ block: "center" }));
+      return;
+    }
+    if (currentStepKey === "location" && !validateStep("details")) {
+      setStepIndex(activeWizardSteps.findIndex((step) => step.key === "details"));
+      return;
+    }
     setStepIndex((current) => Math.min(current + 1, activeWizardSteps.length - 1));
   };
 
@@ -1869,7 +1819,7 @@ export default function CreateTailgateWizard() {
     }
 
     let resolvedCoords = locationCoords;
-    if (!resolvedCoords && locationSummary.trim()) {
+    if (!resolvedCoords && requiresDiscoverableLocation(visibilityType)) {
       resolvedCoords = await resolveAddressToCoords();
     }
     if (requiresDiscoverableLocation(visibilityType) && !resolvedCoords) {
@@ -1949,6 +1899,9 @@ export default function CreateTailgateWizard() {
       hasEventFeed: true,
       startDateTime,
       endDateTime,
+      timeZone,
+      timeZoneSource: eventZone.source,
+      creatorTimeZone: deviceTimeZone(),
       dateTime: startDateTime,
       eventEndTime,
       locationSummary: normalizedLocationSummary,
@@ -2130,6 +2083,7 @@ export default function CreateTailgateWizard() {
         visibilityType,
         startDateTime,
         endDateTime,
+        timeZone,
         locationSummary: normalizedLocationSummary,
         coverImageUrl: uploadedCoverImageUrls[0]
       };
@@ -2160,7 +2114,7 @@ export default function CreateTailgateWizard() {
           }}
           placeholder="Football Tailgate Home Opener"
         />
-        {errors.eventName ? <p className="create-wizard-error">{errors.eventName}</p> : null}
+        {errors.eventName ? <p role="alert" className="create-wizard-error">{errors.eventName}</p> : null}
 
         <div className="create-wizard-date-time">
           <div>
@@ -2169,7 +2123,7 @@ export default function CreateTailgateWizard() {
               id="event-date"
               className="text-input create-wizard-input"
               type="date"
-              min={minimumEventDate}
+              min={eventZone.confirmed ? minimumEventDate : undefined}
               value={eventDate}
               onChange={(event) => {
                 setEventDate(event.target.value);
@@ -2177,7 +2131,7 @@ export default function CreateTailgateWizard() {
                 clearFieldError("eventTime");
               }}
             />
-            {errors.eventDate ? <p className="create-wizard-error">{errors.eventDate}</p> : null}
+            {errors.eventDate ? <p role="alert" className="create-wizard-error">{errors.eventDate}</p> : null}
           </div>
           <div>
             <label className="input-label" htmlFor="event-time">Start Time</label>
@@ -2185,14 +2139,14 @@ export default function CreateTailgateWizard() {
               id="event-time"
               className="text-input create-wizard-input"
               type="time"
-              min={minimumEventTime}
+              min={eventZone.confirmed ? minimumEventTime : undefined}
               value={eventTime}
               onChange={(event) => {
                 setEventTime(event.target.value);
                 clearFieldError("eventTime");
               }}
             />
-            {errors.eventTime ? <p className="create-wizard-error">{errors.eventTime}</p> : null}
+            {errors.eventTime ? <p role="alert" className="create-wizard-error">{errors.eventTime}</p> : null}
           </div>
           <div>
             <label className="input-label" htmlFor="event-end-time">End Time</label>
@@ -2206,10 +2160,11 @@ export default function CreateTailgateWizard() {
                 clearFieldError("eventEndTime");
               }}
             />
-            {errors.eventEndTime ? <p className="create-wizard-error">{errors.eventEndTime}</p> : null}
+            {errors.eventEndTime ? <p role="alert" className="create-wizard-error">{errors.eventEndTime}</p> : null}
           </div>
         </div>
 
+        <EventTimeZoneField zone={eventZone} />
         <label className="input-label" htmlFor="event-description">Description</label>
         <textarea
           id="event-description"
@@ -2222,7 +2177,7 @@ export default function CreateTailgateWizard() {
           placeholder="Come out to tailgate and get ready for our team to win the home opener!"
         />
         {errors.eventDescription ? (
-          <p className="create-wizard-error">{errors.eventDescription}</p>
+          <p role="alert" className="create-wizard-error">{errors.eventDescription}</p>
         ) : null}
 
         <div className="create-wizard-cover-upload">
@@ -2251,7 +2206,7 @@ export default function CreateTailgateWizard() {
             onChange={handleCoverImagesSelected}
           />
           {errors.coverImageFiles ? (
-            <p className="create-wizard-error">{errors.coverImageFiles}</p>
+            <p role="alert" className="create-wizard-error">{errors.coverImageFiles}</p>
           ) : null}
           {coverImageDrafts.length > 0 ? (
             <div className="create-wizard-cover-grid">
@@ -2299,6 +2254,7 @@ export default function CreateTailgateWizard() {
                       type="button"
                       key={option.key}
                       className={`create-wizard-chip ${active ? "active" : ""}`}
+                      aria-pressed={active}
                       onClick={() =>
                         setExpectations((prev) => ({
                           ...prev,
@@ -2332,6 +2288,8 @@ export default function CreateTailgateWizard() {
           value={locationSummary}
           placeholder="Cameron Stadium, Garland Street, Bangor, Maine, USA"
           onChange={(event) => {
+            locationRequestVersion.current += 1;
+            setResolvingLocation(false);
             setLocationSummary(event.target.value);
             setLocationRecord(null);
             setLocationCoords(null);
@@ -2372,7 +2330,7 @@ export default function CreateTailgateWizard() {
         ) : null}
       </div>
       {errors.locationSummary ? (
-        <p className="create-wizard-error">{errors.locationSummary}</p>
+        <p role="alert" className="create-wizard-error">{errors.locationSummary}</p>
       ) : null}
       {requiresDiscoverableLocation(visibilityType) ? (
         <p className="create-wizard-helper">
@@ -2380,6 +2338,8 @@ export default function CreateTailgateWizard() {
         </p>
       ) : null}
 
+      <EventTimeZoneField zone={eventZone} canConfirm />
+      {errors.timeZone && !eventZone.confirmed ? <p role="alert" className="create-wizard-error">{errors.timeZone}</p> : null}
       <div className="create-wizard-map-actions">
         <button
           type="button"
@@ -2404,7 +2364,7 @@ export default function CreateTailgateWizard() {
           <div className="create-wizard-map-placeholder">
             {MAPS_API_KEY
               ? 'Enter a location and click "Find on map" to preview the pin.'
-              : "Set MAPS_API_KEY to preview Google Maps."}
+              : "Map preview is currently unavailable."}
           </div>
         )}
         {locationDisplayText ? (
@@ -2425,13 +2385,16 @@ export default function CreateTailgateWizard() {
         </div>
         <div className="create-wizard-radio-list">
           {visibilityOptions.map((option) => (
-            <label key={option.key} className="create-wizard-radio-row">
+            <label key={option.key} className={`create-wizard-radio-row ${visibilityType === option.key ? "is-selected" : ""}`}>
               <input
                 type="radio"
+                name="tailgate-type"
+                aria-label={option.label}
                 checked={visibilityType === option.key}
                 onChange={() => handleVisibilitySelect(option.key)}
               />
               <span className="create-wizard-radio-copy">
+                <span className="create-wizard-type-eyebrow">{option.key === "private" ? "Your inner circle" : option.key === "open_free" ? "Build your community" : "Host & earn"}</span>
                 <span className="create-wizard-radio-title-row">
                   <strong>{option.label}</strong>
                   <button
@@ -2461,7 +2424,7 @@ export default function CreateTailgateWizard() {
           ))}
         </div>
         {errors.visibilityType ? (
-          <p className="create-wizard-error">{errors.visibilityType}</p>
+          <p role="alert" className="create-wizard-error">{errors.visibilityType}</p>
         ) : null}
         {visibilityType === "open_paid" ? (
           <p className="create-wizard-connect-status">
@@ -2489,7 +2452,7 @@ export default function CreateTailgateWizard() {
           <p className="create-wizard-ticket-count">
             {ticketTypes.length} of {MAX_TICKET_TYPES} ticket types configured
           </p>
-          {errors.ticketTypes ? <p className="create-wizard-error">{errors.ticketTypes}</p> : null}
+          {errors.ticketTypes ? <p role="alert" className="create-wizard-error">{errors.ticketTypes}</p> : null}
           <div className="create-wizard-ticket-list">
             {ticketTypes.map((ticketType, index) => (
               <div key={ticketType.id} className="create-wizard-ticket-card">
@@ -2530,7 +2493,7 @@ export default function CreateTailgateWizard() {
                     placeholder="VIP, Parking Pass, Kids Ticket..."
                   />
                   {errors[`ticketTypeName_${ticketType.id}`] ? (
-                    <p className="create-wizard-error">{errors[`ticketTypeName_${ticketType.id}`]}</p>
+                    <p role="alert" className="create-wizard-error">{errors[`ticketTypeName_${ticketType.id}`]}</p>
                   ) : null}
                 </div>
                 <div>
@@ -2576,7 +2539,7 @@ export default function CreateTailgateWizard() {
                       />
                     </div>
                     {errors[`ticketTypePrice_${ticketType.id}`] ? (
-                      <p className="create-wizard-error">
+                      <p role="alert" className="create-wizard-error">
                         {errors[`ticketTypePrice_${ticketType.id}`]}
                       </p>
                     ) : null}
@@ -2614,7 +2577,7 @@ export default function CreateTailgateWizard() {
                     This ticket type sells up to this many tickets.
                   </p>
                   {errors[`ticketTypeCapacity_${ticketType.id}`] ? (
-                    <p className="create-wizard-error">
+                    <p role="alert" className="create-wizard-error">
                       {errors[`ticketTypeCapacity_${ticketType.id}`]}
                     </p>
                   ) : null}
@@ -2664,7 +2627,7 @@ export default function CreateTailgateWizard() {
             />
             <p className="meta-muted">Set to 0 to allow sales until event start.</p>
             {errors.ticketSalesCutoffDaysInput || ticketSalesCutoffInvalid ? (
-              <p className="create-wizard-error">
+              <p role="alert" className="create-wizard-error">
                 {errors.ticketSalesCutoffDaysInput ?? "Use a whole number from 0 to 365."}
               </p>
             ) : null}
@@ -2790,7 +2753,7 @@ export default function CreateTailgateWizard() {
                   placeholder="2"
                 />
                 {errors.guestPlusLimit ? (
-                  <p className="create-wizard-error">{errors.guestPlusLimit}</p>
+                  <p role="alert" className="create-wizard-error">{errors.guestPlusLimit}</p>
                 ) : null}
               </div>
             ) : null}
@@ -2810,7 +2773,7 @@ export default function CreateTailgateWizard() {
                 placeholder="Guest name"
               />
               {errors.manualGuestName ? (
-                <p className="create-wizard-error">{errors.manualGuestName}</p>
+                <p role="alert" className="create-wizard-error">{errors.manualGuestName}</p>
               ) : null}
             </div>
             <div>
@@ -2826,7 +2789,7 @@ export default function CreateTailgateWizard() {
                 placeholder="(555) 555-5555"
               />
               {errors.manualGuestPhone ? (
-                <p className="create-wizard-error">{errors.manualGuestPhone}</p>
+                <p role="alert" className="create-wizard-error">{errors.manualGuestPhone}</p>
               ) : null}
             </div>
           </div>
@@ -2905,7 +2868,7 @@ export default function CreateTailgateWizard() {
             <span>Include quiz</span>
           </label>
         ) : null}
-        {errors.quizEnabled ? <p className="create-wizard-error">{errors.quizEnabled}</p> : null}
+        {errors.quizEnabled ? <p role="alert" className="create-wizard-error">{errors.quizEnabled}</p> : null}
       </div>
 
       {timelineEnabled ? (
@@ -2930,7 +2893,7 @@ export default function CreateTailgateWizard() {
                 placeholder="Grill setup"
               />
               {errors.timelineTitle ? (
-                <p className="create-wizard-error">{errors.timelineTitle}</p>
+                <p role="alert" className="create-wizard-error">{errors.timelineTitle}</p>
               ) : null}
             </div>
             <div>
@@ -2946,7 +2909,7 @@ export default function CreateTailgateWizard() {
                 }}
               />
               {errors.timelineStartTime ? (
-                <p className="create-wizard-error">{errors.timelineStartTime}</p>
+                <p role="alert" className="create-wizard-error">{errors.timelineStartTime}</p>
               ) : null}
             </div>
           </div>
@@ -3040,10 +3003,10 @@ export default function CreateTailgateWizard() {
                       ) : null}
                       <p className="create-wizard-guest-phone">
                         {window
-                          ? `${window.start.toLocaleTimeString([], {
+                          ? `${window.start.toLocaleTimeString([], { timeZone,
                               hour: "numeric",
                               minute: "2-digit"
-                            })} - ${window.end.toLocaleTimeString([], {
+                            })} - ${window.end.toLocaleTimeString([], { timeZone,
                               hour: "numeric",
                               minute: "2-digit"
                             })}`
@@ -3102,9 +3065,9 @@ export default function CreateTailgateWizard() {
             }}
             placeholder="Ex: Steelers Pregame Trivia"
           />
-          {quizTitleError ? <p className="create-wizard-error">{quizTitleError}</p> : null}
+          {quizTitleError ? <p role="alert" className="create-wizard-error">{quizTitleError}</p> : null}
           {quizValidationMessage ? (
-            <p className="create-wizard-error">{quizValidationMessage}</p>
+            <p role="alert" className="create-wizard-error">{quizValidationMessage}</p>
           ) : null}
 
           <div className="create-wizard-quiz-chip-row">
@@ -3175,7 +3138,7 @@ export default function CreateTailgateWizard() {
             placeholder="Ask something fun..."
           />
           {currentQuizErrors.questionText ? (
-            <p className="create-wizard-error">{currentQuizErrors.questionText}</p>
+            <p role="alert" className="create-wizard-error">{currentQuizErrors.questionText}</p>
           ) : null}
 
           <p className="input-label create-wizard-choice-label">Choices</p>
@@ -3204,7 +3167,7 @@ export default function CreateTailgateWizard() {
             ))}
           </div>
           {currentQuizErrors.correctChoiceId ? (
-            <p className="create-wizard-error">{currentQuizErrors.correctChoiceId}</p>
+            <p role="alert" className="create-wizard-error">{currentQuizErrors.correctChoiceId}</p>
           ) : null}
           {currentQuizErrors.choices
             ? Object.entries(currentQuizErrors.choices).map(([choiceId, message]) => (
@@ -3260,10 +3223,10 @@ export default function CreateTailgateWizard() {
       return trimmedName.length > 0 ? trimmedName : `Guest ${index + 1}`;
     });
     const formattedStart = start
-      ? start.toLocaleString([], { dateStyle: "short", timeStyle: "short" })
+      ? start.toLocaleString([], { dateStyle: "short", timeStyle: "short", timeZone })
       : "Not set";
     const formattedEnd = end
-      ? end.toLocaleString([], { dateStyle: "short", timeStyle: "short" })
+      ? end.toLocaleString([], { dateStyle: "short", timeStyle: "short", timeZone })
       : "Not set";
     const enabledExpectations = expectationOptions
       .filter((option) => expectations[option.key])
@@ -3285,6 +3248,12 @@ export default function CreateTailgateWizard() {
             <h2>{`Step ${stepNumberFor("review")}: Review and Create`}</h2>
           </div>
 
+          <div className="create-wizard-review-edits" aria-label="Edit event sections">
+            {activeWizardSteps.filter((step) => step.key !== "review").map((step, index) => (
+              <button key={step.key} type="button" className="secondary-button" disabled={saving}
+                onClick={() => setStepIndex(index)}>Edit {stepLabel(step).toLowerCase()}</button>
+            ))}
+          </div>
           <dl className="create-wizard-review-grid">
             <div>
               <dt>Event Name</dt>
@@ -3305,6 +3274,10 @@ export default function CreateTailgateWizard() {
             <div>
               <dt>Location</dt>
               <dd className="create-wizard-address-block">{locationDisplayText || "Not set"}</dd>
+            </div>
+            <div>
+              <dt>Timezone</dt>
+              <dd>{timeZoneLabel(timeZone)} ({timeZone})</dd>
             </div>
             <div>
               <dt>Tailgate Type</dt>
@@ -3425,13 +3398,13 @@ export default function CreateTailgateWizard() {
         </div>
       }
     >
-      <section className="create-wizard-page">
+      <section className="create-wizard-page create-wizard-modern">
         <div className="create-wizard-progress-shell">
           <div className="create-wizard-progress-header">
             <p>{stepSubtitle}</p>
             <span>{progressLabel}</span>
           </div>
-          <div className="create-wizard-progress-bars" role="progressbar" aria-valuemin={1} aria-valuemax={activeWizardSteps.length} aria-valuenow={stepIndex + 1}>
+          <div className="create-wizard-progress-bars" role="progressbar" aria-label="Tailgate creation progress" aria-valuemin={1} aria-valuemax={activeWizardSteps.length} aria-valuenow={stepIndex + 1}>
             {activeWizardSteps.map((step, index) => (
               <div
                 key={step.key}
@@ -3441,7 +3414,23 @@ export default function CreateTailgateWizard() {
           </div>
         </div>
 
-        <div className="create-wizard-body">
+        <nav className="create-wizard-step-nav" aria-label="Creation steps">
+          {activeWizardSteps.map((step, index) => (
+            <button key={step.key} type="button" aria-current={index === stepIndex ? "step" : undefined}
+              disabled={index > stepIndex || saving || advancing}
+              onClick={() => setStepIndex(index)}>
+              <span>{index < stepIndex ? "✓" : index + 1}</span>{stepLabel(step)}
+            </button>
+          ))}
+        </nav>
+        <div className="create-wizard-workspace">
+        <div className="create-wizard-main">
+        <div className="create-wizard-step-intro">
+          <p className="create-wizard-eyebrow">LET’S BUILD YOUR GAME DAY</p>
+          <h2 ref={stepHeadingRef} tabIndex={-1}>{stepSubtitle}</h2>
+          <p>{stepGuidance[currentStepKey]}</p>
+        </div>
+        <div className="create-wizard-body" aria-busy={advancing || saving}>
           {currentStepKey === "type" ? renderStepType() : null}
           {currentStepKey === "tickets" ? renderStepTickets() : null}
           {currentStepKey === "details" ? renderStepDetails() : null}
@@ -3457,14 +3446,14 @@ export default function CreateTailgateWizard() {
           <button
             type="button"
             className="secondary-button"
-            disabled={stepIndex === 0 || saving}
+            disabled={stepIndex === 0 || saving || advancing}
             onClick={handleBack}
           >
             Back
           </button>
           {stepIndex < activeWizardSteps.length - 1 ? (
-            <button type="button" className="primary-button" onClick={() => void handleNext()}>
-              {currentStepKey === "type"
+            <button type="button" className="primary-button" disabled={advancing || (currentStepKey === "location" && eventZone.loading)} onClick={() => void handleNext()}>
+              {advancing ? "Checking location…" : currentStepKey === "type"
                 ? visibilityType === "open_paid"
                   ? "Next: Tickets & Pricing"
                   : "Next: Event Details"
@@ -3488,6 +3477,24 @@ export default function CreateTailgateWizard() {
               {saving ? "Creating..." : "Create"}
             </button>
           )}
+        </div>
+        </div>
+        <aside className="create-wizard-preview" aria-label="Live event summary">
+          <div className="create-wizard-preview-cover">
+            {coverImageDrafts[0] ? <img src={coverImageDrafts[0].previewUrl} alt="Your tailgate cover preview" /> : <span>GOOD TIMES.<br />GREAT COMPANY.<br /><strong>YOUR TAILGATE.</strong></span>}
+          </div>
+          <div className="create-wizard-preview-content">
+            <p className="create-wizard-eyebrow">YOUR EVENT AT A GLANCE</p>
+            <span className="create-wizard-preview-badge">{selectedVisibility?.label}</span>
+            <h3>{eventName.trim() || "A game day worth gathering for"}</h3>
+            <dl>
+              <div><dt>When</dt><dd>{eventDate ? toStartDateTime(eventDate, eventTime || "12:00")?.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric", timeZone }) : "Date to be decided"}{eventTime ? ` · ${eventTime}` : ""}<br />{timeZoneLabel(timeZone)}</dd></div>
+              <div><dt>Where</dt><dd>{locationSummary || "Your perfect meeting spot"}</dd></div>
+              <div><dt>{visibilityType === "open_paid" ? "Tickets" : "Entry"}</dt><dd>{visibilityType === "open_paid" ? `${ticketTypes.length} ticket type${ticketTypes.length === 1 ? "" : "s"}` : visibilityType === "private" ? "By invitation" : "Free to join"}</dd></div>
+            </dl>
+            <p className="create-wizard-preview-note">Nothing is published until you review and select Create.</p>
+          </div>
+        </aside>
         </div>
       </section>
 
