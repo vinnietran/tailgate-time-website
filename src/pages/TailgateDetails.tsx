@@ -1283,19 +1283,18 @@ function resolveTicketSalesCloseAt(
   data: Record<string, unknown>,
   startDateTime: Date | null
 ): Date | null {
+  const daysBefore =
+    coerceNumber(data.ticketSalesCloseDaysBefore) ?? coerceNumber(data.ticketSalesCutoffDays);
+  if (typeof daysBefore === "number" && startDateTime) {
+    return new Date(startDateTime.getTime() - Math.max(0, daysBefore) * DAY_IN_MS);
+  }
+
   const direct =
     normalizeDate(data.ticketSalesCloseAt) ??
     normalizeDate(data.ticketSalesCutoffAt) ??
     normalizeDate(data.salesCloseAt);
   if (direct) return direct;
-
-  const daysBefore =
-    coerceNumber(data.ticketSalesCloseDaysBefore) ?? coerceNumber(data.ticketSalesCutoffDays);
-  if (typeof daysBefore !== "number" || !startDateTime) {
-    return null;
-  }
-
-  return new Date(startDateTime.getTime() - Math.max(0, daysBefore) * DAY_IN_MS);
+  return null;
 }
 
 function resolveCoHostInvites(value: unknown): CoHostInviteRecord[] {

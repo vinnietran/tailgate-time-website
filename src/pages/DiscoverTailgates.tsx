@@ -1,7 +1,7 @@
 import { formatDateTimeRange } from "../utils/format";
 import { validTimeZone } from "../utils/eventTimeZone";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { collection, onSnapshot } from "firebase/firestore";
 import { getBlob, getDownloadURL, ref } from "firebase/storage";
 import { useLocation, useNavigate } from "react-router-dom";
 import tailgateTimeLogo from "../../ttnobg.png";
@@ -65,7 +65,6 @@ type DiscoverTailgate = DiscoverTailgateRecord & {
 const DEFAULT_RADIUS_MILES = 50;
 const EARTH_RADIUS_MILES = 3958.8;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
-const PUBLIC_DISCOVER_VISIBILITY_TYPES = ["open_free", "open_paid"] as const;
 const DISCOVER_DATE_FILTERS: Array<{ value: DiscoverDateFilter; label: string }> = [
   { value: "all", label: "Any date" },
   { value: "today", label: "Today" },
@@ -537,19 +536,18 @@ function resolveTicketSalesCloseAt(
   data: Record<string, unknown>,
   startDateTime: Date | null
 ): Date | null {
+  const daysBefore =
+    coerceNumber(data.ticketSalesCloseDaysBefore) ?? coerceNumber(data.ticketSalesCutoffDays);
+  if (typeof daysBefore === "number" && startDateTime) {
+    return new Date(startDateTime.getTime() - Math.max(0, daysBefore) * DAY_IN_MS);
+  }
+
   const direct =
     normalizeDate(data.ticketSalesCloseAt) ??
     normalizeDate(data.ticketSalesCutoffAt) ??
     normalizeDate(data.salesCloseAt);
   if (direct) return direct;
-
-  const daysBefore =
-    coerceNumber(data.ticketSalesCloseDaysBefore) ?? coerceNumber(data.ticketSalesCutoffDays);
-  if (typeof daysBefore !== "number" || !startDateTime) {
-    return null;
-  }
-
-  return new Date(startDateTime.getTime() - Math.max(0, daysBefore) * DAY_IN_MS);
+  return null;
 }
 
 function countConfirmedDiscoverAttendees(
@@ -1300,13 +1298,8 @@ export default function DiscoverTailgates() {
     setLoadingState("initial");
     setError(null);
 
-    const publicTailgatesQuery = query(
-      collection(db, "tailgateEvents"),
-      where("visibilityType", "in", [...PUBLIC_DISCOVER_VISIBILITY_TYPES])
-    );
-
     const unsubscribe = onSnapshot(
-      publicTailgatesQuery,
+      collection(db, "tailgateEvents"),
       (snapshot) => {
         const items = snapshot.docs
           .map((doc) => toDiscoverTailgateRecord(doc.id, doc.data() as Record<string, unknown>))
