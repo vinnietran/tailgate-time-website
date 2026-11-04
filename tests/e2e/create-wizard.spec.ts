@@ -52,7 +52,13 @@ test.describe("Guided tailgate creation", () => {
       await page.getByLabel("Location", { exact: true }).fill("Stadium St, Pittsburgh, PA, USA");
       await page.getByRole("button", { name: /next: (invite|optional)/i }).click();
       await page.getByRole("button", { name: /next: (invite|optional)/i }).click();
+      if (type === "Invite Only") {
+        await page.getByRole("checkbox", { name: /send invitations later/i }).check();
+      }
       await page.getByRole("button", { name: /next: review and create/i }).click();
+      if (type === "Invite Only") {
+        await expect(page.getByText("Saved guests — invitations not sent", { exact: true })).toBeVisible();
+      }
       await expect(page.getByRole("definition").filter({ hasText: "Saturday at the stadium" })).toBeVisible();
       await expect(page.getByRole("definition").filter({ hasText: "Lawn games" })).toBeVisible();
       await page.getByRole("button", { name: "Edit details", exact: true }).click();

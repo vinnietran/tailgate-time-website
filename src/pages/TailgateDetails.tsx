@@ -1,4 +1,6 @@
+import { checkoutReturnUrls } from "../utils/checkout";
 import { scheduleTargetUpdate, scheduleTimeRemaining } from "../utils/schedule";
+import { copyInviteDrafts } from "../utils/inviteDrafts";
 import { dateTimeInputs, eventDateTime, eventTimelineWindow, deviceTimeZone, timeZoneLabel, TIME_ZONE_DATE_ERROR, validTimeZone } from "../utils/eventTimeZone";
 import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -11,6 +13,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   updateDoc,
   where
@@ -327,6 +330,8 @@ type TailgateDetail = {
   locationSummary?: string;
   locationCoords?: { lat: number; lng: number } | null;
   attendees: AttendeeRecord[];
+  draftInvitees?: AttendeeRecord[];
+  inviteDeliveryMode?: string;
   visibilityType: VisibilityType;
   allowGuestPlusOnInvite?: boolean;
   maxAdditionalGuestsPerInvite?: number;
@@ -1398,6 +1403,8 @@ function toDetailFromFirestore(id: string, data: Record<string, unknown>): Tailg
       ) ?? resolveLocationString(data.location),
     locationCoords: resolveLocationCoords(data.location, data.locationCoords),
     attendees: normalizeAttendees(data.attendees, hostId, hostName),
+    draftInvitees: normalizeAttendees(data.draftInvitees, "", ""),
+    inviteDeliveryMode: firstString(data.inviteDeliveryMode),
     visibilityType,
     allowGuestPlusOnInvite: data.allowGuestPlusOnInvite === true,
     maxAdditionalGuestsPerInvite: coerceNumber(data.maxAdditionalGuestsPerInvite),
@@ -3597,6 +3604,13 @@ export default function TailgateDetails() {
         hostName: copiedHostName,
         hostEmail: user.email ?? firstString(sourceData.hostEmail) ?? "",
         attendees: [],
+        draftInvitees: detail.visibilityType === "private"
+          ? copyInviteDrafts([
+              ...(Array.isArray(sourceData.attendees) ? sourceData.attendees : []),
+              ...(Array.isArray(sourceData.draftInvitees) ? sourceData.draftInvitees : [])
+            ], detail.hostId, createInviteIdentifier)
+          : [],
+        inviteDeliveryMode: detail.visibilityType === "private" ? "manual" : "automatic",
         attendeeIds: [],
         attendeeUserIds: [],
         attendeesUserIds: [],
@@ -4082,14 +4096,7 @@ export default function TailgateDetails() {
     }
 
     try {
-      const purchaseIdPlaceholder = "{purchaseId}";
-      const returnBaseUrl = `${window.location.origin}/tailgates/${encodeURIComponent(detail.id)}`;
-      const successUrl = `${returnBaseUrl}?checkout=success&purchaseId=${encodeURIComponent(
-        purchaseIdPlaceholder
-      )}`;
-      const cancelUrl = `${returnBaseUrl}?checkout=cancel&purchaseId=${encodeURIComponent(
-        purchaseIdPlaceholder
-      )}`;
+      const { successUrl, cancelUrl } = checkoutReturnUrls(window.location.origin, detail.id);
       const createSession = httpsCallable(
         firebaseFunctions,
         "createTailgateCheckoutSession"
@@ -4783,6 +4790,70 @@ export default function TailgateDetails() {
     }
   };
 
+  const removeDraftInvite = async (guestId: string) => {
+    if (!db || !id || !canManageGuestInvites || guestInviteSaving) return;
+    setGuestInviteSaving(true);
+    setGuestInviteError(null);
+    try {
+      const eventRef = doc(db, "tailgateEvents", id);
+      await runTransaction(db, async (transaction) => {
+        const snapshot = await transaction.get(eventRef);
+        const drafts = snapshot.data()?.draftInvitees;
+        if (!Array.isArray(drafts)) return;
+        transaction.update(eventRef, {
+          draftInvitees: drafts.filter((guest) => guest.id !== guestId),
+          updatedAt: serverTimestamp()
+        });
+      });
+    } catch {
+      setGuestInviteError("Unable to remove saved guest. Please try again.");
+    } finally {
+      setGuestInviteSaving(false);
+    }
+  };
+
+  const sendDraftInvitations = async () => {
+    if (!db || !id || !detail || !canManageGuestInvites || guestInviteSaving) return;
+    const approved = await confirm({
+      title: "Send invitations?",
+      message: "Send RSVP invitations to the saved guests using their contact details? Guests without contact details will stay in the draft list.",
+      confirmLabel: "Send invitations",
+      cancelLabel: "Not yet"
+    });
+    if (!approved) return;
+    setGuestInviteSaving(true);
+    setGuestInviteError(null);
+    try {
+      const eventRef = doc(db, "tailgateEvents", id);
+      const count = await runTransaction(db, async (transaction) => {
+        const snapshot = await transaction.get(eventRef);
+        if (!snapshot.exists()) throw new Error("Event not found");
+        const data = snapshot.data();
+        if (data.visibilityType !== "private" || data.cancelledAt ||
+            ["cancelled", "canceled"].includes(String(data.status).toLowerCase())) {
+          throw new Error("Event is not accepting invitations");
+        }
+        const drafts = Array.isArray(data.draftInvitees) ? data.draftInvitees : [];
+        const attendees = Array.isArray(data.attendees) ? data.attendees : [];
+        const sendable = drafts.filter((guest) => guest && (guest.phone || guest.email));
+        const newGuests = sendable.filter((guest) => !attendees.some((existing) => existing.id === guest.id));
+        if (!sendable.length) return 0;
+        transaction.update(eventRef, {
+          attendees: [...attendees, ...newGuests],
+          draftInvitees: drafts.filter((guest) => !sendable.includes(guest)),
+          updatedAt: serverTimestamp()
+        });
+        return newGuests.length;
+      });
+      setGuestInviteSuccess(count ? `${count} invitation${count === 1 ? "" : "s"} queued for delivery.` : "No new invitations to send. Add contact details to your saved guests.");
+    } catch (error) {
+      console.error("Failed to queue invitations", error);
+      setGuestInviteError("Unable to send invitations. Your saved guests are still available; please try again.");
+    } finally {
+      setGuestInviteSaving(false);
+    }
+  };
+
   const addGuestInvite = async () => {
     if (!db || !id || !detail) {
       setGuestInviteError("Guest invites are unavailable right now.");
@@ -4807,7 +4878,7 @@ export default function TailgateDetails() {
       return;
     }
 
-    const duplicateExists = detail.attendees.some((attendee) => {
+    const duplicateExists = [...detail.attendees, ...(detail.draftInvitees ?? [])].some((attendee) => {
       if (attendee.status === "Host") return false;
       const attendeeName = attendee.name.trim().toLowerCase();
       const attendeeEmail = attendee.email?.trim().toLowerCase() ?? "";
@@ -4845,7 +4916,7 @@ export default function TailgateDetails() {
     setGuestInviteError(null);
     try {
       await updateDoc(doc(db, "tailgateEvents", id), {
-        attendees: arrayUnion(invitePayload),
+        [detail.inviteDeliveryMode === "manual" ? "draftInvitees" : "attendees"]: arrayUnion(invitePayload),
         updatedAt: new Date()
       });
       setGuestInviteDraft({
@@ -4853,7 +4924,7 @@ export default function TailgateDetails() {
         phone: "",
         email: ""
       });
-      setGuestInviteSuccess("Guest invited.");
+      setGuestInviteSuccess(detail.inviteDeliveryMode === "manual" ? "Guest saved. Send invitations when you’re ready." : "Guest invited.");
     } catch (inviteError) {
       console.error("Failed to add guest invite", inviteError);
       setGuestInviteError("Unable to invite guest. Please try again.");
@@ -6648,9 +6719,11 @@ export default function TailgateDetails() {
                           rsvpDraftChoice === "Attending" ? " is-active is-going" : ""
                         }`}
                         onClick={() => setRsvpDraftChoice("Attending")}
+                        aria-pressed={rsvpDraftChoice === "Attending"}
                         disabled={rsvpSaving}
                       >
-                        Going
+                        <span>Going</span>
+                        <small>{rsvpDraftChoice === "Attending" ? "✓ Selected" : "Select"}</small>
                       </button>
                       <button
                         type="button"
@@ -6660,11 +6733,16 @@ export default function TailgateDetails() {
                             : ""
                         }`}
                         onClick={() => setRsvpDraftChoice("Not Attending")}
+                        aria-pressed={rsvpDraftChoice === "Not Attending"}
                         disabled={rsvpSaving}
                       >
-                        Not Going
+                        <span>Not Going</span>
+                        <small>{rsvpDraftChoice === "Not Attending" ? "✓ Selected" : "Select"}</small>
                       </button>
                     </div>
+                    <p className="tailgate-details-ticket-copy" aria-live="polite">
+                      Selected: <strong>{rsvpDraftChoice === "Attending" ? "Going" : "Not Going"}</strong>. Save your RSVP below to confirm.
+                    </p>
                     {detail.allowGuestPlusOnInvite !== true ? (
                       <p className="tailgate-details-ticket-copy app-note">
                         This invite does not include guest +1 permissions.
@@ -7517,6 +7595,24 @@ export default function TailgateDetails() {
                 <div className="tailgate-details-attendee-invite">
                   {canManageGuestInvites ? (
                     <>
+                      {detail.inviteDeliveryMode === "manual" ? (
+                        <section aria-label="Unsent invitations">
+                          <h3>Unsent invitations ({detail.draftInvitees?.length ?? 0})</h3>
+                          <p>Guests saved here have not been invited. Adding a guest saves them until you choose to send.</p>
+                          <ul>{(detail.draftInvitees ?? []).map((guest) => (
+                            <li key={guest.id}>{guest.name} — {guest.email || guest.phone || "No contact details"}
+                              <button type="button" className="secondary-button" disabled={guestInviteSaving}
+                                aria-label={`Remove saved guest ${guest.name}`}
+                                onClick={() => void removeDraftInvite(guest.id)}>Remove</button>
+                            </li>
+                          ))}</ul>
+                          <button type="button" className="primary-button"
+                            disabled={guestInviteSaving || !detail.draftInvitees?.some((guest) => guest.email || guest.phone)}
+                            onClick={() => void sendDraftInvitations()}>
+                            {guestInviteSaving ? "Saving…" : "Send invitations"}
+                          </button>
+                        </section>
+                      ) : null}
                       <div className="tailgate-details-attendee-invite-header">
                         <div>
                           <p className="tailgate-details-attendee-invite-title">Invite guest</p>
@@ -7850,6 +7946,19 @@ export default function TailgateDetails() {
 
   return (
     <AppShell
+      beforeHeader={
+        !loading && !error && canManageGuestInvites && (detail?.draftInvitees?.length ?? 0) > 0 ? (
+          <section className="tailgate-unsent-invites-banner" role="status">
+            <div>
+              <strong>{detail?.draftInvitees?.length} invitation{detail?.draftInvitees?.length === 1 ? " has" : "s have"} not been sent</strong>
+              <p>These guests are saved in your queue and have not been notified. Review the list and send invitations when you’re ready.</p>
+            </div>
+            <button type="button" className="primary-button" onClick={scrollToAttendees}>
+              Review &amp; send invitations
+            </button>
+          </section>
+        ) : null
+      }
       header={
         <div className="simple-header">
           <h1>{isHostUser ? "Manage Tailgate" : "Tailgate Details"}</h1>

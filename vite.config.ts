@@ -1,4 +1,5 @@
 import { defineConfig, type PluginOption } from "vite";
+import { publicMetadataPlugin } from "./scripts/public-metadata";
 import react from "@vitejs/plugin-react";
 
 const META_PIXEL_ID = "792534783287779";
@@ -40,7 +41,7 @@ fbq('track', 'PageView');`
 }
 
 export default defineConfig(({ mode }) => ({
-  plugins: [react(), metaPixelPlugin(mode === "tailgatetime-prod")],
+  plugins: [react(), metaPixelPlugin(mode === "tailgatetime-prod"), publicMetadataPlugin()],
   base: "/",
   envPrefix: ["VITE_", "MAPS_"],
   server: {

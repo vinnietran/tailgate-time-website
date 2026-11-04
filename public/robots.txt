@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://tailgatetime.com/sitemap-hosts.xml
+Sitemap: https://tailgate-time.com/sitemap.xml

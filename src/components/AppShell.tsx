@@ -5,10 +5,12 @@ import HeaderActions from "./HeaderActions";
 
 export default function AppShell({
   header,
+  beforeHeader,
   children,
   showHeaderActions = true
 }: {
   header?: React.ReactNode;
+  beforeHeader?: React.ReactNode;
   children: React.ReactNode;
   showHeaderActions?: boolean;
 }) {
@@ -18,6 +20,7 @@ export default function AppShell({
     <div className="app-shell">
       <Sidebar />
       <main className="main-area">
+        {beforeHeader}
         {shouldRenderTopBar ? (
           <div className="top-bar">
             {header && !showHeaderActions ? (

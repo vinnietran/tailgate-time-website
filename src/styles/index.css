@@ -5772,6 +5772,34 @@ a {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.tailgate-unsent-invites-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 20px 24px;
+  border: 1px solid #e8b34b;
+  border-left: 5px solid #e8b34b;
+  border-radius: 16px;
+  background: #fff4d6;
+  color: #563900;
+}
+
+.tailgate-unsent-invites-banner > div {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.tailgate-unsent-invites-banner strong {
+  font-size: 1.1rem;
+}
+
+.tailgate-unsent-invites-banner p {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
 .tailgate-host-command-layout {
   grid-template-columns: minmax(0, 1.14fr) minmax(300px, 0.86fr);
   grid-auto-flow: row dense;

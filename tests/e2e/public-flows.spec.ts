@@ -10,7 +10,7 @@ test.describe("Public flows", () => {
 
     await expect(
       page.getByRole("heading", {
-        name: /host private invites, open free tailgates, or paid public events/i
+        name: /the app for tailgate hosts and fans on game day/i
       })
     ).toBeVisible();
 

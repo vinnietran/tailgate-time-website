@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./styles/index.css";
+import "./styles/audit.css";
 
 // Preserve previously shared hash URLs while moving public Host Pages to clean,
 // indexable paths. This only rewrites app-owned route hashes.

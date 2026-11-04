@@ -26,6 +26,7 @@ export function PublicTopNav() {
           <Link to="/discover" className={pathname.startsWith("/discover") ? "active" : ""}>
             Discover
           </Link>
+          {["pricing", "features", "customers"].map(page => <Link key={page} to={`/${page}`}>{page[0].toUpperCase() + page.slice(1)}</Link>)}
           <a href="/contact.html">Contact &amp; Support</a>
           <a
             href="https://www.instagram.com/tailgatetime25/"

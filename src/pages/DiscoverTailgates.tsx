@@ -2194,7 +2194,7 @@ export default function DiscoverTailgates() {
                       <img
                         className={`discover-card-media-image${showCoverLoading ? " is-loading" : ""}`}
                         src={renderedCoverImageUrl}
-                        alt=""
+                        alt={`${item.eventName} — tailgate event cover`}
                         loading="lazy"
                         onLoad={() => {
                           const normalizedRaw = rawCoverImageUrl.trim();

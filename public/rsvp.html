@@ -249,6 +249,26 @@
         margin-top: 2px;
       }
 
+      .rsvp-toggle-row button {
+        display: grid;
+        gap: 6px;
+        border: 2px solid #bac6d6;
+        border-radius: 14px;
+        background: #fff;
+        color: #2b4264;
+        box-shadow: none;
+      }
+
+      .rsvp-toggle-row button small { font-size: 0.8rem; }
+      .rsvp-toggle-row button.is-active {
+        border-color: #244f80;
+        background: #e0edff;
+        color: #18395f;
+        box-shadow: 0 0 0 2px #244f8033;
+      }
+      .rsvp-toggle-row button:focus-visible { outline: 3px solid #244f80; outline-offset: 3px; }
+      .rsvp-selection-summary { margin: 4px 0; color: #2b4264; }
+
       .plus-note {
         margin-top: 16px;
         padding: 12px 14px;
@@ -599,13 +619,14 @@
           <form id="rsvpForm" class="rsvp-actions" style="display: none">
             <div class="rsvp-toggle-row">
               <button type="button" id="yesButton" class="button-yes is-active" aria-pressed="true">
-                I'll be there
+                <span>I'll be there</span><small id="yesSelection">✓ Selected</small>
               </button>
               <button type="button" id="noButton" class="button-no" aria-pressed="false">
-                Can't make it
+                <span>Can't make it</span><small id="noSelection">Select</small>
               </button>
             </div>
 
+            <p id="rsvpSelectionSummary" class="rsvp-selection-summary" aria-live="polite"></p>
             <div id="plusGuestNote" class="plus-note" aria-live="polite"></div>
 
             <section id="plusSection" class="plus-section" aria-live="polite">
@@ -950,6 +971,10 @@
         noButton.classList.toggle("is-active", state.selectedStatus === "no");
         yesButton.setAttribute("aria-pressed", String(state.selectedStatus === "yes"));
         noButton.setAttribute("aria-pressed", String(state.selectedStatus === "no"));
+        document.getElementById("yesSelection").textContent = state.selectedStatus === "yes" ? "✓ Selected" : "Select";
+        document.getElementById("noSelection").textContent = state.selectedStatus === "no" ? "✓ Selected" : "Select";
+        document.getElementById("rsvpSelectionSummary").textContent =
+          `Selected: ${state.selectedStatus === "yes" ? "I'll be there" : "Can't make it"}. Save your RSVP below to confirm.`;
         renderPlusGuestControls();
       }
 
