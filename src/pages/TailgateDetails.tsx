@@ -1,3 +1,4 @@
+import { checkoutReturnUrls } from "../utils/checkout";
 import { scheduleTargetUpdate, scheduleTimeRemaining } from "../utils/schedule";
 import { copyInviteDrafts } from "../utils/inviteDrafts";
 import { dateTimeInputs, eventDateTime, eventTimelineWindow, deviceTimeZone, timeZoneLabel, TIME_ZONE_DATE_ERROR, validTimeZone } from "../utils/eventTimeZone";
@@ -4095,14 +4096,7 @@ export default function TailgateDetails() {
     }
 
     try {
-      const purchaseIdPlaceholder = "{purchaseId}";
-      const returnBaseUrl = `${window.location.origin}/tailgates/${encodeURIComponent(detail.id)}`;
-      const successUrl = `${returnBaseUrl}?checkout=success&purchaseId=${encodeURIComponent(
-        purchaseIdPlaceholder
-      )}`;
-      const cancelUrl = `${returnBaseUrl}?checkout=cancel&purchaseId=${encodeURIComponent(
-        purchaseIdPlaceholder
-      )}`;
+      const { successUrl, cancelUrl } = checkoutReturnUrls(window.location.origin, detail.id);
       const createSession = httpsCallable(
         firebaseFunctions,
         "createTailgateCheckoutSession"
