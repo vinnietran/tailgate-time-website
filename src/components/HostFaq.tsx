@@ -1,0 +1,12 @@
+import { STANDARD_PLATFORM_FEE_PERCENT } from "../utils/platformFees";
+const hostFaqs = [
+  { question: "What does TailgateTime charge on paid tickets?", answer: `The standard platform fee is ${STANDARD_PLATFORM_FEE_PERCENT}% of paid ticket sales. Stripe processing is separate. Your dashboard shows any account-specific promotional rate and estimated payout.` },
+  { question: "Does listing a free event cost anything?", answer: "No. Listing an invite-only or public free tailgate is free. The platform fee applies only when you sell paid tickets." },
+  { question: "When do I get paid?", answer: "Payouts are sent to your connected Stripe account within 7 days after your event ends. Complete Stripe setup first. Risk reviews, fraud investigations, or reserves can delay payouts; our terms allow holds of up to 30 days or longer for risk mitigation. Bank arrival times can vary." },
+  { question: "Can a guest get a refund?", answer: "Ticket purchases are final unless the event listing says otherwise or the law requires a refund. Platform and processing fees are non-refundable unless required by law. If a host cancels, TailgateTime may facilitate refunds and processing fees may be deducted. Read the full refund policy in our Terms before buying." },
+  { question: "Will Discover bring fans to my tailgate?", answer: "Public free and paid tailgates appear in Discover, where fans can search by host and location. Share your event link and Host Page with your own crew too. Listing does not guarantee ticket sales or attendance; invite-only events stay out of Discover." },
+  { question: "Is this for my kind of event?", answer: "TailgateTime is built for tailgate hosts and fans: private crews, free community gatherings, and paid pre-game parties. It is not a stadium ticket marketplace; a tailgate spot does not include admission to the game." }
+];
+export default function HostFaq() {
+ return <section className="audit-section audit-faq" aria-labelledby="host-faq-title"><h2 id="host-faq-title">Before you host</h2>{hostFaqs.map(item => <details key={item.question}><summary>{item.question}</summary><p>{item.answer}</p></details>)}<p><a href="/terms.html">Refund and payout terms</a> · <a href="/privacy-policy.html">How we handle your data</a> · <a href="/contact.html">Ask a question</a></p><script type="application/ld+json">{JSON.stringify({"@context":"https://schema.org","@type":"FAQPage",mainEntity:hostFaqs.map(item=>({"@type":"Question",name:item.question,acceptedAnswer:{"@type":"Answer",text:item.answer}}))})}</script></section>;
+}

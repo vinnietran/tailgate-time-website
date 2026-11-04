@@ -1,0 +1,9 @@
+# TailgateTime
+
+TailgateTime helps hosts and fans organize and find private, free, and paid tailgates.
+
+- [Pricing](https://tailgate-time.com/pricing): Standard paid-event fee, processing, payouts and refunds.
+- [Features](https://tailgate-time.com/features): Guest lists, check-in, messages, payouts and Host Pages.
+- [Communities](https://tailgate-time.com/customers): Featured partners and public listings.
+- [Discover](https://tailgate-time.com/discover): Public events. Private invitations are not public listings.
+- [Terms](https://tailgate-time.com/terms): Refund and payout policies.

@@ -611,6 +611,7 @@ export default function CreateTailgateWizard() {
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const guestInvitesEnabled = visibilityType === "private";
+  const [sendInvitationsLater, setSendInvitationsLater] = useState(false);
   const quizCreationAllowed = visibilityType === "private";
   const hostPlatformFeeRate = hostPlatformFeePercent / 100;
   const activeTicketTypes = useMemo(
@@ -1934,6 +1935,9 @@ export default function CreateTailgateWizard() {
     };
 
     if (visibilityType === "private") {
+      payload.inviteDeliveryMode = sendInvitationsLater ? "manual" : "automatic";
+      payload.draftInvitees = sendInvitationsLater ? payload.attendees : [];
+      if (sendInvitationsLater) payload.attendees = [];
       const parsedPlusLimit = parseGuestPlusLimitInput(maxAdditionalGuestsPerInvite);
       payload.allowGuestPlusOnInvite = allowGuestPlusOnInvite;
       payload.maxAdditionalGuestsPerInvite = allowGuestPlusOnInvite
@@ -2718,6 +2722,11 @@ export default function CreateTailgateWizard() {
             </button>
           </div>
 
+          <label className="create-wizard-switch-row create-wizard-switch-row-block">
+            <input type="checkbox" checked={sendInvitationsLater}
+              onChange={(event) => setSendInvitationsLater(event.target.checked)} />
+            <span>Send invitations later<small>Save your guest list now. Send invitations from the event’s Guest List when you’re ready.</small></span>
+          </label>
           <div className="create-wizard-guest-plus-card">
             <label className="create-wizard-switch-row create-wizard-switch-row-block">
               <input
@@ -3285,7 +3294,7 @@ export default function CreateTailgateWizard() {
             </div>
             {guestInvitesEnabled ? (
               <div>
-                <dt>Invited Guests</dt>
+                <dt>{sendInvitationsLater ? "Saved guests — invitations not sent" : "Invited Guests"}</dt>
                 <dd>
                   {guests.length > 0 ? (
                     <span className="create-wizard-guest-tooltip" tabIndex={0}>

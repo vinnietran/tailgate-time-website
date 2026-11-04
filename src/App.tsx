@@ -22,6 +22,7 @@ const NotificationPreferences = lazy(() => import("./pages/NotificationPreferenc
 const DiscoverTailgates = lazy(() => import("./pages/DiscoverTailgates"));
 const EventFeed = lazy(() => import("./pages/EventFeed"));
 const UserGuide = lazy(() => import("./pages/UserGuide"));
+const Marketing = lazy(() => import("./pages/Marketing"));
 const About = lazy(() => import("./pages/About"));
 const AdminSpotlight = lazy(() => import("./pages/AdminSpotlight"));
 const AdminMetrics = lazy(() => import("./pages/AdminMetrics"));
@@ -166,6 +167,7 @@ export default function App() {
             path="/discover"
             element={withSuspense(<DiscoverTailgates />)}
           />
+          {["/pricing", "/features", "/customers", "/vs/gatherly", "/vs/eventbrite"].map(path => <Route key={path} path={path} element={withSuspense(<Marketing />)} />)}
           <Route path="/about" element={withSuspense(<About />)} />
           <Route path="/release-2-0" element={<Navigate to="/about" replace />} />
           <Route path="/user-guide" element={withSuspense(<UserGuide />)} />

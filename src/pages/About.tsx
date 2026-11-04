@@ -1,3 +1,5 @@
+import { responsiveImage } from "../utils/responsiveImage";
+import { FounderStory } from "../components/AuditContent";
 import { Link } from "react-router-dom";
 import { PublicTopNav } from "../components/PublicTopNav";
 import SiteFooter from "../components/SiteFooter";
@@ -23,7 +25,7 @@ export default function About() {
         </section>
 
         <figure className="about-photo">
-          <img src="/images/bt2.jpg" alt="Fans gathering outside at a Buffalo tailgate" width="2048" height="1536" />
+          <img src="/images/bt2.jpg" {...responsiveImage("/images/bt2.jpg")} alt="Fans gathering outside at a Buffalo tailgate" width="2048" height="1536" />
           <figcaption><span>Game day, together.</span><span>From the TailgateTime community</span></figcaption>
         </figure>
 
@@ -53,6 +55,7 @@ export default function About() {
           </div>
         </section>
 
+        <FounderStory />
         <section className="about-contact">
           <div><p className="about-eyebrow">Let’s talk</p><h2>There’s always room<br />at the tailgate.</h2></div>
           <div><p>Have a question, an idea, or feedback from the lot? We’d like to hear it.</p><a href="/contact.html" className="about-text-link">Get in touch <span aria-hidden="true">↗</span></a></div>

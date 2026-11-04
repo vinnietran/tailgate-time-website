@@ -4,5 +4,15 @@ export const mockUser = {
   uid: "dev-host-001",
   displayName: "Jordan Tailgater",
   email: "jordan@tailgatetime.com",
-  photoURL: "https://i.pravatar.cc/150?img=32"
+  photoURL: "https://i.pravatar.cc/150?img=32",
+  providerData: [
+    {
+      providerId: "password",
+      uid: "jordan@tailgatetime.com",
+      displayName: "Jordan Tailgater",
+      email: "jordan@tailgatetime.com",
+      phoneNumber: null,
+      photoURL: "https://i.pravatar.cc/150?img=32"
+    }
+  ]
 } as User;

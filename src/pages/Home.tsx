@@ -1,3 +1,6 @@
+import { responsiveImage } from "../utils/responsiveImage";
+import HostFaq from "../components/HostFaq";
+import { CustomerStories, ProductScreenshots } from "../components/AuditContent";
 import { validTimeZone } from "../utils/eventTimeZone";
 import { useEffect, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
@@ -105,21 +108,6 @@ const gameDaySteps = [
   {
     title: "3. Run game day",
     description: "Track RSVPs, check in guests, message attendees, and manage paid access when needed."
-  }
-];
-
-const socialProof = [
-  {
-    quote: "TailgateTime made our pre-game party effortless.",
-    byline: "Dan, Steelers fan"
-  },
-  {
-    quote: "Best tailgating app I've ever used.",
-    byline: "Curt, college football enthusiast"
-  },
-  {
-    quote: "Keeps everyone on the same page, even Grandma.",
-    byline: "Victor, family tailgater"
   }
 ];
 
@@ -403,6 +391,7 @@ export default function Home() {
   const [activePartnerImage, setActivePartnerImage] = useState(0);
   const [activePartnerIndex, setActivePartnerIndex] = useState(0);
   const [partnerRotationPaused, setPartnerRotationPaused] = useState(false);
+  const [liveListingCount, setLiveListingCount] = useState(0);
   const [upcomingTailgateListings, setUpcomingTailgateListings] = useState<
     HomepageTailgateListing[]
   >([]);
@@ -443,6 +432,7 @@ export default function Home() {
             return aTime - bTime;
           });
 
+        setLiveListingCount(listings.length);
         setUpcomingTailgateListings(listings.slice(0, HOMEPAGE_DISCOVER_EVENT_LIMIT));
         setBuffaloListings(
           listings.filter(isBuffaloTailgatesPartnerListing).map((listing) =>
@@ -545,10 +535,10 @@ export default function Home() {
         <div className="homepage-hero">
           <div className="homepage-hero-copy">
             <p className="homepage-kicker">True Home Base</p>
-            <h1>Host private invites, open free tailgates, or paid public events in one app.</h1>
+            <h1>The app for tailgate hosts and fans on game day.</h1>
             <p>
-              TailgateTime helps you organize personal guest lists, publish discoverable free
-              events, and run paid tailgates with check-in, messaging, and payouts built in.
+              Whether you host 10 friends or sell 200 spots, bring your guest list, check-in,
+              messages, and payouts together. Less chasing replies. More time with your crew.
             </p>
             <div className="homepage-hero-tags" aria-label="TailgateTime event types">
               {eventModes.map((mode) => (
@@ -557,6 +547,8 @@ export default function Home() {
                 </span>
               ))}
             </div>
+            <Link to={user ? "/tailgates/new" : "/login?mode=signup"} className="primary-button">Plan your tailgate</Link>
+            <p className="homepage-download-label">For fans on game day</p>
             <div className="homepage-cta-row">
               <a href={IOS_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer">
                 <img src={appStoreBadge} alt="Download on the App Store" />
@@ -570,6 +562,8 @@ export default function Home() {
                 Get to know TailgateTime
               </Link>
             </div>
+            <p><Link to="/pricing">See fees before you host</Link></p>
+            <ProductScreenshots />
           </div>
         </div>
       </section>
@@ -610,7 +604,7 @@ export default function Home() {
                 Explore Tailgates
               </Link>
               {!user ? (
-                <Link to="/login?mode=signup" className="public-auth-btn login">
+                <Link to="/login?mode=signup" className="homepage-inline-link">
                   Start Hosting
                 </Link>
               ) : null}
@@ -653,7 +647,7 @@ export default function Home() {
                           : "has-image"
                       }`}
                     >
-                      <img src={listing.coverImageUrl} alt="" loading="lazy" />
+                      <img src={listing.coverImageUrl} {...responsiveImage(listing.coverImageUrl)} alt={`${listing.name}${listing.locationSummary ? ` in ${listing.locationSummary}` : ""} — tailgate event cover`} loading="lazy" />
                     </div>
                     <div className="homepage-discover-event-heading">
                       <h3>{listing.name}</h3>
@@ -688,10 +682,10 @@ export default function Home() {
         onMouseLeave={() => setPartnerRotationPaused(false)}
       >
         <div className="homepage-section-header homepage-partners-header">
-          <p className="homepage-kicker">Featured Partners</p>
+          <p className="homepage-kicker">{!openListingsLoading && !openListingsError && liveListingCount > 0 ? `${liveListingCount} upcoming public tailgates · ` : ""}{featuredPartners.length} featured communities · One app</p>
           <h2>Meet the communities making game day better.</h2>
           <p>
-            Explore the partners using TailgateTime to bring fans together before kickoff.
+            From Bills Mafia in the Buffalo lots to a pre-game party in Columbus, meet the hosts bringing fans together. <Link to="/customers">Meet the communities</Link>.
           </p>
         </div>
         <div className="homepage-partner-tabs" role="tablist" aria-label="Featured partners">
@@ -707,7 +701,7 @@ export default function Home() {
               onClick={() => selectPartner(index)}
             >
               <span className="homepage-partner-tab-logo">
-                <img src={partner.logo} alt="" />
+                <img src={partner.logo} alt={`${partner.name} logo`} />
               </span>
               <span className="homepage-partner-tab-copy">
                 <strong>{partner.shortName}</strong>
@@ -766,7 +760,7 @@ export default function Home() {
                               : "has-image"
                           }`}
                         >
-                          <img src={listing.coverImageUrl} alt="" loading="lazy" />
+                          <img src={listing.coverImageUrl} {...responsiveImage(listing.coverImageUrl)} alt={`${listing.name}${listing.locationSummary ? ` in ${listing.locationSummary}` : ""} — tailgate event cover`} loading="lazy" />
                         </div>
                         <div className="homepage-partner-listing-heading">
                           <h4>{listing.name}</h4>
@@ -785,7 +779,7 @@ export default function Home() {
                           <div className="homepage-partner-listing-copy">
                             <p>{listing.locationSummary ?? "Location coming soon"}</p>
                             <p className="homepage-partner-listing-size">
-                              {listing.confirmedCount} confirmed
+                              {listing.confirmedCount > 0 ? `${listing.confirmedCount} confirmed` : "See event details"}
                             </p>
                           </div>
                           <div className="homepage-partner-listing-meta">
@@ -812,7 +806,9 @@ export default function Home() {
                       index === activePartnerImage ? "active" : ""
                     }`}
                     src={image.src}
-                    alt={index === activePartnerImage ? image.alt : ""}
+                    {...responsiveImage(image.src)}
+                    loading="lazy"
+                    alt={image.alt}
                     aria-hidden={index === activePartnerImage ? undefined : "true"}
                   />
                 ))}
@@ -862,6 +858,7 @@ export default function Home() {
                 <span key={partner.id} className={index === activePartnerIndex ? "active" : ""} />
               ))}
             </div>
+
           </div>
         </div>
       </section>
@@ -897,19 +894,8 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="homepage-social-shell">
-        <div className="homepage-section-header">
-          <h2>Built for Real Tailgaters</h2>
-        </div>
-        <div className="homepage-social-grid">
-          {socialProof.map((item) => (
-            <article key={item.quote} className="homepage-social-card">
-              <p>"{item.quote}"</p>
-              <small>{item.byline}</small>
-            </article>
-          ))}
-        </div>
-      </section>
+      <CustomerStories />
+      <HostFaq />
 
       {!user ? (
         <section className="homepage-signup-shell">
@@ -920,6 +906,7 @@ export default function Home() {
               Sign up to send personal invites, publish open free events, or run paid tailgates
               from one dashboard.
             </p>
+            <p>Payments are processed through Stripe. <Link to="/pricing">Review fees and refunds</Link> · <a href="/privacy-policy.html">How we handle your data</a></p>
             <div className="homepage-signup-actions">
               <Link to="/login?mode=signup" className="public-auth-btn signup">
                 Sign Up

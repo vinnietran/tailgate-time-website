@@ -1,3 +1,4 @@
+import { applyPageMetadata } from "../utils/pageMetadata";
 import { useEffect, useRef } from "react";
 import { matchPath, useLocation } from "react-router-dom";
 import { trackPageView } from "../lib/firebase";
@@ -54,7 +55,7 @@ export default function AnalyticsTracker() {
     const pagePath = `${location.pathname}${location.search}`;
     const pageTitle = getAnalyticsPageTitle(location.pathname);
 
-    document.title = pageTitle;
+    applyPageMetadata(location.pathname, pageTitle);
     trackPageView(pagePath);
 
     if (!isMetaPixelEnabled || typeof window.fbq !== "function") {
